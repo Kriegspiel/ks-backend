@@ -12,7 +12,7 @@ import chess
 
 # Import database models
 from models import initialize_database, close_database, Game, GameHistory
-from models import save_game_state, save_move_history, get_game_by_id
+from models import save_game_state, save_move_history, get_game_by_id, reconstruct_game_from_history
 
 app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess")
 
@@ -69,15 +69,19 @@ async def create_game(any_rule: bool = True):
 async def get_game_state(game_id: str, player: str):
     # Try to get game from memory first
     if game_id not in games:
-        # Try to load from database
+        # Try to load from database and reconstruct
         db_game = get_game_by_id(game_id)
         if not db_game:
             raise HTTPException(status_code=404, detail="Game not found")
         
-        # Recreate game engine from database state
-        # For now, we'll just return a "game not in memory" error
-        # In a future iteration, we can implement full game reconstruction
-        raise HTTPException(status_code=503, detail="Game not currently active in memory")
+        try:
+            # Reconstruct game from database history
+            reconstructed_game = reconstruct_game_from_history(game_id)
+            games[game_id] = reconstructed_game
+            print(f"Successfully reconstructed game {game_id} from database")
+        except Exception as e:
+            print(f"Failed to reconstruct game {game_id}: {e}")
+            raise HTTPException(status_code=503, detail="Game reconstruction failed")
 
     game = games[game_id]
     if player not in ["white", "black"]:
@@ -97,8 +101,20 @@ async def get_game_state(game_id: str, player: str):
 
 @app.post("/games/{game_id}/move")
 async def make_move(game_id: str, player: str, move_uci: str = None, question_type: str = "COMMON"):
+    # Ensure game is loaded in memory (reconstruct if needed)
     if game_id not in games:
-        raise HTTPException(status_code=404, detail="Game not found")
+        db_game = get_game_by_id(game_id)
+        if not db_game:
+            raise HTTPException(status_code=404, detail="Game not found")
+        
+        try:
+            # Reconstruct game from database history
+            reconstructed_game = reconstruct_game_from_history(game_id)
+            games[game_id] = reconstructed_game
+            print(f"Successfully reconstructed game {game_id} from database for move")
+        except Exception as e:
+            print(f"Failed to reconstruct game {game_id}: {e}")
+            raise HTTPException(status_code=503, detail="Game reconstruction failed")
 
     game = games[game_id]
     if player not in ["white", "black"]:

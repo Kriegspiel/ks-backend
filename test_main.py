@@ -341,3 +341,75 @@ def test_game_history_nonexistent_game():
     """Test game history for nonexistent game returns 404"""
     response = client.get("/games/nonexistent/history")
     assert response.status_code == 404
+
+
+def test_game_reconstruction_from_database():
+    """Test that games can be reconstructed from database after server restart simulation"""
+    # Create game and make some moves
+    create_response = client.post("/games")
+    game_id = create_response.json()["game_id"]
+
+    # Make a few moves to create history
+    white_move1 = client.post(f"/games/{game_id}/move?player=white&move_uci=e2e4")
+    assert white_move1.status_code == 200
+    assert white_move1.json()["legal"] is True
+
+    black_move1 = client.post(f"/games/{game_id}/move?player=black&move_uci=e7e5")
+    assert black_move1.status_code == 200
+    assert black_move1.json()["legal"] is True
+
+    white_move2 = client.post(f"/games/{game_id}/move?player=white&move_uci=g1f3")
+    assert white_move2.status_code == 200
+    assert white_move2.json()["legal"] is True
+
+    # Get game state to verify it works
+    state_before = client.get(f"/games/{game_id}?player=white")
+    assert state_before.status_code == 200
+    white_fen_before = state_before.json()["board_fen"]
+
+    # Simulate server restart by clearing the games dictionary
+    from main import games
+    games.clear()
+    
+    # Verify game is no longer in memory
+    assert game_id not in games
+
+    # Try to get game state - should trigger reconstruction
+    state_after = client.get(f"/games/{game_id}?player=white")
+    assert state_after.status_code == 200
+    
+    # Verify game was reconstructed correctly
+    assert game_id in games
+    white_fen_after = state_after.json()["board_fen"]
+    
+    # The reconstructed game should have the same state
+    assert white_fen_after == white_fen_before
+    assert state_after.json()["turn"] == "black"  # Should be black's turn after 3 moves
+
+    # Test making a move on the reconstructed game
+    black_move2 = client.post(f"/games/{game_id}/move?player=black&move_uci=b8c6")
+    assert black_move2.status_code == 200
+    assert black_move2.json()["legal"] is True
+
+
+def test_game_reconstruction_move_endpoint():
+    """Test that move endpoint also triggers reconstruction"""
+    # Create game and make a move
+    create_response = client.post("/games")
+    game_id = create_response.json()["game_id"]
+
+    white_move1 = client.post(f"/games/{game_id}/move?player=white&move_uci=d2d4")
+    assert white_move1.status_code == 200
+
+    # Clear games from memory
+    from main import games
+    games.clear()
+    assert game_id not in games
+
+    # Try to make a move - should trigger reconstruction
+    black_move1 = client.post(f"/games/{game_id}/move?player=black&move_uci=d7d5")
+    assert black_move1.status_code == 200
+    assert black_move1.json()["legal"] is True
+    
+    # Verify game is back in memory
+    assert game_id in games

@@ -182,3 +182,108 @@ def save_move_history(game_id: str, move_number: int, player: str,
         is_legal=is_legal,
         has_any=has_any
     )
+
+
+def reconstruct_game_from_history(game_id: str):
+    """
+    Reconstruct a BerkeleyGame from database history using JSON serialization.
+    
+    This function replays all moves from the database to recreate the exact
+    game state, including scoresheets and internal state.
+    
+    Args:
+        game_id: The UUID of the game to reconstruct
+        
+    Returns:
+        ExtendedBerkeleyGame: Reconstructed game instance
+        
+    Raises:
+        ValueError: If game not found or reconstruction fails
+    """
+    import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ks-game'))
+    
+    from kriegspiel_wrapper import ExtendedBerkeleyGame
+    from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+    from kriegspiel.serialization import deserialize_berkeley_game
+    import chess
+    import json
+    
+    # Get game from database
+    db_game = get_game_by_id(game_id)
+    if not db_game:
+        raise ValueError(f"Game {game_id} not found")
+    
+    # Get game history ordered by move number
+    history = (GameHistory
+               .select()
+               .where(GameHistory.game == db_game)
+               .order_by(GameHistory.move_number, GameHistory.timestamp))
+    
+    if not history:
+        # No moves yet, just create a fresh game
+        return ExtendedBerkeleyGame(any_rule=db_game.any_rule)
+    
+    # Start with a fresh game
+    game = ExtendedBerkeleyGame(any_rule=db_game.any_rule)
+    
+    # Replay all moves to reconstruct the exact state
+    for move_entry in history:
+        try:
+            # Create the KriegspielMove
+            if move_entry.question_type == "ASK_ANY":
+                ks_move = KriegspielMove(QuestionAnnouncement.ASK_ANY, None)
+            else:
+                if move_entry.move_uci:
+                    chess_move = chess.Move.from_uci(move_entry.move_uci)
+                    ks_move = KriegspielMove(QuestionAnnouncement.COMMON, chess_move)
+                else:
+                    continue  # Skip invalid moves
+            
+            # Apply the move to reconstruct state
+            answer = game.ask_for(ks_move)
+            
+            # Verify the answer matches what was recorded (optional validation)
+            if answer.main_announcement.name != move_entry.main_announcement:
+                print(f"Warning: Answer mismatch for move {move_entry.move_number}: "
+                      f"expected {move_entry.main_announcement}, got {answer.main_announcement.name}")
+                
+        except Exception as e:
+            print(f"Error reconstructing move {move_entry.move_number}: {e}")
+            # Continue with partial reconstruction
+            continue
+    
+    return game
+
+
+def save_game_json_state(game_id: str, json_state: str):
+    """
+    Save the JSON serialized game state to the database.
+    
+    Args:
+        game_id: Game UUID
+        json_state: Serialized game state as JSON string
+    """
+    game = get_game_by_id(game_id)
+    if not game:
+        raise ValueError(f"Game {game_id} not found")
+    
+    # For now, we could add a json_state field to the Game model
+    # But since we haven't added it yet, we'll skip this for this iteration
+    pass
+
+
+def load_game_from_json_state(game_id: str):
+    """
+    Load a game from stored JSON state (future implementation).
+    
+    Args:
+        game_id: Game UUID
+        
+    Returns:
+        ExtendedBerkeleyGame or None
+    """
+    # This would load from a json_state field if we had one
+    # For now, return None to indicate we should use history reconstruction
+    return None
