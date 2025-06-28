@@ -13,10 +13,14 @@ dependencies = [
     "pytest>=8.0.0",
     "httpx>=0.27.0",
     "peewee>=3.18.1",
+    "kriegspiel",
 ]
 
 [tool.mypy]
 ignore_missing_imports = true
+
+[tool.uv.sources]
+kriegspiel = { path = "../ks-game", editable = true }
 
 [dependency-groups]
 dev = [

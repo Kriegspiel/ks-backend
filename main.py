@@ -1,10 +1,6 @@
 import os
-import sys
 import uuid
 from typing import Optional
-
-# Add ks-game to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
 
 import chess
 from fastapi import FastAPI, HTTPException
@@ -41,8 +37,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-games = {}
-
 
 @app.on_event("shutdown")
 def shutdown_event():
@@ -72,39 +66,31 @@ async def root():
 async def create_game(any_rule: bool = True):
     game_id = str(uuid.uuid4())
     game_engine = ExtendedBerkeleyGame(any_rule=any_rule)
-    games[game_id] = game_engine
-
     # Save initial game state to database with JSON serialization
     save_game_with_serialization(game_id, game_engine)
-
     return {"game_id": game_id, "status": "created", "any_rule": any_rule}
 
 
 @app.get("/games/{game_id}")
 async def get_game_state(game_id: str, player: str):
-    # Try to get game from memory first
-    if game_id not in games:
-        # Try to load from database
-        db_game = get_game_by_id(game_id)
-        if not db_game:
-            raise HTTPException(status_code=404, detail="Game not found")
+    # Try to load from database
+    db_game = get_game_by_id(game_id)
+    if not db_game:
+        raise HTTPException(status_code=404, detail="Game not found")
 
-        # Try JSON serialization first, then fall back to history reconstruction
-        reconstructed_game = load_game_from_serialization(game_id)
-        if reconstructed_game:
-            games[game_id] = reconstructed_game
-            print(f"Successfully loaded game {game_id} from JSON serialization")
-        else:
-            try:
-                # Fall back to history reconstruction
-                reconstructed_game = reconstruct_game_from_history(game_id)
-                games[game_id] = reconstructed_game
-                print(f"Successfully reconstructed game {game_id} from database history")
-            except Exception as e:
-                print(f"Failed to reconstruct game {game_id}: {e}")
-                raise HTTPException(status_code=503, detail="Game reconstruction failed")
+    # Try JSON serialization first, then fall back to history reconstruction
+    game = load_game_from_serialization(game_id)
+    if game:
+        print(f"Successfully loaded game {game_id} from JSON serialization")
+    else:
+        try:
+            # Fall back to history reconstruction
+            game = reconstruct_game_from_history(game_id)
+            print(f"Successfully reconstructed game {game_id} from database history")
+        except Exception as e:
+            print(f"Failed to reconstruct game {game_id}: {e}")
+            raise HTTPException(status_code=503, detail="Game reconstruction failed")
 
-    game = games[game_id]
     if player not in ["white", "black"]:
         raise HTTPException(status_code=400, detail="Player must be 'white' or 'black'")
 
@@ -129,27 +115,23 @@ async def make_move(
     question_type: str = "COMMON",
 ):
     # Ensure game is loaded in memory (reconstruct if needed)
-    if game_id not in games:
-        db_game = get_game_by_id(game_id)
-        if not db_game:
-            raise HTTPException(status_code=404, detail="Game not found")
+    db_game = get_game_by_id(game_id)
+    if not db_game:
+        raise HTTPException(status_code=404, detail="Game not found")
 
-        # Try JSON serialization first, then fall back to history reconstruction
-        reconstructed_game = load_game_from_serialization(game_id)
-        if reconstructed_game:
-            games[game_id] = reconstructed_game
-            print(f"Successfully loaded game {game_id} from JSON serialization for move")
-        else:
-            try:
-                # Fall back to history reconstruction
-                reconstructed_game = reconstruct_game_from_history(game_id)
-                games[game_id] = reconstructed_game
-                print(f"Successfully reconstructed game {game_id} from database history for move")
-            except Exception as e:
-                print(f"Failed to reconstruct game {game_id}: {e}")
-                raise HTTPException(status_code=503, detail="Game reconstruction failed")
+    # Try JSON serialization first, then fall back to history reconstruction
+    game = load_game_from_serialization(game_id)
+    if game:
+        print(f"Successfully loaded game {game_id} from JSON serialization for move")
+    else:
+        try:
+            # Fall back to history reconstruction
+            game = reconstruct_game_from_history(game_id)
+            print(f"Successfully reconstructed game {game_id} from database history for move")
+        except Exception as e:
+            print(f"Failed to reconstruct game {game_id}: {e}")
+            raise HTTPException(status_code=503, detail="Game reconstruction failed")
 
-    game = games[game_id]
     if player not in ["white", "black"]:
         raise HTTPException(status_code=400, detail="Player must be 'white' or 'black'")
 
@@ -263,15 +245,10 @@ async def get_game_history(game_id: str):
 @app.delete("/games/{game_id}")
 async def delete_game(game_id: str):
     # Check if game exists in memory or database
-    game_in_memory = game_id in games
     db_game = get_game_by_id(game_id)
 
-    if not game_in_memory and not db_game:
+    if not db_game:
         raise HTTPException(status_code=404, detail="Game not found")
-
-    # Remove from memory if present
-    if game_in_memory:
-        del games[game_id]
 
     # Remove from database if present
     if db_game:

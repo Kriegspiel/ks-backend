@@ -240,7 +240,7 @@ def save_move_history(
     )
 
 
-def reconstruct_game_from_history(game_id: str):
+def reconstruct_game_from_history(game_id: str) -> ExtendedBerkeleyGame:
     """
     Reconstruct a BerkeleyGame from database history using JSON serialization.
 
