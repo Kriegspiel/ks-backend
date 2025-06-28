@@ -63,7 +63,7 @@ async def get_game_state(game_id: str, player: str):
     }
 
 @app.post("/games/{game_id}/move")
-async def make_move(game_id: str, player: str, move_uci: str, question_type: str = "COMMON"):
+async def make_move(game_id: str, player: str, move_uci: str = None, question_type: str = "COMMON"):
     if game_id not in games:
         raise HTTPException(status_code=404, detail="Game not found")
 
@@ -77,9 +77,17 @@ async def make_move(game_id: str, player: str, move_uci: str, question_type: str
         raise HTTPException(status_code=400, detail="Not your turn")
 
     try:
-        move = chess.Move.from_uci(move_uci)
         question = QuestionAnnouncement.COMMON if question_type == "COMMON" else QuestionAnnouncement.ASK_ANY
-        ks_move = KriegspielMove(question, move)
+        
+        if question_type == "ASK_ANY":
+            # For ASK_ANY questions, move should be None
+            ks_move = KriegspielMove(question, None)
+        else:
+            # For COMMON questions, move is required
+            if move_uci is None:
+                raise HTTPException(status_code=400, detail="move_uci is required for COMMON questions")
+            move = chess.Move.from_uci(move_uci)
+            ks_move = KriegspielMove(question, move)
 
         answer = game.ask_for(ks_move)
 
@@ -87,17 +95,26 @@ async def make_move(game_id: str, player: str, move_uci: str, question_type: str
         color = chess.WHITE if player == "white" else chess.BLACK
         visible_board = game.get_visible_board(color)
 
-        return {
+        # Build response based on question type
+        response = {
             "game_id": game_id,
             "player": player,
-            "move": move_uci,
-            "legal": answer.move_done,
             "announcement": answer.main_announcement.name if answer.main_announcement else None,
             "special_case": answer.special_announcement.name if answer.special_announcement else None,
             "visible_board": str(visible_board),
             "board_fen": visible_board.fen(),
             "is_game_over": game.game_over
         }
+        
+        if question_type == "ASK_ANY":
+            # For ASK_ANY, return has_any instead of legal/move
+            response["has_any"] = (answer.main_announcement.name == "HAS_ANY")
+        else:
+            # For COMMON moves, return move and legal status
+            response["move"] = move_uci
+            response["legal"] = answer.move_done
+            
+        return response
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid move: {str(e)}")
 

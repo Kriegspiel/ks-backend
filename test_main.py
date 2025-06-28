@@ -224,3 +224,72 @@ def test_game_flow():
     final_state = client.get(f"/games/{game_id}?player=white")
     assert final_state.status_code == 200
     assert final_state.json()["turn"] == "white"
+
+
+def test_ask_any_pawn_capture_scenario():
+    """Test the specific scenario: b2b4, c7c5, then ASK_ANY should find captures"""
+    # Create game
+    create_response = client.post("/games")
+    game_id = create_response.json()["game_id"]
+
+    # White plays b2b4
+    white_move1 = client.post(f"/games/{game_id}/move?player=white&move_uci=b2b4")
+    assert white_move1.status_code == 200
+    white_data1 = white_move1.json()
+    assert white_data1["legal"] is True
+    print(f"After b2b4 - White's response: {white_data1}")
+
+    # Black plays c7c5
+    black_move1 = client.post(f"/games/{game_id}/move?player=black&move_uci=c7c5")
+    assert black_move1.status_code == 200
+    black_data1 = black_move1.json()
+    assert black_data1["legal"] is True
+    print(f"After c7c5 - Black's response: {black_data1}")
+
+    # Now white should be able to ask ASK_ANY and get HAS_ANY (bxc5 should be possible)
+    # Use the move endpoint with question_type=ASK_ANY and no move_uci needed
+    ask_any_response = client.post(f"/games/{game_id}/move?player=white&question_type=ASK_ANY")
+    assert ask_any_response.status_code == 200
+    ask_any_data = ask_any_response.json()
+    print(f"ASK_ANY response: {ask_any_data}")
+    
+    # This should return has_any=True because white pawn on b4 can capture black pawn on c5
+    assert ask_any_data["has_any"] is True, f"Expected has_any=True but got {ask_any_data}"
+
+
+def test_berkeley_game_direct_pawn_capture_scenario():
+    """Test the BerkeleyGame directly to ensure the logic works"""
+    import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ks-game'))
+    
+    from kriegspiel_wrapper import ExtendedBerkeleyGame
+    from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+    import chess
+    
+    # Create a game directly
+    game = ExtendedBerkeleyGame(any_rule=True)
+    
+    # White plays b2b4
+    white_move1 = KriegspielMove(QuestionAnnouncement.COMMON, chess.Move.from_uci("b2b4"))
+    answer1 = game.ask_for(white_move1)
+    print(f"After b2b4 - Answer: {answer1}")
+    assert answer1.main_announcement.name == "REGULAR_MOVE"
+    
+    # Black plays c7c5 
+    black_move1 = KriegspielMove(QuestionAnnouncement.COMMON, chess.Move.from_uci("c7c5"))
+    answer2 = game.ask_for(black_move1)
+    print(f"After c7c5 - Answer: {answer2}")
+    assert answer2.main_announcement.name == "REGULAR_MOVE"
+    
+    # Now it should be white's turn, test ASK_ANY
+    assert game.turn == chess.WHITE
+    
+    # White asks ASK_ANY
+    ask_any_move = KriegspielMove(QuestionAnnouncement.ASK_ANY, None)
+    answer3 = game.ask_for(ask_any_move)
+    print(f"ASK_ANY response: {answer3}")
+    print(f"Answer announcement: {answer3.main_announcement.name}")
+    
+    # Should return HAS_ANY because b4 pawn can capture c5 pawn
+    assert answer3.main_announcement.name == "HAS_ANY", f"Expected HAS_ANY but got {answer3.main_announcement.name}. Answer: {answer3}"
