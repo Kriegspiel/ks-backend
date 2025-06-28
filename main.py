@@ -10,7 +10,14 @@ from kriegspiel.move import KriegspielMove, QuestionAnnouncement
 from kriegspiel_wrapper import ExtendedBerkeleyGame
 import chess
 
+# Import database models
+from models import initialize_database, close_database, Game, GameHistory
+from models import save_game_state, save_move_history, get_game_by_id
+
 app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess")
+
+# Initialize database
+initialize_database()
 
 # Add CORS middleware to allow frontend requests
 app.add_middleware(
@@ -22,6 +29,11 @@ app.add_middleware(
 )
 
 games = {}
+
+@app.on_event("shutdown")
+def shutdown_event():
+    """Close database connection on app shutdown."""
+    close_database()
 
 # Mount the frontend static files
 frontend_dist_path = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
@@ -38,13 +50,34 @@ async def root():
 @app.post("/games")
 async def create_game(any_rule: bool = True):
     game_id = str(uuid.uuid4())
-    games[game_id] = ExtendedBerkeleyGame(any_rule=any_rule)
+    game_engine = ExtendedBerkeleyGame(any_rule=any_rule)
+    games[game_id] = game_engine
+    
+    # Save initial game state to database
+    initial_board_fen = game_engine._game._board.fen()
+    save_game_state(
+        game_id=game_id,
+        board_fen=initial_board_fen,
+        current_turn="white",
+        is_game_over=False,
+        move_count=0
+    )
+    
     return {"game_id": game_id, "status": "created", "any_rule": any_rule}
 
 @app.get("/games/{game_id}")
 async def get_game_state(game_id: str, player: str):
+    # Try to get game from memory first
     if game_id not in games:
-        raise HTTPException(status_code=404, detail="Game not found")
+        # Try to load from database
+        db_game = get_game_by_id(game_id)
+        if not db_game:
+            raise HTTPException(status_code=404, detail="Game not found")
+        
+        # Recreate game engine from database state
+        # For now, we'll just return a "game not in memory" error
+        # In a future iteration, we can implement full game reconstruction
+        raise HTTPException(status_code=503, detail="Game not currently active in memory")
 
     game = games[game_id]
     if player not in ["white", "black"]:
@@ -89,11 +122,44 @@ async def make_move(game_id: str, player: str, move_uci: str = None, question_ty
             move = chess.Move.from_uci(move_uci)
             ks_move = KriegspielMove(question, move)
 
+        # Save board state before move
+        board_fen_before = game._game._board.fen()
+        
         answer = game.ask_for(ks_move)
 
         # Get updated visible board after move
         color = chess.WHITE if player == "white" else chess.BLACK
         visible_board = game.get_visible_board(color)
+        board_fen_after = game._game._board.fen()
+        
+        # Save move to database
+        try:
+            save_move_history(
+                game_id=game_id,
+                move_number=game._game._board.fullmove_number,
+                player=player,
+                question_type=question_type,
+                move_uci=move_uci,
+                board_fen_before=board_fen_before,
+                board_fen_after=board_fen_after if answer.move_done else None,
+                main_announcement=answer.main_announcement.name,
+                special_announcement=answer.special_announcement.name if answer.special_announcement else None,
+                capture_square=chess.square_name(answer.capture_at_square) if answer.capture_at_square is not None else None,
+                is_legal=answer.move_done,
+                has_any=(answer.main_announcement.name == "HAS_ANY") if question_type == "ASK_ANY" else None
+            )
+            
+            # Update game state in database
+            save_game_state(
+                game_id=game_id,
+                board_fen=board_fen_after,
+                current_turn="white" if game.turn == chess.WHITE else "black",
+                is_game_over=game.game_over,
+                move_count=game._game._board.fullmove_number
+            )
+        except Exception as db_error:
+            # Log the error but don't fail the API call
+            print(f"Database error: {db_error}")  # In production, use proper logging
 
         # Build response based on question type
         response = {
@@ -118,11 +184,57 @@ async def make_move(game_id: str, player: str, move_uci: str = None, question_ty
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid move: {str(e)}")
 
+@app.get("/games/{game_id}/history")
+async def get_game_history(game_id: str):
+    """Get the complete move history for a game."""
+    from models import get_game_history
+    
+    history = get_game_history(game_id)
+    if not history:
+        # Check if game exists
+        db_game = get_game_by_id(game_id)
+        if not db_game:
+            raise HTTPException(status_code=404, detail="Game not found")
+        return {"game_id": game_id, "history": []}
+    
+    # Convert history to JSON-serializable format
+    history_data = []
+    for entry in history:
+        history_data.append({
+            "move_number": entry.move_number,
+            "player": entry.player,
+            "question_type": entry.question_type,
+            "move_uci": entry.move_uci,
+            "main_announcement": entry.main_announcement,
+            "special_announcement": entry.special_announcement,
+            "capture_square": entry.capture_square,
+            "is_legal": entry.is_legal,
+            "has_any": entry.has_any,
+            "timestamp": entry.timestamp.isoformat()
+        })
+    
+    return {"game_id": game_id, "history": history_data}
+
 @app.delete("/games/{game_id}")
 async def delete_game(game_id: str):
-    if game_id not in games:
+    # Check if game exists in memory or database
+    game_in_memory = game_id in games
+    db_game = get_game_by_id(game_id)
+    
+    if not game_in_memory and not db_game:
         raise HTTPException(status_code=404, detail="Game not found")
-    del games[game_id]
+    
+    # Remove from memory if present
+    if game_in_memory:
+        del games[game_id]
+    
+    # Remove from database if present
+    if db_game:
+        # Delete game history first (due to foreign key constraint)
+        GameHistory.delete().where(GameHistory.game == db_game).execute()
+        # Delete the game
+        db_game.delete_instance()
+    
     return {"message": "Game deleted"}
 
 

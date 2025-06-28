@@ -293,3 +293,51 @@ def test_berkeley_game_direct_pawn_capture_scenario():
     
     # Should return HAS_ANY because b4 pawn can capture c5 pawn
     assert answer3.main_announcement.name == "HAS_ANY", f"Expected HAS_ANY but got {answer3.main_announcement.name}. Answer: {answer3}"
+
+
+def test_game_history_endpoint():
+    """Test the game history endpoint returns move history"""
+    # Create game
+    create_response = client.post("/games")
+    game_id = create_response.json()["game_id"]
+
+    # Make a few moves
+    white_move = client.post(f"/games/{game_id}/move?player=white&move_uci=e2e4")
+    assert white_move.status_code == 200
+
+    black_move = client.post(f"/games/{game_id}/move?player=black&move_uci=e7e5")
+    assert black_move.status_code == 200
+
+    # Ask ASK_ANY
+    ask_any = client.post(f"/games/{game_id}/move?player=white&question_type=ASK_ANY")
+    assert ask_any.status_code == 200
+
+    # Get history
+    history_response = client.get(f"/games/{game_id}/history")
+    assert history_response.status_code == 200
+    
+    history_data = history_response.json()
+    assert history_data["game_id"] == game_id
+    assert "history" in history_data
+    
+    history = history_data["history"]
+    assert len(history) >= 3  # At least the 3 moves we made
+    
+    # Check first move
+    assert history[0]["player"] == "white"
+    assert history[0]["question_type"] == "COMMON"
+    assert history[0]["move_uci"] == "e2e4"
+    assert history[0]["main_announcement"] == "REGULAR_MOVE"
+    assert history[0]["is_legal"] is True
+    
+    # Check ASK_ANY move
+    ask_any_move = next((h for h in history if h["question_type"] == "ASK_ANY"), None)
+    assert ask_any_move is not None
+    assert ask_any_move["move_uci"] is None
+    assert ask_any_move["has_any"] is not None  # Should be True or False
+
+
+def test_game_history_nonexistent_game():
+    """Test game history for nonexistent game returns 404"""
+    response = client.get("/games/nonexistent/history")
+    assert response.status_code == 404
