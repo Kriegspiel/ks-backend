@@ -4,13 +4,32 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ks-game'))
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from kriegspiel.berkeley import BerkeleyGame
 from kriegspiel.move import KriegspielMove, QuestionAnnouncement
 import chess
 
 app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess")
 
+# Add CORS middleware to allow frontend requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite and CRA default ports
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 games = {}
+
+# Mount the frontend static files
+frontend_dist_path = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+if os.path.exists(frontend_dist_path):
+    # Mount static assets at root level for proper asset loading
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist_path, "assets")), name="assets")
+    # Mount the main app
+    app.mount("/app", StaticFiles(directory=frontend_dist_path, html=True), name="frontend")
 
 @app.get("/")
 async def root():
