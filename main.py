@@ -6,8 +6,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ks-game'))
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from kriegspiel.berkeley import BerkeleyGame
 from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+from kriegspiel_wrapper import ExtendedBerkeleyGame
 import chess
 
 app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess")
@@ -38,25 +38,26 @@ async def root():
 @app.post("/games")
 async def create_game(any_rule: bool = True):
     game_id = str(uuid.uuid4())
-    games[game_id] = BerkeleyGame(any_rule=any_rule)
+    games[game_id] = ExtendedBerkeleyGame(any_rule=any_rule)
     return {"game_id": game_id, "status": "created", "any_rule": any_rule}
 
 @app.get("/games/{game_id}")
 async def get_game_state(game_id: str, player: str):
     if game_id not in games:
         raise HTTPException(status_code=404, detail="Game not found")
-    
+
     game = games[game_id]
     if player not in ["white", "black"]:
         raise HTTPException(status_code=400, detail="Player must be 'white' or 'black'")
-    
-    # For now, just return the current turn and game state
-    # TODO: Implement proper visible board for Kriegspiel
-    
+
+    color = chess.WHITE if player == "white" else chess.BLACK
+    visible_board = game.get_visible_board(color)
+
     return {
         "game_id": game_id,
         "player": player,
-        "visible_board": "Kriegspiel board (pieces hidden)",
+        "visible_board": str(visible_board),
+        "board_fen": visible_board.fen(),
         "turn": "white" if game.turn == chess.WHITE else "black",
         "is_game_over": game.game_over
     }
@@ -65,23 +66,27 @@ async def get_game_state(game_id: str, player: str):
 async def make_move(game_id: str, player: str, move_uci: str, question_type: str = "COMMON"):
     if game_id not in games:
         raise HTTPException(status_code=404, detail="Game not found")
-    
+
     game = games[game_id]
     if player not in ["white", "black"]:
         raise HTTPException(status_code=400, detail="Player must be 'white' or 'black'")
-    
+
     color = chess.WHITE if player == "white" else chess.BLACK
-    
+
     if game.turn != color:
         raise HTTPException(status_code=400, detail="Not your turn")
-    
+
     try:
         move = chess.Move.from_uci(move_uci)
         question = QuestionAnnouncement.COMMON if question_type == "COMMON" else QuestionAnnouncement.ASK_ANY
         ks_move = KriegspielMove(question, move)
-        
+
         answer = game.ask_for(ks_move)
-        
+
+        # Get updated visible board after move
+        color = chess.WHITE if player == "white" else chess.BLACK
+        visible_board = game.get_visible_board(color)
+
         return {
             "game_id": game_id,
             "player": player,
@@ -89,7 +94,8 @@ async def make_move(game_id: str, player: str, move_uci: str, question_type: str
             "legal": answer.move_done,
             "announcement": answer.main_announcement.name if answer.main_announcement else None,
             "special_case": answer.special_announcement.name if answer.special_announcement else None,
-            "visible_board": "Kriegspiel board (pieces hidden)",
+            "visible_board": str(visible_board),
+            "board_fen": visible_board.fen(),
             "is_game_over": game.game_over
         }
     except ValueError as e:
