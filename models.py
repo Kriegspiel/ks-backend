@@ -10,6 +10,7 @@ import os
 import sys
 from typing import Optional
 
+import bcrypt
 import chess
 from peewee import (
     SqliteDatabase,
@@ -43,6 +44,23 @@ class BaseModel(Model):
         database = db
 
 
+class User(BaseModel):
+    """
+    User/Player model
+    """
+
+    id = AutoField(primary_key=True)
+    name = CharField()
+    email = CharField()
+    password = CharField()
+
+    def update_password(self, new_password: str) -> None:
+        self.password = bcrypt.hashpw(new_password.encode("bytes"), bcrypt.gensalt(12))
+
+    def check_password(self, attempt: str) -> bool:
+        return bcrypt.checkpw(attempt.encode("bytes"), self.password)
+
+
 class Game(BaseModel):
     """
     Represents a Kriegspiel chess game.
@@ -53,6 +71,8 @@ class Game(BaseModel):
 
     id = AutoField(primary_key=True)
     game_id = CharField(unique=True, max_length=50, index=True)  # UUID from frontend
+    white_player = ForeignKeyField(User, on_delete="CASCADE")
+    black_player = ForeignKeyField(User, on_delete="CASCADE")
     any_rule = BooleanField(default=True)  # Whether ASK_ANY questions are allowed
     current_turn = CharField(max_length=5, choices=[("white", "White"), ("black", "Black")], default="white")
     is_game_over = BooleanField(default=False)
@@ -91,7 +111,8 @@ class GameHistory(BaseModel):
     id = AutoField(primary_key=True)
     game = ForeignKeyField(Game, backref="history", on_delete="CASCADE")
     move_number = IntegerField()  # Sequential move number within the game
-    player = CharField(max_length=5, choices=[("white", "White"), ("black", "Black")])
+    player = ForeignKeyField(User, on_delete="CASCADE")
+    player_color = CharField(max_length=5, choices=[("white", "White"), ("black", "Black")])
     question_type = CharField(max_length=10, choices=[("COMMON", "Common Move"), ("ASK_ANY", "Ask Any")])
     move_uci = CharField(max_length=10, null=True)  # UCI notation (e.g., "e2e4"), null for ASK_ANY
     board_fen_before = TextField()  # Board state before the move
