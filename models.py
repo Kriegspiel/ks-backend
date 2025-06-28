@@ -5,6 +5,7 @@ This module defines the database schema for storing games and their history.
 """
 
 import datetime
+import json
 import os
 import sys
 from typing import Optional
@@ -26,6 +27,7 @@ from peewee import (
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
 
 from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+from kriegspiel.serialization import serialize_berkeley_game, deserialize_berkeley_game
 
 from kriegspiel_wrapper import ExtendedBerkeleyGame
 
@@ -56,6 +58,7 @@ class Game(BaseModel):
     is_game_over = BooleanField(default=False)
     board_fen = TextField()  # Current board state in FEN notation
     move_count = IntegerField(default=0)  # Total number of moves made
+    game_state_json = TextField(null=True)  # Serialized game state from BerkeleyGame.save_game()
     created_at = DateTimeField(default=datetime.datetime.now)
     updated_at = DateTimeField(default=datetime.datetime.now)
 
@@ -125,10 +128,24 @@ def create_tables():
         db.create_tables([Game, GameHistory])
 
 
+def migrate_database():
+    """Run database migrations to add new fields."""
+    # Check if game_state_json column exists
+    try:
+        # Try to access the column - if it doesn't exist, this will fail
+        db.execute_sql("SELECT game_state_json FROM games LIMIT 1")
+    except Exception:
+        # Column doesn't exist, add it
+        print("Adding game_state_json column to games table...")
+        db.execute_sql("ALTER TABLE games ADD COLUMN game_state_json TEXT")
+        print("Migration completed successfully")
+
+
 def initialize_database():
     """Initialize the database connection and create tables."""
     db.connect()
     create_tables()
+    migrate_database()
     return db
 
 
@@ -162,6 +179,7 @@ def save_game_state(
     current_turn: str,
     is_game_over: bool = False,
     move_count: int = 0,
+    game_state_json: Optional[str] = None,
 ) -> Game:
     """Save or update the current game state."""
     game, created = Game.get_or_create(
@@ -171,6 +189,7 @@ def save_game_state(
             "current_turn": current_turn,
             "is_game_over": is_game_over,
             "move_count": move_count,
+            "game_state_json": game_state_json,
         },
     )
 
@@ -180,6 +199,7 @@ def save_game_state(
         game.current_turn = current_turn
         game.is_game_over = is_game_over
         game.move_count = move_count
+        game.game_state_json = game_state_json
         game.save()
 
     return game
@@ -282,33 +302,88 @@ def reconstruct_game_from_history(game_id: str):
     return game
 
 
-def save_game_json_state(game_id: str, json_state: str):
+def serialize_game_to_json(game: ExtendedBerkeleyGame) -> str:
     """
-    Save the JSON serialized game state to the database.
+    Serialize a BerkeleyGame instance to JSON string.
+
+    Args:
+        game: ExtendedBerkeleyGame instance to serialize
+
+    Returns:
+        str: JSON string containing the serialized game state
+    """
+    game_data = serialize_berkeley_game(game._game)
+    return json.dumps(game_data)
+
+
+def deserialize_game_from_json(json_str: str) -> ExtendedBerkeleyGame:
+    """
+    Deserialize a BerkeleyGame instance from JSON string.
+
+    Args:
+        json_str: JSON string containing the serialized game state
+
+    Returns:
+        ExtendedBerkeleyGame: Restored game instance
+
+    Raises:
+        ValueError: If the JSON is invalid or game reconstruction fails
+    """
+    try:
+        game_data = json.loads(json_str)
+        berkeley_game = deserialize_berkeley_game(game_data)
+
+        # Wrap in ExtendedBerkeleyGame
+        extended_game = ExtendedBerkeleyGame.__new__(ExtendedBerkeleyGame)
+        extended_game._game = berkeley_game
+        return extended_game
+    except (json.JSONDecodeError, Exception) as e:
+        raise ValueError(f"Failed to deserialize game from JSON: {e}")
+
+
+def save_game_with_serialization(game_id: str, game: ExtendedBerkeleyGame) -> Game:
+    """
+    Save game state using JSON serialization.
 
     Args:
         game_id: Game UUID
-        json_state: Serialized game state as JSON string
+        game: ExtendedBerkeleyGame instance to save
+
+    Returns:
+        Game: Database game record
     """
-    game = get_game_by_id(game_id)
-    if not game:
-        raise ValueError(f"Game {game_id} not found")
+    game_state_json = serialize_game_to_json(game)
+    board_fen = game._game._board.fen()
+    current_turn = "white" if game.turn == chess.WHITE else "black"
+    is_game_over = game.game_over
+    move_count = game._game._board.fullmove_number
 
-    # For now, we could add a json_state field to the Game model
-    # But since we haven't added it yet, we'll skip this for this iteration
-    pass
+    return save_game_state(
+        game_id=game_id,
+        board_fen=board_fen,
+        current_turn=current_turn,
+        is_game_over=is_game_over,
+        move_count=move_count,
+        game_state_json=game_state_json,
+    )
 
 
-def load_game_from_json_state(game_id: str):
+def load_game_from_serialization(game_id: str) -> Optional[ExtendedBerkeleyGame]:
     """
-    Load a game from stored JSON state (future implementation).
+    Load game from JSON serialization if available.
 
     Args:
         game_id: Game UUID
 
     Returns:
-        ExtendedBerkeleyGame or None
+        ExtendedBerkeleyGame or None: Restored game instance or None if not available
     """
-    # This would load from a json_state field if we had one
-    # For now, return None to indicate we should use history reconstruction
-    return None
+    db_game = get_game_by_id(game_id)
+    if not db_game or not db_game.game_state_json:
+        return None
+
+    try:
+        return deserialize_game_from_json(db_game.game_state_json)
+    except ValueError:
+        # If JSON deserialization fails, return None to fall back to history reconstruction
+        return None

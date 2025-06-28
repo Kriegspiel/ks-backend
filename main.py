@@ -16,11 +16,12 @@ from kriegspiel.move import KriegspielMove, QuestionAnnouncement
 from kriegspiel_wrapper import ExtendedBerkeleyGame
 from models import initialize_database, close_database, GameHistory
 from models import (
-    save_game_state,
     save_move_history,
     get_game_by_id,
     get_game_history as get_game_history_from_db,
     reconstruct_game_from_history,
+    save_game_with_serialization,
+    load_game_from_serialization,
 )
 
 app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess")
@@ -73,15 +74,8 @@ async def create_game(any_rule: bool = True):
     game_engine = ExtendedBerkeleyGame(any_rule=any_rule)
     games[game_id] = game_engine
 
-    # Save initial game state to database
-    initial_board_fen = game_engine._game._board.fen()
-    save_game_state(
-        game_id=game_id,
-        board_fen=initial_board_fen,
-        current_turn="white",
-        is_game_over=False,
-        move_count=0,
-    )
+    # Save initial game state to database with JSON serialization
+    save_game_with_serialization(game_id, game_engine)
 
     return {"game_id": game_id, "status": "created", "any_rule": any_rule}
 
@@ -90,19 +84,25 @@ async def create_game(any_rule: bool = True):
 async def get_game_state(game_id: str, player: str):
     # Try to get game from memory first
     if game_id not in games:
-        # Try to load from database and reconstruct
+        # Try to load from database
         db_game = get_game_by_id(game_id)
         if not db_game:
             raise HTTPException(status_code=404, detail="Game not found")
 
-        try:
-            # Reconstruct game from database history
-            reconstructed_game = reconstruct_game_from_history(game_id)
+        # Try JSON serialization first, then fall back to history reconstruction
+        reconstructed_game = load_game_from_serialization(game_id)
+        if reconstructed_game:
             games[game_id] = reconstructed_game
-            print(f"Successfully reconstructed game {game_id} from database")
-        except Exception as e:
-            print(f"Failed to reconstruct game {game_id}: {e}")
-            raise HTTPException(status_code=503, detail="Game reconstruction failed")
+            print(f"Successfully loaded game {game_id} from JSON serialization")
+        else:
+            try:
+                # Fall back to history reconstruction
+                reconstructed_game = reconstruct_game_from_history(game_id)
+                games[game_id] = reconstructed_game
+                print(f"Successfully reconstructed game {game_id} from database history")
+            except Exception as e:
+                print(f"Failed to reconstruct game {game_id}: {e}")
+                raise HTTPException(status_code=503, detail="Game reconstruction failed")
 
     game = games[game_id]
     if player not in ["white", "black"]:
@@ -134,14 +134,20 @@ async def make_move(
         if not db_game:
             raise HTTPException(status_code=404, detail="Game not found")
 
-        try:
-            # Reconstruct game from database history
-            reconstructed_game = reconstruct_game_from_history(game_id)
+        # Try JSON serialization first, then fall back to history reconstruction
+        reconstructed_game = load_game_from_serialization(game_id)
+        if reconstructed_game:
             games[game_id] = reconstructed_game
-            print(f"Successfully reconstructed game {game_id} from database for move")
-        except Exception as e:
-            print(f"Failed to reconstruct game {game_id}: {e}")
-            raise HTTPException(status_code=503, detail="Game reconstruction failed")
+            print(f"Successfully loaded game {game_id} from JSON serialization for move")
+        else:
+            try:
+                # Fall back to history reconstruction
+                reconstructed_game = reconstruct_game_from_history(game_id)
+                games[game_id] = reconstructed_game
+                print(f"Successfully reconstructed game {game_id} from database history for move")
+            except Exception as e:
+                print(f"Failed to reconstruct game {game_id}: {e}")
+                raise HTTPException(status_code=503, detail="Game reconstruction failed")
 
     game = games[game_id]
     if player not in ["white", "black"]:
@@ -192,14 +198,8 @@ async def make_move(
                 has_any=(answer.main_announcement.name == "HAS_ANY") if question_type == "ASK_ANY" else None,
             )
 
-            # Update game state in database
-            save_game_state(
-                game_id=game_id,
-                board_fen=board_fen_after,
-                current_turn="white" if game.turn == chess.WHITE else "black",
-                is_game_over=game.game_over,
-                move_count=game._game._board.fullmove_number,
-            )
+            # Update game state in database with JSON serialization
+            save_game_with_serialization(game_id, game)
         except Exception as db_error:
             # Log the error but don't fail the API call
             print(f"Database error: {db_error}")  # In production, use proper logging

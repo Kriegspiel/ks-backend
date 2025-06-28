@@ -3,10 +3,16 @@ Tests for database models and functionality.
 """
 
 import os
+import sys
 import tempfile
+
+# Add ks-game to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
 
 import chess
 import pytest
+
+from kriegspiel_wrapper import ExtendedBerkeleyGame
 
 from models import (
     db,
@@ -18,6 +24,10 @@ from models import (
     save_game_state,
     save_move_history,
     reconstruct_game_from_history,
+    serialize_game_to_json,
+    deserialize_game_from_json,
+    save_game_with_serialization,
+    load_game_from_serialization,
 )
 
 
@@ -324,3 +334,172 @@ def test_reconstruct_nonexistent_game(temp_db):
         assert False, "Should have raised ValueError"
     except ValueError as e:
         assert "not found" in str(e)
+
+
+def test_serialize_game_to_json(temp_db):
+    """Test serializing a game to JSON string."""
+    # Create a simple game
+    game = ExtendedBerkeleyGame(any_rule=True)
+
+    # Serialize to JSON
+    json_str = serialize_game_to_json(game)
+
+    # Verify it's valid JSON and contains expected fields
+    import json
+
+    game_data = json.loads(json_str)
+
+    assert "version" in game_data
+    assert "game_type" in game_data
+    assert game_data["game_type"] == "BerkeleyGame"
+    assert "game_state" in game_data
+    assert "any_rule" in game_data["game_state"]
+    assert game_data["game_state"]["any_rule"] is True
+    assert "board_fen" in game_data["game_state"]
+
+
+def test_deserialize_game_from_json(temp_db):
+    """Test deserializing a game from JSON string."""
+    # Create and serialize a game
+    original_game = ExtendedBerkeleyGame(any_rule=True)
+    json_str = serialize_game_to_json(original_game)
+
+    # Deserialize it back
+    restored_game = deserialize_game_from_json(json_str)
+
+    # Verify the restored game matches the original
+    assert isinstance(restored_game, ExtendedBerkeleyGame)
+    assert restored_game._game._any_rule == original_game._game._any_rule
+    assert restored_game._game._board.fen() == original_game._game._board.fen()
+    assert restored_game.turn == original_game.turn
+    assert restored_game.game_over == original_game.game_over
+
+
+def test_serialize_deserialize_game_with_moves(temp_db):
+    """Test serializing and deserializing a game with moves made."""
+    from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+
+    # Create a game and make some moves
+    game = ExtendedBerkeleyGame(any_rule=True)
+
+    # Make a move: e2e4
+    move1 = KriegspielMove(QuestionAnnouncement.COMMON, chess.Move.from_uci("e2e4"))
+    answer1 = game.ask_for(move1)
+    assert answer1.move_done
+
+    # Make another move: e7e5
+    move2 = KriegspielMove(QuestionAnnouncement.COMMON, chess.Move.from_uci("e7e5"))
+    answer2 = game.ask_for(move2)
+    assert answer2.move_done
+
+    # Serialize and deserialize
+    json_str = serialize_game_to_json(game)
+    restored_game = deserialize_game_from_json(json_str)
+
+    # Verify the game state is preserved
+    assert restored_game._game._board.fen() == game._game._board.fen()
+    assert restored_game.turn == game.turn
+    assert restored_game._game._board.fullmove_number == game._game._board.fullmove_number
+
+    # Verify scoresheets are preserved
+    assert len(restored_game._game._whites_scoresheet._KriegspielScoresheet__moves_own) == 1
+    assert len(restored_game._game._blacks_scoresheet._KriegspielScoresheet__moves_own) == 1
+
+
+def test_save_game_with_serialization(temp_db):
+    """Test saving a game using JSON serialization."""
+    game_id = "test-serialization-save"
+    game = ExtendedBerkeleyGame(any_rule=True)
+
+    # Save the game
+    db_game = save_game_with_serialization(game_id, game)
+
+    # Verify database record was created
+    assert db_game.game_id == game_id
+    assert db_game.game_state_json is not None
+    assert db_game.board_fen == game._game._board.fen()
+    assert db_game.current_turn == "white"
+    assert db_game.is_game_over is False
+    assert db_game.move_count == 1  # Initial position is move 1
+
+    # Verify the JSON can be deserialized
+    restored_game = deserialize_game_from_json(db_game.game_state_json)
+    assert restored_game._game._board.fen() == game._game._board.fen()
+
+
+def test_load_game_from_serialization(temp_db):
+    """Test loading a game from JSON serialization."""
+    game_id = "test-serialization-load"
+    original_game = ExtendedBerkeleyGame(any_rule=False)  # Test with any_rule=False
+
+    # Save the game
+    save_game_with_serialization(game_id, original_game)
+
+    # Load the game back
+    loaded_game = load_game_from_serialization(game_id)
+
+    # Verify the loaded game matches the original
+    assert loaded_game is not None
+    assert isinstance(loaded_game, ExtendedBerkeleyGame)
+    assert loaded_game._game._any_rule == original_game._game._any_rule
+    assert loaded_game._game._board.fen() == original_game._game._board.fen()
+    assert loaded_game.turn == original_game.turn
+
+
+def test_load_game_from_serialization_nonexistent(temp_db):
+    """Test loading a game that doesn't exist returns None."""
+    result = load_game_from_serialization("nonexistent-game")
+    assert result is None
+
+
+def test_load_game_from_serialization_no_json(temp_db):
+    """Test loading a game with no JSON data returns None."""
+    game_id = "test-no-json"
+
+    # Save a game without JSON (old style)
+    save_game_state(
+        game_id=game_id,
+        board_fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        current_turn="white",
+        is_game_over=False,
+        move_count=0,
+    )
+
+    # Try to load - should return None because no JSON data
+    result = load_game_from_serialization(game_id)
+    assert result is None
+
+
+def test_serialization_preserves_game_state_after_moves(temp_db):
+    """Test that serialization preserves complex game state."""
+    from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+
+    game_id = "test-complex-serialization"
+    game = ExtendedBerkeleyGame(any_rule=True)
+
+    # Make several moves to create complex state
+    moves = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5"]
+
+    for move_uci in moves:
+        move = KriegspielMove(QuestionAnnouncement.COMMON, chess.Move.from_uci(move_uci))
+        answer = game.ask_for(move)
+        assert answer.move_done
+
+    # Save and reload
+    save_game_with_serialization(game_id, game)
+    loaded_game = load_game_from_serialization(game_id)
+
+    # Verify complex state is preserved
+    assert loaded_game is not None
+    assert loaded_game._game._board.fen() == game._game._board.fen()
+    assert loaded_game.turn == game.turn
+    assert loaded_game._game._board.fullmove_number == game._game._board.fullmove_number
+
+    # Make a move on both games and verify they behave the same
+    test_move = KriegspielMove(QuestionAnnouncement.COMMON, chess.Move.from_uci("d2d4"))
+
+    answer_original = game.ask_for(test_move)
+    answer_loaded = loaded_game.ask_for(test_move)
+
+    assert answer_original.main_announcement == answer_loaded.main_announcement
+    assert answer_original.move_done == answer_loaded.move_done
