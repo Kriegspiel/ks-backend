@@ -5,9 +5,11 @@ This module defines the database schema for storing games and their history.
 """
 
 import datetime
-import sys
 import os
+import sys
 from typing import Optional
+
+import chess
 from peewee import (
     SqliteDatabase,
     Model,
@@ -23,8 +25,8 @@ from peewee import (
 # Add ks-game to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
 
-import chess
 from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+
 from kriegspiel_wrapper import ExtendedBerkeleyGame
 
 # Database configuration - using SQLite for simplicity

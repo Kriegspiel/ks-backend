@@ -1,18 +1,19 @@
-import sys
 import os
+import sys
 import uuid
 from typing import Optional
 
+# Add ks-game to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
 
+import chess
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from kriegspiel.move import KriegspielMove, QuestionAnnouncement
-from kriegspiel_wrapper import ExtendedBerkeleyGame
-import chess
 
-# Import database models
+from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+
+from kriegspiel_wrapper import ExtendedBerkeleyGame
 from models import initialize_database, close_database, GameHistory
 from models import (
     save_game_state,

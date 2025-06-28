@@ -1,17 +1,19 @@
-import pytest
 import os
 import sys
 import tempfile
-from fastapi.testclient import TestClient
-from main import app
-from models import db, initialize_database, close_database
 
 # Add ks-game to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
 
 import chess
-from kriegspiel_wrapper import ExtendedBerkeleyGame
+import pytest
+from fastapi.testclient import TestClient
+
 from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+
+from kriegspiel_wrapper import ExtendedBerkeleyGame
+from main import app
+from models import db, initialize_database, close_database
 
 
 @pytest.fixture(scope="function")

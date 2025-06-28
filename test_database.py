@@ -2,10 +2,12 @@
 Tests for database models and functionality.
 """
 
-import pytest
 import os
 import tempfile
+
 import chess
+import pytest
+
 from models import (
     db,
     Game,

@@ -4,6 +4,7 @@ without modifying the original ks-game code.
 """
 
 import chess
+
 from kriegspiel.berkeley import BerkeleyGame
 
 
