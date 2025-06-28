@@ -18,6 +18,7 @@ from models import (
     save_game_state,
     save_move_history,
     get_game_by_id,
+    get_game_history as get_game_history_from_db,
     reconstruct_game_from_history,
 )
 
@@ -229,9 +230,7 @@ async def make_move(
 @app.get("/games/{game_id}/history")
 async def get_game_history(game_id: str):
     """Get the complete move history for a game."""
-    from models import get_game_history
-
-    history = get_game_history(game_id)
+    history = get_game_history_from_db(game_id)
     if not history:
         # Check if game exists
         db_game = get_game_by_id(game_id)

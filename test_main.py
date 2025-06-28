@@ -1,9 +1,17 @@
 import pytest
 import os
+import sys
 import tempfile
 from fastapi.testclient import TestClient
 from main import app
 from models import db, initialize_database, close_database
+
+# Add ks-game to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
+
+import chess
+from kriegspiel_wrapper import ExtendedBerkeleyGame
+from kriegspiel.move import KriegspielMove, QuestionAnnouncement
 
 
 @pytest.fixture(scope="function")
@@ -287,15 +295,6 @@ def test_ask_any_pawn_capture_scenario(test_client):
 
 def test_berkeley_game_direct_pawn_capture_scenario():
     """Test the BerkeleyGame directly to ensure the logic works"""
-    import sys
-    import os
-
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
-
-    from kriegspiel_wrapper import ExtendedBerkeleyGame
-    from kriegspiel.move import KriegspielMove, QuestionAnnouncement
-    import chess
-
     # Create a game directly
     game = ExtendedBerkeleyGame(any_rule=True)
 

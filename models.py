@@ -5,6 +5,8 @@ This module defines the database schema for storing games and their history.
 """
 
 import datetime
+import sys
+import os
 from typing import Optional
 from peewee import (
     SqliteDatabase,
@@ -17,6 +19,13 @@ from peewee import (
     DateTimeField,
     ForeignKeyField,
 )
+
+# Add ks-game to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
+
+import chess
+from kriegspiel.move import KriegspielMove, QuestionAnnouncement
+from kriegspiel_wrapper import ExtendedBerkeleyGame
 
 # Database configuration - using SQLite for simplicity
 DATABASE_PATH = "kriegspiel.db"
@@ -225,15 +234,6 @@ def reconstruct_game_from_history(game_id: str):
     Raises:
         ValueError: If game not found or reconstruction fails
     """
-    import sys
-    import os
-
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
-
-    from kriegspiel_wrapper import ExtendedBerkeleyGame
-    from kriegspiel.move import KriegspielMove, QuestionAnnouncement
-    import chess
-
     # Get game from database
     db_game = get_game_by_id(game_id)
     if not db_game:
