@@ -1,6 +1,7 @@
 import sys
 import os
 import uuid
+from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ks-game"))
 
@@ -12,8 +13,13 @@ from kriegspiel_wrapper import ExtendedBerkeleyGame
 import chess
 
 # Import database models
-from models import initialize_database, close_database, Game, GameHistory
-from models import save_game_state, save_move_history, get_game_by_id, reconstruct_game_from_history
+from models import initialize_database, close_database, GameHistory
+from models import (
+    save_game_state,
+    save_move_history,
+    get_game_by_id,
+    reconstruct_game_from_history,
+)
 
 app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess")
 
@@ -23,7 +29,10 @@ initialize_database()
 # Add CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite and CRA default ports
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],  # Vite and CRA default ports
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,7 +51,11 @@ def shutdown_event():
 frontend_dist_path = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 if os.path.exists(frontend_dist_path):
     # Mount static assets at root level for proper asset loading
-    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist_path, "assets")), name="assets")
+    app.mount(
+        "/assets",
+        StaticFiles(directory=os.path.join(frontend_dist_path, "assets")),
+        name="assets",
+    )
     # Mount the main app
     app.mount("/app", StaticFiles(directory=frontend_dist_path, html=True), name="frontend")
 
@@ -60,7 +73,13 @@ async def create_game(any_rule: bool = True):
 
     # Save initial game state to database
     initial_board_fen = game_engine._game._board.fen()
-    save_game_state(game_id=game_id, board_fen=initial_board_fen, current_turn="white", is_game_over=False, move_count=0)
+    save_game_state(
+        game_id=game_id,
+        board_fen=initial_board_fen,
+        current_turn="white",
+        is_game_over=False,
+        move_count=0,
+    )
 
     return {"game_id": game_id, "status": "created", "any_rule": any_rule}
 
@@ -101,7 +120,12 @@ async def get_game_state(game_id: str, player: str):
 
 
 @app.post("/games/{game_id}/move")
-async def make_move(game_id: str, player: str, move_uci: str = None, question_type: str = "COMMON"):
+async def make_move(
+    game_id: str,
+    player: str,
+    move_uci: Optional[str] = None,
+    question_type: str = "COMMON",
+):
     # Ensure game is loaded in memory (reconstruct if needed)
     if game_id not in games:
         db_game = get_game_by_id(game_id)

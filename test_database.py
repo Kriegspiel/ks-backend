@@ -6,7 +6,17 @@ import pytest
 import os
 import tempfile
 import chess
-from models import *
+from models import (
+    db,
+    Game,
+    initialize_database,
+    close_database,
+    get_game_by_id,
+    get_game_history,
+    save_game_state,
+    save_move_history,
+    reconstruct_game_from_history,
+)
 
 
 @pytest.fixture
@@ -36,7 +46,13 @@ def test_create_game(temp_db):
     game_id = "test-game-123"
     board_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-    game = save_game_state(game_id=game_id, board_fen=board_fen, current_turn="white", is_game_over=False, move_count=0)
+    game = save_game_state(
+        game_id=game_id,
+        board_fen=board_fen,
+        current_turn="white",
+        is_game_over=False,
+        move_count=0,
+    )
 
     assert game.game_id == game_id
     assert game.board_fen == board_fen
@@ -52,7 +68,13 @@ def test_get_game_by_id(temp_db):
     board_fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
 
     # Create game
-    save_game_state(game_id=game_id, board_fen=board_fen, current_turn="black", is_game_over=False, move_count=1)
+    save_game_state(
+        game_id=game_id,
+        board_fen=board_fen,
+        current_turn="black",
+        is_game_over=False,
+        move_count=1,
+    )
 
     # Retrieve game
     game = get_game_by_id(game_id)
@@ -219,7 +241,6 @@ def test_update_existing_game(temp_db):
 
 def test_reconstruct_game_from_history(temp_db):
     """Test reconstructing a game from move history."""
-    from models import reconstruct_game_from_history
 
     game_id = "test-reconstruction"
 
@@ -271,7 +292,6 @@ def test_reconstruct_game_from_history(temp_db):
 
 def test_reconstruct_empty_game(temp_db):
     """Test reconstructing a game with no moves."""
-    from models import reconstruct_game_from_history
 
     game_id = "test-empty-reconstruction"
 
@@ -296,7 +316,6 @@ def test_reconstruct_empty_game(temp_db):
 
 def test_reconstruct_nonexistent_game(temp_db):
     """Test reconstructing a game that doesn't exist."""
-    from models import reconstruct_game_from_history
 
     try:
         reconstruct_game_from_history("nonexistent-game")

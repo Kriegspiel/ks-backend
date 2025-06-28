@@ -21,5 +21,7 @@ ignore_missing_imports = true
 [dependency-groups]
 dev = [
     "black>=25.1.0",
+    "mypy>=1.16.1",
     "pre-commit>=4.2.0",
+    "ruff>=0.12.1",
 ]

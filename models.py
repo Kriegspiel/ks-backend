@@ -5,7 +5,18 @@ This module defines the database schema for storing games and their history.
 """
 
 import datetime
-from peewee import *
+from typing import Optional
+from peewee import (
+    SqliteDatabase,
+    Model,
+    AutoField,
+    CharField,
+    BooleanField,
+    TextField,
+    IntegerField,
+    DateTimeField,
+    ForeignKeyField,
+)
 
 # Database configuration - using SQLite for simplicity
 DATABASE_PATH = "kriegspiel.db"
@@ -117,7 +128,7 @@ def close_database():
 
 
 # Optional: Add some helper functions for common operations
-def get_game_by_id(game_id: str) -> Game:
+def get_game_by_id(game_id: str) -> Optional[Game]:
     """Get a game by its UUID."""
     try:
         return Game.get(Game.game_id == game_id)
@@ -134,7 +145,13 @@ def get_game_history(game_id: str) -> list:
     return GameHistory.select().where(GameHistory.game == game).order_by(GameHistory.move_number)
 
 
-def save_game_state(game_id: str, board_fen: str, current_turn: str, is_game_over: bool = False, move_count: int = 0) -> Game:
+def save_game_state(
+    game_id: str,
+    board_fen: str,
+    current_turn: str,
+    is_game_over: bool = False,
+    move_count: int = 0,
+) -> Game:
     """Save or update the current game state."""
     game, created = Game.get_or_create(
         game_id=game_id,
@@ -162,14 +179,14 @@ def save_move_history(
     move_number: int,
     player: str,
     question_type: str,
-    move_uci: str,
+    move_uci: Optional[str],
     board_fen_before: str,
-    board_fen_after: str,
+    board_fen_after: Optional[str],
     main_announcement: str,
-    special_announcement: str = None,
-    capture_square: str = None,
+    special_announcement: Optional[str] = None,
+    capture_square: Optional[str] = None,
     is_legal: bool = True,
-    has_any: bool = None,
+    has_any: Optional[bool] = None,
 ) -> GameHistory:
     """Save a move to the game history."""
     game = get_game_by_id(game_id)
@@ -215,9 +232,7 @@ def reconstruct_game_from_history(game_id: str):
 
     from kriegspiel_wrapper import ExtendedBerkeleyGame
     from kriegspiel.move import KriegspielMove, QuestionAnnouncement
-    from kriegspiel.serialization import deserialize_berkeley_game
     import chess
-    import json
 
     # Get game from database
     db_game = get_game_by_id(game_id)

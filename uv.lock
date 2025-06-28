@@ -43,7 +43,9 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "black" },
+    { name = "mypy" },
     { name = "pre-commit" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -61,7 +63,9 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=25.1.0" },
+    { name = "mypy", specifier = ">=1.16.1" },
     { name = "pre-commit", specifier = ">=4.2.0" },
+    { name = "ruff", specifier = ">=0.12.1" },
 ]
 
 [[package]]
