@@ -10,4 +10,9 @@ dependencies = [
     "ruff>=0.12.1",
     "python-chess>=1.999",
     "mypy>=1.16.1",
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
 ]
+
+[tool.mypy]
+ignore_missing_imports = true

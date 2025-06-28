@@ -31,15 +31,15 @@ async def get_game_state(game_id: str, player: str):
     if player not in ["white", "black"]:
         raise HTTPException(status_code=400, detail="Player must be 'white' or 'black'")
     
-    color = chess.WHITE if player == "white" else chess.BLACK
-    visible_board = game.get_visible_board(color)
+    # For now, just return the current turn and game state
+    # TODO: Implement proper visible board for Kriegspiel
     
     return {
         "game_id": game_id,
         "player": player,
-        "visible_board": str(visible_board),
-        "turn": "white" if game.board.turn == chess.WHITE else "black",
-        "is_game_over": game.board.is_game_over()
+        "visible_board": "Kriegspiel board (pieces hidden)",
+        "turn": "white" if game.turn == chess.WHITE else "black",
+        "is_game_over": game.game_over
     }
 
 @app.post("/games/{game_id}/move")
@@ -53,7 +53,7 @@ async def make_move(game_id: str, player: str, move_uci: str, question_type: str
     
     color = chess.WHITE if player == "white" else chess.BLACK
     
-    if game.board.turn != color:
+    if game.turn != color:
         raise HTTPException(status_code=400, detail="Not your turn")
     
     try:
@@ -61,17 +61,17 @@ async def make_move(game_id: str, player: str, move_uci: str, question_type: str
         question = QuestionAnnouncement.COMMON if question_type == "COMMON" else QuestionAnnouncement.ASK_ANY
         ks_move = KriegspielMove(question, move)
         
-        answer = game.ask_for(ks_move, color)
+        answer = game.ask_for(ks_move)
         
         return {
             "game_id": game_id,
             "player": player,
             "move": move_uci,
-            "legal": answer.is_legal,
-            "announcement": answer.announcement.name if answer.announcement else None,
-            "special_case": answer.special_case.name if answer.special_case else None,
-            "visible_board": str(game.get_visible_board(color)),
-            "is_game_over": game.board.is_game_over()
+            "legal": answer.move_done,
+            "announcement": answer.main_announcement.name if answer.main_announcement else None,
+            "special_case": answer.special_announcement.name if answer.special_announcement else None,
+            "visible_board": "Kriegspiel board (pieces hidden)",
+            "is_game_over": game.game_over
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid move: {str(e)}")
