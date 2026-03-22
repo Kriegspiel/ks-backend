@@ -1,0 +1,12 @@
+fastapi==0.115.14
+uvicorn[standard]==0.32.1
+motor==3.6.0
+pydantic==2.11.7
+pydantic-settings==2.3.4
+bcrypt==4.3.0
+python-jose[cryptography]==3.3.0
+kriegspiel==1.1.1
+structlog==24.2.0
+python-multipart==0.0.20
+httpx==0.28.1
+pymongo==4.9.2
