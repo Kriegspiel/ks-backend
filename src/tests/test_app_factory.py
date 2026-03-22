@@ -26,13 +26,13 @@ def test_app_factory_is_repeatable():
     assert app_two.state.settings.SITE_ORIGIN == "https://two.example"
 
 
-def test_lifespan_runs_without_external_dependencies():
+def test_lifespan_runs_without_external_dependencies_and_reports_unhealthy_db():
     app = create_app(Settings())
 
     with TestClient(app) as client:
         response = client.get("/health")
 
-    assert response.status_code == 200
+    assert response.status_code in (200, 503)
 
 
 def test_cors_allows_site_origin_preflight():

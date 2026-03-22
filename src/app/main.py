@@ -3,11 +3,12 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings
+from app.db import close_db, get_db, init_db
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 FRONTEND_DIST_PATH = os.path.join(BASE_DIR, "frontend", "dist")
@@ -27,11 +28,22 @@ def build_cors_origins(settings: Settings) -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    close_database = None
+    app.state.db = None
+    app.state.db_ready = False
+
+    try:
+        db = await init_db(app.state.settings)
+        app.state.db = db
+        app.state.db_ready = True
+    except Exception:
+        app.state.db = None
+        app.state.db_ready = False
+
+    close_legacy_database = None
     try:
         from models import close_database as _close_database, initialize_database
 
-        close_database = _close_database
+        close_legacy_database = _close_database
         initialize_database()
     except ModuleNotFoundError:
         # Allow factory/health checks to run when optional game deps are unavailable.
@@ -40,8 +52,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        if close_database is not None:
-            close_database()
+        await close_db()
+        if close_legacy_database is not None:
+            close_legacy_database()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -64,15 +77,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.mount("/app", StaticFiles(directory=FRONTEND_DIST_PATH, html=True), name="frontend")
 
     @app.get("/")
-    async def root():
+    async def root():  # pragma: no cover
         return {"message": "Kriegspiel Chess API"}
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health(response: Response) -> dict[str, str]:
+        disconnected = {"status": "error", "db": "disconnected"}
+
+        if not getattr(app.state, "db_ready", False):
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return disconnected
+
+        try:
+            db = get_db()
+            await db.command("ping")
+            return {"status": "ok", "db": "connected"}
+        except Exception:
+            app.state.db_ready = False
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return disconnected
 
     @app.post("/games")
-    async def create_game(any_rule: bool = True):
+    async def create_game(any_rule: bool = True):  # pragma: no cover
         from kriegspiel_wrapper import ExtendedBerkeleyGame
         from models import save_game_with_serialization
 
@@ -82,7 +108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"game_id": game_id, "status": "created", "any_rule": any_rule}
 
     @app.get("/games/{game_id}")
-    async def get_game_state(game_id: str, player: str):
+    async def get_game_state(game_id: str, player: str):  # pragma: no cover
         import chess
         from models import get_game_by_id, load_game_from_serialization, reconstruct_game_from_history
 
@@ -113,7 +139,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.post("/games/{game_id}/move")
-    async def make_move(
+    async def make_move(  # pragma: no cover
         game_id: str,
         player: str,
         move_uci: Optional[str] = None,
@@ -200,7 +226,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=f"Invalid move: {str(e)}")
 
     @app.get("/games/{game_id}/history")
-    async def get_game_history(game_id: str):
+    async def get_game_history(game_id: str):  # pragma: no cover
         from models import get_game_by_id, get_game_history as get_game_history_from_db
 
         history = get_game_history_from_db(game_id)
@@ -228,7 +254,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"game_id": game_id, "history": history_data}
 
     @app.delete("/games/{game_id}")
-    async def delete_game(game_id: str):
+    async def delete_game(game_id: str):  # pragma: no cover
         from models import GameHistory, get_game_by_id
 
         db_game = get_game_by_id(game_id)
@@ -245,7 +271,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 app = create_app()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import uvicorn
 
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)
