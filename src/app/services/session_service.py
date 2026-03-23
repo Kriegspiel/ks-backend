@@ -54,7 +54,13 @@ class SessionService:
             return None
 
         now = self.utcnow()
-        if session["expires_at"] <= now:
+        expires_at = session["expires_at"]
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        else:
+            expires_at = expires_at.astimezone(UTC)
+
+        if expires_at <= now:
             await self.delete_session(session_id)
             return None
 

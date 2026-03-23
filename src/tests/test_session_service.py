@@ -75,3 +75,16 @@ async def test_delete_session_deletes_by_id() -> None:
     await service.delete_session("sid")
 
     sessions.delete_one.assert_awaited_once_with({"_id": "sid"})
+
+
+@pytest.mark.asyncio
+async def test_get_active_session_supports_naive_datetime_from_mongo() -> None:
+    now_naive = datetime.utcnow()
+    session = {"_id": "sid", "expires_at": now_naive + timedelta(minutes=5)}
+    sessions = SimpleNamespace(find_one=AsyncMock(return_value=session), update_one=AsyncMock(), delete_one=AsyncMock())
+    service = SessionService(sessions)
+
+    active = await service.get_active_session("sid")
+
+    assert active is not None
+    assert sessions.update_one.await_count == 1
