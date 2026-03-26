@@ -96,6 +96,30 @@ class AskAnyResponse(MoveResponse):
     has_any: bool
 
 
+class RefereeLogItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ply: int | None = None
+    announcement: str
+    special_announcement: str | None = None
+    capture_square: str | None = None
+    timestamp: datetime | None = None
+
+
+class GameStateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+    state: GameState
+    turn: PlayerColor | None = None
+    move_number: int = Field(ge=1)
+    your_color: PlayerColor
+    your_fen: str
+    referee_log: list[RefereeLogItem]
+    possible_actions: list[Literal["move", "ask_any"]]
+    result: dict[str, Any] | None = None
+
+
 class OpenGameItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

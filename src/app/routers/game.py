@@ -12,6 +12,7 @@ from app.models.game import (
     CreateGameRequest,
     CreateGameResponse,
     GameMetadataResponse,
+    GameStateResponse,
     JoinGameResponse,
     MoveRequest,
     MoveResponse,
@@ -97,6 +98,18 @@ async def move_game(
 ) -> Any:
     try:
         return await game_service.execute_move(game_id=game_id, user_id=user.id, uci=payload.uci)
+    except GameServiceError as exc:
+        return _map_game_error(exc)
+
+
+@router.get("/{game_id}/state", response_model=GameStateResponse)
+async def get_game_state(
+    game_id: str,
+    user: UserModel = Depends(get_current_user),
+    game_service: GameService = Depends(get_game_service),
+) -> Any:
+    try:
+        return await game_service.get_game_state(game_id=game_id, user_id=user.id)
     except GameServiceError as exc:
         return _map_game_error(exc)
 

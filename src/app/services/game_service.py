@@ -12,12 +12,14 @@ from app.models.game import (
     CreateGameResponse,
     GameDocument,
     GameMetadataResponse,
+    GameStateResponse,
     JoinGameResponse,
     OpenGameItem,
     OpenGamesResponse,
 )
 from app.services.code_generator import generate_game_code
 from app.services.engine_adapter import ask_any, attempt_move, create_new_game, deserialize_game_state, serialize_game_state
+from app.services.state_projection import build_referee_log, compute_possible_actions, project_player_fen
 
 PlayerColor = Literal["white", "black"]
 
@@ -258,6 +260,33 @@ class GameService:
             "created_at": game["created_at"],
         }
         return GameMetadataResponse.model_validate(payload)
+
+    async def get_game_state(self, *, game_id: str, user_id: str) -> GameStateResponse:
+        game = await self._games.find_one({"_id": self._id_query(game_id)})
+        if game is None:
+            raise GameNotFoundError()
+
+        color = self._player_color_for_user(game, user_id)
+        if color is None:
+            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access this game state")
+
+        engine = self._load_or_bootstrap_engine(game)
+        return GameStateResponse(
+            game_id=str(game["_id"]),
+            state=game["state"],
+            turn=game.get("turn"),
+            move_number=game.get("move_number", 1),
+            your_color=color,
+            your_fen=project_player_fen(engine=engine, viewer_color=color, game_state=game["state"]),
+            referee_log=build_referee_log(game.get("moves", [])),
+            possible_actions=compute_possible_actions(
+                engine=engine,
+                game_state=game["state"],
+                viewer_color=color,
+                turn=game.get("turn"),
+            ),
+            result=game.get("result"),
+        )
 
     async def execute_move(self, *, game_id: str, user_id: str, uci: str) -> dict[str, Any]:
         oid = self._id_query(game_id)
