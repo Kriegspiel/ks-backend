@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import Settings, get_settings
 from app.db import close_db, get_db, init_db
 from app.routers.auth import router as auth_router
+from app.routers.game import router as game_router
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 FRONTEND_DIST_PATH = os.path.join(BASE_DIR, "frontend", "dist")
@@ -72,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.include_router(auth_router)
+    app.include_router(game_router)
 
     if os.path.exists(FRONTEND_DIST_PATH):
         assets_path = os.path.join(FRONTEND_DIST_PATH, "assets")
