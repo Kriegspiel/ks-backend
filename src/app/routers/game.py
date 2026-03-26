@@ -8,10 +8,13 @@ from fastapi.responses import JSONResponse
 from app.db import get_db
 from app.dependencies import get_current_user
 from app.models.game import (
+    AskAnyResponse,
     CreateGameRequest,
     CreateGameResponse,
     GameMetadataResponse,
     JoinGameResponse,
+    MoveRequest,
+    MoveResponse,
     OpenGamesResponse,
 )
 from app.models.user import UserModel
@@ -81,6 +84,31 @@ async def join_game(
 ) -> Any:
     try:
         return await game_service.join_game(user_id=user.id, username=user.username, game_code=game_code)
+    except GameServiceError as exc:
+        return _map_game_error(exc)
+
+
+@router.post("/{game_id}/move", response_model=MoveResponse)
+async def move_game(
+    game_id: str,
+    payload: MoveRequest,
+    user: UserModel = Depends(get_current_user),
+    game_service: GameService = Depends(get_game_service),
+) -> Any:
+    try:
+        return await game_service.execute_move(game_id=game_id, user_id=user.id, uci=payload.uci)
+    except GameServiceError as exc:
+        return _map_game_error(exc)
+
+
+@router.post("/{game_id}/ask-any", response_model=AskAnyResponse)
+async def ask_any_game(
+    game_id: str,
+    user: UserModel = Depends(get_current_user),
+    game_service: GameService = Depends(get_game_service),
+) -> Any:
+    try:
+        return await game_service.execute_ask_any(game_id=game_id, user_id=user.id)
     except GameServiceError as exc:
         return _map_game_error(exc)
 

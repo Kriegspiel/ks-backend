@@ -32,6 +32,10 @@ class GameDocument(BaseModel):
     move_number: int = Field(default=1, ge=1)
     created_at: datetime
     updated_at: datetime
+    expires_at: datetime | None = None
+    engine_state: dict[str, Any] | None = None
+    moves: list[dict[str, Any]] = Field(default_factory=list)
+    result: dict[str, Any] | None = None
 
     @classmethod
     def from_mongo(cls, doc: dict[str, Any]) -> "GameDocument":
@@ -69,6 +73,27 @@ class JoinGameResponse(BaseModel):
     rule_variant: RuleVariant
     state: Literal["active"] = "active"
     game_url: str
+
+
+class MoveRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    uci: str = Field(min_length=4, max_length=5)
+
+
+class MoveResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    move_done: bool
+    announcement: str
+    special_announcement: str | None = None
+    capture_square: str | None = None
+    turn: PlayerColor
+    game_over: bool
+
+
+class AskAnyResponse(MoveResponse):
+    has_any: bool
 
 
 class OpenGameItem(BaseModel):

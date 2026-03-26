@@ -17,6 +17,7 @@ from app.models.game import (
     OpenGamesResponse,
 )
 from app.services.code_generator import generate_game_code
+from app.services.engine_adapter import ask_any, attempt_move, create_new_game, deserialize_game_state, serialize_game_state
 
 PlayerColor = Literal["white", "black"]
 
@@ -105,6 +106,30 @@ class GameService:
             }
         )
 
+    @staticmethod
+    def _player_color_for_user(game: dict[str, Any], user_id: str) -> PlayerColor | None:
+        if game.get("white", {}).get("user_id") == user_id:
+            return "white"
+        if game.get("black", {}).get("user_id") == user_id:
+            return "black"
+        return None
+
+    @staticmethod
+    def _final_result_from_special(special_announcement: str | None) -> dict[str, Any] | None:
+        if special_announcement == "CHECKMATE_WHITE_WINS":
+            return {"winner": "white", "reason": "checkmate"}
+        if special_announcement == "CHECKMATE_BLACK_WINS":
+            return {"winner": "black", "reason": "checkmate"}
+        if special_announcement == "DRAW_STALEMATE":
+            return {"winner": None, "reason": "stalemate"}
+        return None
+
+    def _load_or_bootstrap_engine(self, game: dict[str, Any]) -> Any:
+        state = game.get("engine_state")
+        if state:
+            return deserialize_game_state(state)
+        return create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
+
     async def create_game(self, *, user_id: str, username: str, request: CreateGameRequest) -> CreateGameResponse:
         color = self._creator_color(request.play_as, self._rng)
         now = self.utcnow()
@@ -159,6 +184,7 @@ class GameService:
             black = creator
 
         now = self.utcnow()
+        engine = create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
         updated = await self._games.find_one_and_update(
             {"_id": game["_id"], "state": "waiting"},
             {
@@ -167,6 +193,8 @@ class GameService:
                     "black": black,
                     "state": "active",
                     "turn": "white",
+                    "engine_state": serialize_game_state(engine),
+                    "moves": [],
                     "updated_at": now,
                     "expires_at": None,
                 }
@@ -182,7 +210,7 @@ class GameService:
             play_as=joiner_color,
             rule_variant=updated["rule_variant"],
             state="active",
-            game_url=f"{self._site_origin}/game/{updated['_id']}",
+            game_url=f"{self._site_origin}/game/{updated["_id"]}",
         )
 
     async def get_open_games(self, *, limit: int = 20) -> OpenGamesResponse:
@@ -230,6 +258,123 @@ class GameService:
             "created_at": game["created_at"],
         }
         return GameMetadataResponse.model_validate(payload)
+
+    async def execute_move(self, *, game_id: str, user_id: str, uci: str) -> dict[str, Any]:
+        oid = self._id_query(game_id)
+        game = await self._games.find_one({"_id": oid})
+        if game is None:
+            raise GameNotFoundError()
+
+        color = self._player_color_for_user(game, user_id)
+        if color is None:
+            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can mutate this game")
+
+        if game.get("state") != "active":
+            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+
+        if game.get("turn") != color:
+            raise GameValidationError(code="NOT_YOUR_TURN", message="It is not your turn")
+
+        engine = self._load_or_bootstrap_engine(game)
+        outcome = attempt_move(engine, uci)
+        now = self.utcnow()
+        move_record = {
+            "ply": len(game.get("moves", [])) + 1,
+            "color": color,
+            "question_type": "COMMON",
+            "uci": uci,
+            "announcement": outcome["announcement"],
+            "special_announcement": outcome["special_announcement"],
+            "capture_square": outcome["capture_square"],
+            "move_done": outcome["move_done"],
+            "timestamp": now,
+        }
+
+        set_payload: dict[str, Any] = {
+            "engine_state": serialize_game_state(engine),
+            "turn": outcome["turn"],
+            "updated_at": now,
+        }
+        if outcome["game_over"]:
+            set_payload["state"] = "completed"
+            set_payload["result"] = self._final_result_from_special(outcome["special_announcement"])
+
+        updated = await self._games.find_one_and_update(
+            {"_id": oid, "state": "active"},
+            {
+                "$set": set_payload,
+                "$push": {"moves": move_record},
+                "$inc": {"move_number": 1 if outcome["move_done"] else 0},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if updated is None:
+            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+
+        return {
+            "move_done": outcome["move_done"],
+            "announcement": outcome["announcement"],
+            "special_announcement": outcome["special_announcement"],
+            "capture_square": outcome["capture_square"],
+            "turn": outcome["turn"],
+            "game_over": outcome["game_over"],
+        }
+
+    async def execute_ask_any(self, *, game_id: str, user_id: str) -> dict[str, Any]:
+        oid = self._id_query(game_id)
+        game = await self._games.find_one({"_id": oid})
+        if game is None:
+            raise GameNotFoundError()
+
+        color = self._player_color_for_user(game, user_id)
+        if color is None:
+            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can mutate this game")
+
+        if game.get("state") != "active":
+            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+
+        if game.get("turn") != color:
+            raise GameValidationError(code="NOT_YOUR_TURN", message="It is not your turn")
+
+        engine = self._load_or_bootstrap_engine(game)
+        outcome = ask_any(engine)
+        now = self.utcnow()
+        move_record = {
+            "ply": len(game.get("moves", [])) + 1,
+            "color": color,
+            "question_type": "ASK_ANY",
+            "uci": None,
+            "announcement": outcome["announcement"],
+            "special_announcement": outcome["special_announcement"],
+            "capture_square": outcome["capture_square"],
+            "move_done": outcome["move_done"],
+            "timestamp": now,
+        }
+
+        updated = await self._games.find_one_and_update(
+            {"_id": oid, "state": "active"},
+            {
+                "$set": {
+                    "engine_state": serialize_game_state(engine),
+                    "turn": outcome["turn"],
+                    "updated_at": now,
+                },
+                "$push": {"moves": move_record},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if updated is None:
+            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+
+        return {
+            "move_done": outcome["move_done"],
+            "announcement": outcome["announcement"],
+            "special_announcement": outcome["special_announcement"],
+            "capture_square": outcome["capture_square"],
+            "turn": outcome["turn"],
+            "game_over": outcome["game_over"],
+            "has_any": outcome["has_any"],
+        }
 
     async def resign_game(self, *, game_id: str, user_id: str) -> dict[str, Any]:
         oid = self._id_query(game_id)
