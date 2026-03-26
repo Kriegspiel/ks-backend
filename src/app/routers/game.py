@@ -13,10 +13,12 @@ from app.models.game import (
     CreateGameResponse,
     GameMetadataResponse,
     GameStateResponse,
+    GameTranscriptResponse,
     JoinGameResponse,
     MoveRequest,
     MoveResponse,
     OpenGamesResponse,
+    RecentGamesResponse,
 )
 from app.models.user import UserModel
 from app.services.game_service import (
@@ -62,7 +64,7 @@ def _map_game_error(exc: GameServiceError) -> JSONResponse:
 
 def get_game_service() -> GameService:
     db = get_db()
-    return GameService(db.games)
+    return GameService(db.games, archives_collection=db.game_archives)
 
 
 @router.post("/create", response_model=CreateGameResponse, status_code=status.HTTP_201_CREATED)
@@ -145,6 +147,30 @@ async def get_my_games(
     try:
         games = await game_service.get_my_games(user_id=user.id)
         return MyGamesResponse(games=games)
+    except GameServiceError as exc:
+        return _map_game_error(exc)
+
+
+@router.get("/{game_id}/moves", response_model=GameTranscriptResponse)
+async def get_game_transcript(
+    game_id: str,
+    user: UserModel = Depends(get_current_user),
+    game_service: GameService = Depends(get_game_service),
+) -> Any:
+    try:
+        return await game_service.get_game_transcript(game_id=game_id, user_id=user.id)
+    except GameServiceError as exc:
+        return _map_game_error(exc)
+
+
+@router.get("/recent", response_model=RecentGamesResponse)
+async def get_recent_games(
+    limit: int = 10,
+    _: UserModel = Depends(get_current_user),
+    game_service: GameService = Depends(get_game_service),
+) -> Any:
+    try:
+        return await game_service.get_recent_completed_games(limit=limit)
     except GameServiceError as exc:
         return _map_game_error(exc)
 

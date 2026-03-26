@@ -13,9 +13,12 @@ from app.models.game import (
     GameDocument,
     GameMetadataResponse,
     GameStateResponse,
+    GameTranscriptResponse,
     JoinGameResponse,
     OpenGameItem,
     OpenGamesResponse,
+    RecentGameItem,
+    RecentGamesResponse,
 )
 from app.services.clock_service import ClockService
 from app.services.code_generator import generate_game_code
@@ -49,11 +52,87 @@ class GameValidationError(GameServiceError):
 
 
 class GameService:
-    def __init__(self, games_collection: Any, *, site_origin: str = "https://kriegspiel.org", rng: Any | None = None):
+    def __init__(
+        self,
+        games_collection: Any,
+        archives_collection: Any | None = None,
+        *,
+        site_origin: str = "https://kriegspiel.org",
+        rng: Any | None = None,
+    ):
         self._games = games_collection
+        self._archives = archives_collection
         self._site_origin = site_origin.rstrip("/")
         self._rng = rng
         self._clock = ClockService()
+
+    async def get_game_or_archive(self, *, game_id: str) -> dict[str, Any] | None:
+        oid = self._id_query(game_id)
+        game = await self._games.find_one({"_id": oid})
+        if game is not None:
+            return game
+        if self._archives is None:
+            return None
+        return await self._archives.find_one({"_id": oid})
+
+    def _is_participant(self, *, game: dict[str, Any], user_id: str) -> bool:
+        return bool(game.get("white", {}).get("user_id") == user_id or game.get("black", {}).get("user_id") == user_id)
+
+    @staticmethod
+    def _to_transcript_move(move: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "ply": move.get("ply", 1),
+            "color": move.get("color", "white"),
+            "question_type": move.get("question_type", "COMMON"),
+            "uci": move.get("uci"),
+            "answer": {
+                "main": move.get("announcement", ""),
+                "capture_square": move.get("capture_square"),
+                "special": move.get("special_announcement"),
+            },
+            "move_done": bool(move.get("move_done", False)),
+            "timestamp": move.get("timestamp"),
+        }
+
+    async def get_game_transcript(self, *, game_id: str, user_id: str) -> GameTranscriptResponse:
+        game = await self.get_game_or_archive(game_id=game_id)
+        if game is None:
+            raise GameNotFoundError()
+
+        if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
+            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access active game transcript")
+
+        return GameTranscriptResponse.model_validate(
+            {
+                "game_id": str(game["_id"]),
+                "rule_variant": game.get("rule_variant", "berkeley_any"),
+                "moves": [self._to_transcript_move(m) for m in game.get("moves", [])],
+            }
+        )
+
+    async def get_recent_completed_games(self, *, limit: int = 10) -> RecentGamesResponse:
+        bounded = max(1, min(limit, 50))
+        if self._archives is None:
+            return RecentGamesResponse(games=[])
+
+        cursor = self._archives.find({"state": "completed"}).sort("updated_at", -1).limit(bounded)
+        items: list[RecentGameItem] = []
+        async for doc in cursor:
+            black_player = doc.get("black")
+            if not black_player:
+                continue
+            items.append(
+                RecentGameItem(
+                    game_id=str(doc["_id"]),
+                    game_code=doc["game_code"],
+                    rule_variant=doc.get("rule_variant", "berkeley_any"),
+                    white={"username": doc["white"]["username"], "connected": doc["white"].get("connected", True)},
+                    black={"username": black_player["username"], "connected": black_player.get("connected", True)},
+                    result=doc.get("result"),
+                    completed_at=doc.get("updated_at", doc.get("created_at")),
+                )
+            )
+        return RecentGamesResponse(games=items)
 
     @staticmethod
     def utcnow() -> datetime:

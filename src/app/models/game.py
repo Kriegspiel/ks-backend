@@ -147,6 +147,52 @@ class OpenGamesResponse(BaseModel):
     games: list[OpenGameItem]
 
 
+class TranscriptAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    main: str
+    capture_square: str | None = None
+    special: str | None = None
+
+
+class TranscriptMoveItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ply: int = Field(ge=1)
+    color: PlayerColor
+    question_type: str
+    uci: str | None = None
+    answer: TranscriptAnswer
+    move_done: bool
+    timestamp: datetime | None = None
+
+
+class GameTranscriptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+    rule_variant: RuleVariant
+    moves: list[TranscriptMoveItem]
+
+
+class RecentGameItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+    game_code: str = Field(min_length=6, max_length=6, pattern=r"^[2-9A-HJ-KM-NP-Z]{6}$")
+    rule_variant: RuleVariant
+    white: PublicPlayer
+    black: PublicPlayer
+    result: dict[str, Any] | None = None
+    completed_at: datetime
+
+
+class RecentGamesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    games: list[RecentGameItem]
+
+
 class PublicPlayer(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
