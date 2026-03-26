@@ -7,8 +7,18 @@ from app.models.user import UserModel
 from app.services.session_service import SessionService
 
 
+def require_db():
+    try:
+        return get_db()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable",
+        ) from exc
+
+
 async def get_session_service() -> SessionService:
-    db = get_db()
+    db = require_db()
     return SessionService(db.sessions)
 
 
@@ -24,7 +34,7 @@ async def get_current_user(
     if session is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
-    db = get_db()
+    db = require_db()
     user_doc = await db.users.find_one({"_id": session["user_id"]})
     if user_doc is None:
         await session_service.delete_session(session_id)

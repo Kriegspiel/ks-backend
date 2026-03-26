@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
-from app.db import get_db
-from app.dependencies import get_current_user, get_session_service
+from app.dependencies import get_current_user, get_session_service, require_db
 from app.models.auth import LoginRequest, LoginResponse, RegisterRequest, RegisterResponse
 from app.models.user import UserModel
 from app.services.session_service import SessionService
@@ -45,7 +44,7 @@ async def register(
     response: Response,
     session_service: SessionService = Depends(get_session_service),
 ) -> RegisterResponse:
-    db = get_db()
+    db = require_db()
     user_service = UserService(db.users)
 
     try:
@@ -72,7 +71,7 @@ async def login(
     response: Response,
     session_service: SessionService = Depends(get_session_service),
 ) -> LoginResponse:
-    db = get_db()
+    db = require_db()
     user_service = UserService(db.users)
 
     user = await user_service.authenticate(payload.username, payload.password)

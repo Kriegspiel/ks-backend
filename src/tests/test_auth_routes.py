@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -45,7 +46,7 @@ def app_no_db(monkeypatch: pytest.MonkeyPatch):
 
     from app.routers import auth as auth_router_module
 
-    monkeypatch.setattr(auth_router_module, "get_db", lambda: fake_db)
+    monkeypatch.setattr(auth_router_module, "require_db", lambda: fake_db)
     app = create_app(Settings(ENVIRONMENT="testing"))
     return app, fake_users
 
@@ -126,7 +127,7 @@ def test_cookie_secure_flag_in_production(monkeypatch: pytest.MonkeyPatch) -> No
     fake_db = SimpleNamespace(users=fake_users)
     from app.routers import auth as auth_router_module
 
-    monkeypatch.setattr(auth_router_module, "get_db", lambda: fake_db)
+    monkeypatch.setattr(auth_router_module, "require_db", lambda: fake_db)
 
     created_user = UserModel.from_mongo(_user_doc())
 
@@ -154,6 +155,38 @@ def test_cookie_secure_flag_in_production(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert register.status_code == 201
     assert "Secure" in register.headers.get("set-cookie", "")
+
+
+def test_auth_endpoints_return_503_when_db_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+
+    from app.routers import auth as auth_router_module
+
+    session_service = SimpleNamespace(
+        create_session=AsyncMock(return_value="sess123"),
+        delete_session=AsyncMock(),
+    )
+
+    app.dependency_overrides[get_session_service] = lambda: session_service
+    monkeypatch.setattr(
+        auth_router_module,
+        "require_db",
+        lambda: (_ for _ in ()).throw(
+            HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
+        ),
+    )
+
+    with TestClient(app) as client:
+        register = client.post(
+            "/auth/register",
+            json={"username": "PlayerOne", "email": "player@example.com", "password": "abc12345"},
+        )
+        assert register.status_code == 503
+        assert register.json()["detail"] == "Database unavailable"
+
+        login = client.post("/auth/login", json={"username": "playerone", "password": "abc12345"})
+        assert login.status_code == 503
+        assert login.json()["detail"] == "Database unavailable"
 
 
 @pytest.mark.integration
