@@ -24,6 +24,7 @@ class GameDocument(BaseModel):
     id: str | None = Field(default=None, alias="_id")
     game_code: str = Field(min_length=6, max_length=6, pattern=r"^[2-9A-HJ-KM-NP-Z]{6}$")
     rule_variant: RuleVariant = "berkeley_any"
+    creator_color: PlayerColor = "white"
     white: PlayerEmbed
     black: PlayerEmbed | None = None
     state: GameState = "waiting"
