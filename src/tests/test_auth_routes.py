@@ -83,29 +83,29 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
     app.dependency_overrides[get_session_service] = lambda: session_service
     with TestClient(app) as client:
         register = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"username": "PlayerOne", "email": "player@example.com", "password": "abc12345"},
         )
         assert register.status_code == 201
         assert "session_id=sess123" in register.headers.get("set-cookie", "")
 
-        login = client.post("/auth/login", json={"username": "playerone", "password": "abc12345"})
+        login = client.post("/api/auth/login", json={"username": "playerone", "password": "abc12345"})
         assert login.status_code == 200
 
         service.authenticate = AsyncMock(return_value=None)
-        invalid = client.post("/auth/login", json={"username": "playerone", "password": "wrong"})
+        invalid = client.post("/api/auth/login", json={"username": "playerone", "password": "wrong"})
         assert invalid.status_code == 401
 
         service.create_user = AsyncMock(
             side_effect=UserConflictError(field="username", code="USERNAME_TAKEN", message="Username already exists")
         )
         conflict = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"username": "PlayerOne", "email": "other@example.com", "password": "abc12345"},
         )
         assert conflict.status_code == 409
 
-        logout = client.post("/auth/logout")
+        logout = client.post("/api/auth/logout")
         assert logout.status_code == 200
 
 
@@ -114,7 +114,7 @@ def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
     app.dependency_overrides[get_current_user] = lambda: UserModel.from_mongo(_user_doc())
 
     with TestClient(app) as client:
-        me = client.get("/auth/me")
+        me = client.get("/api/auth/me")
 
     assert me.status_code == 200
     body = me.json()
@@ -149,7 +149,7 @@ def test_cookie_secure_flag_in_production(monkeypatch: pytest.MonkeyPatch) -> No
     app.dependency_overrides[get_session_service] = lambda: session_service
     with TestClient(app) as client:
         register = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"username": "PlayerOne", "email": "player@example.com", "password": "abc12345"},
         )
 
@@ -178,13 +178,13 @@ def test_auth_endpoints_return_503_when_db_unavailable(monkeypatch: pytest.Monke
 
     with TestClient(app) as client:
         register = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"username": "PlayerOne", "email": "player@example.com", "password": "abc12345"},
         )
         assert register.status_code == 503
         assert register.json()["detail"] == "Database unavailable"
 
-        login = client.post("/auth/login", json={"username": "playerone", "password": "abc12345"})
+        login = client.post("/api/auth/login", json={"username": "playerone", "password": "abc12345"})
         assert login.status_code == 503
         assert login.json()["detail"] == "Database unavailable"
 
@@ -196,7 +196,7 @@ def test_auth_endpoints_return_503_when_db_unavailable(monkeypatch: pytest.Monke
 )
 @pytest.mark.asyncio
 async def test_register_requires_username_email_password(test_client) -> None:
-    response = await test_client.post("/auth/register", json={"username": "playerone", "password": "abc12345"})
+    response = await test_client.post("/api/auth/register", json={"username": "playerone", "password": "abc12345"})
 
     assert response.status_code == 422
 
@@ -209,22 +209,22 @@ async def test_register_requires_username_email_password(test_client) -> None:
 @pytest.mark.asyncio
 async def test_register_creates_session_cookie_and_me_logout_flow(test_client) -> None:
     register = await test_client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"username": "PlayerOne", "email": "player@example.com", "password": "abc12345"},
     )
 
     assert register.status_code == 201
     assert register.json()["username"] == "playerone"
 
-    me = await test_client.get("/auth/me")
+    me = await test_client.get("/api/auth/me")
     assert me.status_code == 200
     assert me.json()["email"] == "player@example.com"
 
-    logout = await test_client.post("/auth/logout")
+    logout = await test_client.post("/api/auth/logout")
     assert logout.status_code == 200
     assert logout.json() == {"message": "Logged out"}
 
-    me_after = await test_client.get("/auth/me")
+    me_after = await test_client.get("/api/auth/me")
     assert me_after.status_code == 401
 
 
@@ -236,21 +236,21 @@ async def test_register_creates_session_cookie_and_me_logout_flow(test_client) -
 @pytest.mark.asyncio
 async def test_register_conflict_and_login_failure_and_success(test_client) -> None:
     first = await test_client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"username": "PlayerOne", "email": "player@example.com", "password": "abc12345"},
     )
     assert first.status_code == 201
 
     dup = await test_client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"username": "playerone", "email": "other@example.com", "password": "abc12345"},
     )
     assert dup.status_code == 409
 
-    bad_login = await test_client.post("/auth/login", json={"username": "playerone", "password": "wrongpass123"})
+    bad_login = await test_client.post("/api/auth/login", json={"username": "playerone", "password": "wrongpass123"})
     assert bad_login.status_code == 401
 
-    good_login = await test_client.post("/auth/login", json={"username": "PLAYERONE", "password": "abc12345"})
+    good_login = await test_client.post("/api/auth/login", json={"username": "PLAYERONE", "password": "abc12345"})
     assert good_login.status_code == 200
 
 
@@ -262,7 +262,7 @@ async def test_register_conflict_and_login_failure_and_success(test_client) -> N
 @pytest.mark.asyncio
 async def test_me_returns_401_for_expired_session(test_client) -> None:
     register = await test_client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"username": "PlayerTwo", "email": "playertwo@example.com", "password": "abc12345"},
     )
     assert register.status_code == 201
@@ -283,7 +283,7 @@ async def test_me_returns_401_for_expired_session(test_client) -> None:
     )
 
     test_client.cookies.set(SessionService.COOKIE_NAME, expired_id)
-    me = await test_client.get("/auth/me")
+    me = await test_client.get("/api/auth/me")
     assert me.status_code == 401
 
     expired_doc = await db.sessions.find_one({"_id": expired_id})

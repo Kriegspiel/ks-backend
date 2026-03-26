@@ -85,6 +85,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def root():  # pragma: no cover
         return {"message": "Kriegspiel Chess API"}
 
+    @app.get("/api/health")
+    async def api_health(response: Response) -> dict[str, str]:
+        return await health(response)
+
     @app.get("/health")
     async def health(response: Response) -> dict[str, str]:
         disconnected = {"status": "error", "db": "disconnected"}

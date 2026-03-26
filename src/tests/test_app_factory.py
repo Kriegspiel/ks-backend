@@ -79,3 +79,12 @@ def test_cors_does_not_grant_unknown_origin():
         )
 
     assert response.headers.get("access-control-allow-origin") != "http://evil.example"
+
+
+def test_api_health_mirrors_health_endpoint():
+    app = create_app(Settings())
+
+    with TestClient(app) as client:
+        api_response = client.get("/api/health")
+
+    assert api_response.status_code in (200, 503)

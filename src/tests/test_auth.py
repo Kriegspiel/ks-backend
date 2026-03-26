@@ -20,7 +20,7 @@ pytestmark = [
 
 async def _register(client, *, username: str, email: str, password: str = "abc12345"):
     return await client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"username": username, "email": email, "password": password},
     )
 
@@ -37,7 +37,7 @@ async def test_register_success_returns_201_and_sets_session_cookie(test_client)
 @pytest.mark.asyncio
 async def test_register_missing_email_returns_422(test_client) -> None:
     register = await test_client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"username": "PlayerOne", "password": "abc12345"},
     )
 
@@ -47,7 +47,7 @@ async def test_register_missing_email_returns_422(test_client) -> None:
 @pytest.mark.asyncio
 async def test_register_missing_password_returns_422(test_client) -> None:
     register = await test_client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"username": "PlayerOne", "email": "player@example.com"},
     )
 
@@ -77,10 +77,10 @@ async def test_register_duplicate_email_returns_409(test_client) -> None:
 @pytest.mark.asyncio
 async def test_login_success_is_password_based_and_sets_cookie(test_client) -> None:
     await _register(test_client, username="PlayerOne", email="player@example.com", password="abc12345")
-    await test_client.post("/auth/logout")
+    await test_client.post("/api/auth/logout")
 
     login = await test_client.post(
-        "/auth/login",
+        "/api/auth/login",
         json={"username": "PLAYERONE", "password": "abc12345"},
     )
 
@@ -92,10 +92,10 @@ async def test_login_success_is_password_based_and_sets_cookie(test_client) -> N
 @pytest.mark.asyncio
 async def test_login_missing_password_returns_422(test_client) -> None:
     await _register(test_client, username="PlayerOne", email="player@example.com")
-    await test_client.post("/auth/logout")
+    await test_client.post("/api/auth/logout")
 
     login = await test_client.post(
-        "/auth/login",
+        "/api/auth/login",
         json={"username": "playerone"},
     )
 
@@ -105,10 +105,10 @@ async def test_login_missing_password_returns_422(test_client) -> None:
 @pytest.mark.asyncio
 async def test_login_rejects_wrong_password_with_401(test_client) -> None:
     await _register(test_client, username="PlayerOne", email="player@example.com", password="abc12345")
-    await test_client.post("/auth/logout")
+    await test_client.post("/api/auth/logout")
 
     login = await test_client.post(
-        "/auth/login",
+        "/api/auth/login",
         json={"username": "playerone", "password": "wrongpass123"},
     )
 
@@ -117,7 +117,7 @@ async def test_login_rejects_wrong_password_with_401(test_client) -> None:
 
 @pytest.mark.asyncio
 async def test_me_requires_auth_when_no_session_cookie(test_client) -> None:
-    me = await test_client.get("/auth/me")
+    me = await test_client.get("/api/auth/me")
 
     assert me.status_code == 401
 
@@ -125,7 +125,7 @@ async def test_me_requires_auth_when_no_session_cookie(test_client) -> None:
 @pytest.mark.asyncio
 async def test_me_returns_401_for_invalid_session_id(test_client) -> None:
     test_client.cookies.set(SessionService.COOKIE_NAME, "not-a-real-session")
-    me = await test_client.get("/auth/me")
+    me = await test_client.get("/api/auth/me")
 
     assert me.status_code == 401
 
@@ -152,7 +152,7 @@ async def test_me_returns_401_and_cleans_expired_session(test_client) -> None:
     )
 
     test_client.cookies.set(SessionService.COOKIE_NAME, expired_id)
-    me = await test_client.get("/auth/me")
+    me = await test_client.get("/api/auth/me")
 
     assert me.status_code == 401
     assert await db.sessions.find_one({"_id": expired_id}) is None
@@ -163,8 +163,8 @@ async def test_logout_then_me_returns_401(test_client) -> None:
     register = await _register(test_client, username="PlayerOne", email="player@example.com")
     assert register.status_code == 201
 
-    logout = await test_client.post("/auth/logout")
-    me_after = await test_client.get("/auth/me")
+    logout = await test_client.post("/api/auth/logout")
+    me_after = await test_client.get("/api/auth/me")
 
     assert logout.status_code == 200
     assert me_after.status_code == 401
@@ -175,18 +175,18 @@ async def test_register_login_me_logout_end_to_end_contract(test_client) -> None
     register = await _register(test_client, username="PlayerThree", email="playerthree@example.com")
     assert register.status_code == 201
 
-    me = await test_client.get("/auth/me")
+    me = await test_client.get("/api/auth/me")
     assert me.status_code == 200
     assert me.json()["username"] == "playerthree"
 
-    logout = await test_client.post("/auth/logout")
+    logout = await test_client.post("/api/auth/logout")
     assert logout.status_code == 200
 
     login = await test_client.post(
-        "/auth/login",
+        "/api/auth/login",
         json={"username": "playerthree", "password": "abc12345"},
     )
     assert login.status_code == 200
 
-    me_after_relogin = await test_client.get("/auth/me")
+    me_after_relogin = await test_client.get("/api/auth/me")
     assert me_after_relogin.status_code == 200
