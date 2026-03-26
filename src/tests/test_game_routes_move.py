@@ -201,6 +201,7 @@ def app_with_move_service() -> tuple:
                 "capture_square": None,
                 "turn": "black",
                 "game_over": False,
+                "clock": {"white_remaining": 1500.0, "black_remaining": 1500.0, "active_color": "black"},
             }
         ),
         execute_ask_any=AsyncMock(
@@ -212,6 +213,7 @@ def app_with_move_service() -> tuple:
                 "turn": "white",
                 "game_over": False,
                 "has_any": True,
+                "clock": {"white_remaining": 1500.0, "black_remaining": 1500.0, "active_color": "white"},
             }
         ),
     )

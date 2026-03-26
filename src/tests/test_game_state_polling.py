@@ -198,6 +198,7 @@ def app_with_state_service() -> tuple:
                 "referee_log": [{"ply": 1, "announcement": "HAS_ANY", "timestamp": None}],
                 "possible_actions": ["move", "ask_any"],
                 "result": None,
+                "clock": {"white_remaining": 1500.0, "black_remaining": 1500.0, "active_color": "white"},
             }
         )
     )
@@ -290,6 +291,7 @@ def test_router_surface_smoke_covers_other_game_routes(app_with_state_service) -
             "capture_square": None,
             "turn": "black",
             "game_over": False,
+            "clock": {"white_remaining": 1500.0, "black_remaining": 1500.0, "active_color": "black"},
         }
     )
     service.execute_ask_any = AsyncMock(
@@ -301,6 +303,7 @@ def test_router_surface_smoke_covers_other_game_routes(app_with_state_service) -
             "turn": "white",
             "game_over": False,
             "has_any": True,
+            "clock": {"white_remaining": 1500.0, "black_remaining": 1500.0, "active_color": "white"},
         }
     )
     service.get_open_games = AsyncMock(return_value={"games": []})

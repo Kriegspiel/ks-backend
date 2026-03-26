@@ -36,6 +36,7 @@ class GameDocument(BaseModel):
     engine_state: dict[str, Any] | None = None
     moves: list[dict[str, Any]] = Field(default_factory=list)
     result: dict[str, Any] | None = None
+    time_control: dict[str, Any] | None = None
 
     @classmethod
     def from_mongo(cls, doc: dict[str, Any]) -> "GameDocument":
@@ -81,6 +82,14 @@ class MoveRequest(BaseModel):
     uci: str = Field(min_length=4, max_length=5)
 
 
+class ClockState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    white_remaining: float = Field(ge=0)
+    black_remaining: float = Field(ge=0)
+    active_color: PlayerColor | None = None
+
+
 class MoveResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -88,8 +97,9 @@ class MoveResponse(BaseModel):
     announcement: str
     special_announcement: str | None = None
     capture_square: str | None = None
-    turn: PlayerColor
+    turn: PlayerColor | None = None
     game_over: bool
+    clock: ClockState
 
 
 class AskAnyResponse(MoveResponse):
@@ -118,6 +128,7 @@ class GameStateResponse(BaseModel):
     referee_log: list[RefereeLogItem]
     possible_actions: list[Literal["move", "ask_any"]]
     result: dict[str, Any] | None = None
+    clock: ClockState
 
 
 class OpenGameItem(BaseModel):

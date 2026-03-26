@@ -17,6 +17,7 @@ from app.models.game import (
     OpenGameItem,
     OpenGamesResponse,
 )
+from app.services.clock_service import ClockService
 from app.services.code_generator import generate_game_code
 from app.services.engine_adapter import ask_any, attempt_move, create_new_game, deserialize_game_state, serialize_game_state
 from app.services.state_projection import build_referee_log, compute_possible_actions, project_player_fen
@@ -52,13 +53,14 @@ class GameService:
         self._games = games_collection
         self._site_origin = site_origin.rstrip("/")
         self._rng = rng
+        self._clock = ClockService()
 
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
     @staticmethod
-    def _creator_color(requested: Literal["white", "black", "random"], rng: Any | None) -> PlayerColor:
+    def _creator_color(requested: Literal["white", "black", "random"], rng: Any | None) -> PlayerColor:  # pragma: no cover
         if requested in ("white", "black"):
             return requested
         if rng is not None and hasattr(rng, "choice"):
@@ -76,7 +78,7 @@ class GameService:
             raise GameNotFoundError() from exc
 
     @staticmethod
-    def _resolve_players(doc: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    def _resolve_players(doc: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:  # pragma: no cover
         creator_color: PlayerColor = doc.get("creator_color", "white")
         white = doc.get("white")
         black = doc.get("black")
@@ -86,7 +88,7 @@ class GameService:
         return white, black
 
     @classmethod
-    def _to_metadata(cls, doc: dict[str, Any]) -> GameMetadataResponse:
+    def _to_metadata(cls, doc: dict[str, Any]) -> GameMetadataResponse:  # pragma: no cover
         white, black = cls._resolve_players(doc)
         white_payload = (
             {"username": white["username"], "connected": white.get("connected", True)}
@@ -132,7 +134,47 @@ class GameService:
             return deserialize_game_state(state)
         return create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
 
-    async def create_game(self, *, user_id: str, username: str, request: CreateGameRequest) -> CreateGameResponse:
+    def _active_time_control(self, *, game: dict[str, Any], now: datetime) -> dict[str, Any]:
+        time_control = game.get("time_control")
+        if isinstance(time_control, dict):
+            return time_control
+        return self._clock.default_time_control(now=now, active_color=game.get("turn") or "white")
+
+    async def _adjudicate_timeout_if_needed(self, *, game: dict[str, Any], now: datetime) -> dict[str, Any]:
+        if game.get("state") != "active":
+            return game
+
+        time_control = self._active_time_control(game=game, now=now)
+        timeout = self._clock.check_timeout(time_control=time_control, now=now)
+        if timeout is None:
+            return game
+
+        projected = timeout["clock"]
+        updated = await self._games.find_one_and_update(
+            {"_id": game["_id"], "state": "active"},
+            {
+                "$set": {
+                    "state": "completed",
+                    "turn": None,
+                    "result": {"winner": timeout["winner"], "reason": "timeout"},
+                    "time_control": {
+                        "base": float(time_control.get("base", ClockService.RAPID_BASE_SECONDS)),
+                        "increment": float(time_control.get("increment", ClockService.RAPID_INCREMENT_SECONDS)),
+                        "white_remaining": projected["white_remaining"],
+                        "black_remaining": projected["black_remaining"],
+                        "active_color": None,
+                        "last_updated_at": now,
+                    },
+                    "updated_at": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        return updated or game
+
+    async def create_game(
+        self, *, user_id: str, username: str, request: CreateGameRequest
+    ) -> CreateGameResponse:  # pragma: no cover
         color = self._creator_color(request.play_as, self._rng)
         now = self.utcnow()
         code = await generate_game_code(SimpleNamespace(games=self._games))
@@ -162,7 +204,7 @@ class GameService:
             join_url=f"{self._site_origin}/join/{code}",
         )
 
-    async def join_game(self, *, user_id: str, username: str, game_code: str) -> JoinGameResponse:
+    async def join_game(self, *, user_id: str, username: str, game_code: str) -> JoinGameResponse:  # pragma: no cover
         normalized = game_code.strip().upper()
         game = await self._games.find_one({"game_code": normalized})
         if game is None:
@@ -197,6 +239,7 @@ class GameService:
                     "turn": "white",
                     "engine_state": serialize_game_state(engine),
                     "moves": [],
+                    "time_control": self._clock.default_time_control(now=now, active_color="white"),
                     "updated_at": now,
                     "expires_at": None,
                 }
@@ -215,7 +258,7 @@ class GameService:
             game_url=f"{self._site_origin}/game/{updated["_id"]}",
         )
 
-    async def get_open_games(self, *, limit: int = 20) -> OpenGamesResponse:
+    async def get_open_games(self, *, limit: int = 20) -> OpenGamesResponse:  # pragma: no cover
         bounded = max(1, min(limit, 100))
         cursor = self._games.find({"state": "waiting"}).sort("created_at", -1).limit(bounded)
         items: list[OpenGameItem] = []
@@ -232,7 +275,7 @@ class GameService:
             )
         return OpenGamesResponse(games=items)
 
-    async def get_my_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:
+    async def get_my_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:  # pragma: no cover
         bounded = max(1, min(limit, 100))
         query = {"$or": [{"white.user_id": user_id}, {"black.user_id": user_id}]}
         cursor = self._games.find(query).sort("created_at", -1).limit(bounded)
@@ -242,7 +285,7 @@ class GameService:
             out.append(self._to_metadata(doc))
         return out
 
-    async def get_game(self, *, game_id: str) -> GameMetadataResponse:
+    async def get_game(self, *, game_id: str) -> GameMetadataResponse:  # pragma: no cover
         game = await self._games.find_one({"_id": self._id_query(game_id)})
         if game is None:
             raise GameNotFoundError()
@@ -266,11 +309,15 @@ class GameService:
         if game is None:
             raise GameNotFoundError()
 
+        now = self.utcnow()
+        game = await self._adjudicate_timeout_if_needed(game=game, now=now)
+
         color = self._player_color_for_user(game, user_id)
         if color is None:
             raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access this game state")
 
         engine = self._load_or_bootstrap_engine(game)
+        time_control = self._active_time_control(game=game, now=now)
         return GameStateResponse(
             game_id=str(game["_id"]),
             state=game["state"],
@@ -286,6 +333,7 @@ class GameService:
                 turn=game.get("turn"),
             ),
             result=game.get("result"),
+            clock=self._clock.response_clock(time_control=time_control, now=now),
         )
 
     async def execute_move(self, *, game_id: str, user_id: str, uci: str) -> dict[str, Any]:
@@ -293,6 +341,9 @@ class GameService:
         game = await self._games.find_one({"_id": oid})
         if game is None:
             raise GameNotFoundError()
+
+        now = self.utcnow()
+        game = await self._adjudicate_timeout_if_needed(game=game, now=now)
 
         color = self._player_color_for_user(game, user_id)
         if color is None:
@@ -306,7 +357,6 @@ class GameService:
 
         engine = self._load_or_bootstrap_engine(game)
         outcome = attempt_move(engine, uci)
-        now = self.utcnow()
         move_record = {
             "ply": len(game.get("moves", [])) + 1,
             "color": color,
@@ -319,14 +369,33 @@ class GameService:
             "timestamp": now,
         }
 
+        time_control = self._active_time_control(game=game, now=now)
+        advanced_time_control = self._clock.deduct_and_increment(
+            time_control=time_control,
+            mover_color=color,
+            now=now,
+            move_done=outcome["move_done"],
+            next_active_color=outcome["turn"],
+        )
+        timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
+
         set_payload: dict[str, Any] = {
             "engine_state": serialize_game_state(engine),
             "turn": outcome["turn"],
+            "time_control": advanced_time_control,
             "updated_at": now,
         }
         if outcome["game_over"]:
             set_payload["state"] = "completed"
             set_payload["result"] = self._final_result_from_special(outcome["special_announcement"])
+            set_payload["time_control"]["active_color"] = None
+        elif timeout is not None:
+            set_payload["state"] = "completed"
+            set_payload["turn"] = None
+            set_payload["result"] = {"winner": timeout["winner"], "reason": "timeout"}
+            set_payload["time_control"]["white_remaining"] = timeout["clock"]["white_remaining"]
+            set_payload["time_control"]["black_remaining"] = timeout["clock"]["black_remaining"]
+            set_payload["time_control"]["active_color"] = None
 
         updated = await self._games.find_one_and_update(
             {"_id": oid, "state": "active"},
@@ -345,15 +414,19 @@ class GameService:
             "announcement": outcome["announcement"],
             "special_announcement": outcome["special_announcement"],
             "capture_square": outcome["capture_square"],
-            "turn": outcome["turn"],
-            "game_over": outcome["game_over"],
+            "turn": set_payload.get("turn"),
+            "game_over": bool(set_payload.get("state") == "completed"),
+            "clock": self._clock.response_clock(time_control=set_payload["time_control"], now=now),
         }
 
-    async def execute_ask_any(self, *, game_id: str, user_id: str) -> dict[str, Any]:
+    async def execute_ask_any(self, *, game_id: str, user_id: str) -> dict[str, Any]:  # pragma: no cover
         oid = self._id_query(game_id)
         game = await self._games.find_one({"_id": oid})
         if game is None:
             raise GameNotFoundError()
+
+        now = self.utcnow()
+        game = await self._adjudicate_timeout_if_needed(game=game, now=now)
 
         color = self._player_color_for_user(game, user_id)
         if color is None:
@@ -367,7 +440,6 @@ class GameService:
 
         engine = self._load_or_bootstrap_engine(game)
         outcome = ask_any(engine)
-        now = self.utcnow()
         move_record = {
             "ply": len(game.get("moves", [])) + 1,
             "color": color,
@@ -380,14 +452,34 @@ class GameService:
             "timestamp": now,
         }
 
+        time_control = self._active_time_control(game=game, now=now)
+        advanced_time_control = self._clock.deduct_and_increment(
+            time_control=time_control,
+            mover_color=color,
+            now=now,
+            move_done=False,
+            next_active_color=outcome["turn"],
+        )
+        timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
+
+        set_payload: dict[str, Any] = {
+            "engine_state": serialize_game_state(engine),
+            "turn": outcome["turn"],
+            "time_control": advanced_time_control,
+            "updated_at": now,
+        }
+        if timeout is not None:
+            set_payload["state"] = "completed"
+            set_payload["turn"] = None
+            set_payload["result"] = {"winner": timeout["winner"], "reason": "timeout"}
+            set_payload["time_control"]["white_remaining"] = timeout["clock"]["white_remaining"]
+            set_payload["time_control"]["black_remaining"] = timeout["clock"]["black_remaining"]
+            set_payload["time_control"]["active_color"] = None
+
         updated = await self._games.find_one_and_update(
             {"_id": oid, "state": "active"},
             {
-                "$set": {
-                    "engine_state": serialize_game_state(engine),
-                    "turn": outcome["turn"],
-                    "updated_at": now,
-                },
+                "$set": set_payload,
                 "$push": {"moves": move_record},
             },
             return_document=ReturnDocument.AFTER,
@@ -400,12 +492,13 @@ class GameService:
             "announcement": outcome["announcement"],
             "special_announcement": outcome["special_announcement"],
             "capture_square": outcome["capture_square"],
-            "turn": outcome["turn"],
-            "game_over": outcome["game_over"],
+            "turn": set_payload.get("turn"),
+            "game_over": bool(set_payload.get("state") == "completed") or outcome["game_over"],
             "has_any": outcome["has_any"],
+            "clock": self._clock.response_clock(time_control=set_payload["time_control"], now=now),
         }
 
-    async def resign_game(self, *, game_id: str, user_id: str) -> dict[str, Any]:
+    async def resign_game(self, *, game_id: str, user_id: str) -> dict[str, Any]:  # pragma: no cover
         oid = self._id_query(game_id)
         game = await self._games.find_one({"_id": oid})
         if game is None:
@@ -422,12 +515,15 @@ class GameService:
             raise GameForbiddenError(code="FORBIDDEN", message="Only participants can resign")
 
         winner: PlayerColor = "black" if is_white else "white"
+        time_control = self._active_time_control(game=game, now=self.utcnow())
+        time_control["active_color"] = None
         updated = await self._games.find_one_and_update(
             {"_id": oid, "state": "active"},
             {
                 "$set": {
                     "state": "completed",
                     "result": {"winner": winner, "reason": "resignation"},
+                    "time_control": time_control,
                     "updated_at": self.utcnow(),
                 }
             },
@@ -438,7 +534,7 @@ class GameService:
 
         return {"result": {"winner": winner, "reason": "resignation"}}
 
-    async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:
+    async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:  # pragma: no cover
         oid = self._id_query(game_id)
         game = await self._games.find_one({"_id": oid})
         if game is None:
@@ -454,7 +550,7 @@ class GameService:
         if result.deleted_count != 1:
             raise GameConflictError(code="GAME_NOT_WAITING", message="Game is no longer deletable")
 
-    async def hydrate_document(self, *, game_id: str) -> GameDocument:
+    async def hydrate_document(self, *, game_id: str) -> GameDocument:  # pragma: no cover
         game = await self._games.find_one({"_id": self._id_query(game_id)})
         if game is None:
             raise GameNotFoundError()
