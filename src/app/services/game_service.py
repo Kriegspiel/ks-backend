@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from bson import ObjectId
 from pymongo import ReturnDocument
+import structlog
 
 from app.models.game import (
     CreateGameRequest,
@@ -26,6 +27,7 @@ from app.services.engine_adapter import ask_any, attempt_move, create_new_game, 
 from app.services.state_projection import build_referee_log, compute_possible_actions, project_player_fen
 
 PlayerColor = Literal["white", "black"]
+logger = structlog.get_logger("app.game")
 
 
 class GameServiceError(Exception):
@@ -274,6 +276,13 @@ class GameService:
         }
 
         result = await self._games.insert_one(document)
+        logger.info(
+            "game_created",
+            game_id=str(result.inserted_id),
+            user_id=user_id,
+            side=color,
+            rule_variant=request.rule_variant,
+        )
         return CreateGameResponse(
             game_id=str(result.inserted_id),
             game_code=code,
@@ -328,6 +337,7 @@ class GameService:
         if updated is None:
             raise GameConflictError(code="GAME_FULL", message="Game is no longer joinable")
 
+        logger.info("game_joined", game_id=str(updated["_id"]), user_id=user_id, side=joiner_color, game_code=normalized)
         return JoinGameResponse(
             game_id=str(updated["_id"]),
             game_code=updated["game_code"],
@@ -488,6 +498,15 @@ class GameService:
         if updated is None:
             raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
 
+        logger.info(
+            "move_submitted",
+            game_id=game_id,
+            user_id=user_id,
+            side=color,
+            question_type="COMMON",
+            move_done=outcome["move_done"],
+            game_over=bool(set_payload.get("state") == "completed"),
+        )
         return {
             "move_done": outcome["move_done"],
             "announcement": outcome["announcement"],
@@ -566,6 +585,15 @@ class GameService:
         if updated is None:
             raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
 
+        logger.info(
+            "move_submitted",
+            game_id=game_id,
+            user_id=user_id,
+            side=color,
+            question_type="COMMON",
+            move_done=outcome["move_done"],
+            game_over=bool(set_payload.get("state") == "completed"),
+        )
         return {
             "move_done": outcome["move_done"],
             "announcement": outcome["announcement"],
@@ -611,6 +639,7 @@ class GameService:
         if updated is None:
             raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
 
+        logger.info("game_resigned", game_id=game_id, user_id=user_id, winner=winner)
         return {"result": {"winner": winner, "reason": "resignation"}}
 
     async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:  # pragma: no cover

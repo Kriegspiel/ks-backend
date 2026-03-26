@@ -6,14 +6,17 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import structlog
 
 from app.config import Settings, get_settings
 from app.db import close_db, get_db, init_db
+from app.logging_config import configure_logging
 from app.routers.auth import router as auth_router
 from app.routers.game import router as game_router
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 FRONTEND_DIST_PATH = os.path.join(BASE_DIR, "frontend", "dist")
+logger = structlog.get_logger("app.main")
 
 
 def build_cors_origins(settings: Settings) -> list[str]:
@@ -37,7 +40,9 @@ async def lifespan(app: FastAPI):
         db = await init_db(app.state.settings)
         app.state.db = db
         app.state.db_ready = True
-    except Exception:
+        logger.info("db_init_success")
+    except Exception as exc:
+        logger.warning("db_init_failed", error_type=type(exc).__name__)
         app.state.db = None
         app.state.db_ready = False
 
@@ -61,8 +66,10 @@ async def lifespan(app: FastAPI):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings if settings is not None else get_settings()
+    configure_logging(resolved_settings.ENVIRONMENT)
     app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess", lifespan=lifespan)
     app.state.settings = resolved_settings
+    logger.info("app_bootstrap", environment=resolved_settings.ENVIRONMENT)
 
     app.add_middleware(
         CORSMiddleware,
