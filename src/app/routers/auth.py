@@ -132,3 +132,19 @@ async def me(user: UserModel = Depends(get_current_user)) -> dict[str, object]:
         "stats": user.stats.model_dump(),
         "settings": user.settings.model_dump(),
     }
+
+
+@router.get("/session")
+async def session_status(
+    request: Request,
+    response: Response,
+    user: UserModel = Depends(get_current_user),
+) -> dict[str, object]:
+    session_id = request.cookies.get(SessionService.COOKIE_NAME)
+    if session_id:
+        _set_session_cookie(request, response, session_id)
+    return {
+        "authenticated": True,
+        "user_id": user.id,
+        "username": user.username,
+    }
