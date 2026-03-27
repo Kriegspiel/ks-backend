@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+import os
+import random
 from urllib.parse import urlparse
 
 import pytest
@@ -39,6 +41,13 @@ async def test_client(test_app):
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client
+
+
+@pytest.fixture(autouse=True)
+def deterministic_test_seed():
+    seed = int(os.environ.get("TEST_RANDOM_SEED", "800"))
+    random.seed(seed)
+    return seed
 
 
 def _database_name(mongo_uri: str) -> str:
