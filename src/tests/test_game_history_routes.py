@@ -139,6 +139,8 @@ async def test_get_game_transcript_access_matrix_and_archive_fallback(game_docs)
 
     participant = await service.get_game_transcript(game_id=str(active["_id"]), user_id="u1")
     assert participant.moves[0].answer.main == "REGULAR_MOVE"
+    assert participant.moves[0].replay_fen is not None
+    assert participant.moves[0].replay_fen.full.startswith("rnbqkbnr")
 
     with pytest.raises(GameForbiddenError) as forbidden:
         await service.get_game_transcript(game_id=str(active["_id"]), user_id="u3")
@@ -176,6 +178,11 @@ def app_with_history_service() -> tuple:
                         "answer": {"main": "REGULAR_MOVE", "capture_square": None, "special": None},
                         "move_done": True,
                         "timestamp": None,
+                        "replay_fen": {
+                            "full": "8/8/8/8/8/8/8/8 w - - 0 1",
+                            "white": "8/8/8/8/8/8/8/8 w - - 0 1",
+                            "black": "8/8/8/8/8/8/8/8 w - - 0 1",
+                        },
                     }
                 ],
             }

@@ -114,6 +114,7 @@ class RefereeLogItem(BaseModel):
     special_announcement: str | None = None
     capture_square: str | None = None
     timestamp: datetime | None = None
+    replay_fen: ReplayFen | None = None
 
 
 class GameStateResponse(BaseModel):
@@ -155,6 +156,14 @@ class TranscriptAnswer(BaseModel):
     special: str | None = None
 
 
+class ReplayFen(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    full: str
+    white: str
+    black: str
+
+
 class TranscriptMoveItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -165,6 +174,7 @@ class TranscriptMoveItem(BaseModel):
     answer: TranscriptAnswer
     move_done: bool
     timestamp: datetime | None = None
+    replay_fen: ReplayFen | None = None
 
 
 class GameTranscriptResponse(BaseModel):

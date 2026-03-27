@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, Literal
 
 from bson import ObjectId
+import chess
 from pymongo import ReturnDocument
 import structlog
 
@@ -81,7 +82,48 @@ class GameService:
         return bool(game.get("white", {}).get("user_id") == user_id or game.get("black", {}).get("user_id") == user_id)
 
     @staticmethod
-    def _to_transcript_move(move: dict[str, Any]) -> dict[str, Any]:
+    def _visible_board_fen_from_board(board: chess.Board, viewer: PlayerColor) -> str:
+        projected = board.copy(stack=False)
+        viewer_color = chess.WHITE if viewer == "white" else chess.BLACK
+        for square in chess.SQUARES:
+            piece = projected.piece_at(square)
+            if piece is not None and piece.color != viewer_color:
+                projected.remove_piece_at(square)
+        turn = "w" if board.turn == chess.WHITE else "b"
+        return f"{projected.board_fen()} {turn} - - 0 1"
+
+    @classmethod
+    def _build_replay_fens(cls, moves: list[dict[str, Any]]) -> list[dict[str, str]]:
+        board = chess.Board()
+        replay: list[dict[str, str]] = []
+        for move in moves:
+            if move.get("question_type") == "COMMON" and move.get("move_done") and move.get("uci"):
+                try:
+                    board.push(chess.Move.from_uci(move["uci"]))
+                except ValueError:
+                    pass
+            replay.append(
+                {
+                    "full": board.fen(),
+                    "white": cls._visible_board_fen_from_board(board, "white"),
+                    "black": cls._visible_board_fen_from_board(board, "black"),
+                }
+            )
+        return replay
+
+    @staticmethod
+    def _outcome_replay_fen(outcome: dict[str, Any]) -> dict[str, str] | None:
+        full = outcome.get("full_fen")
+        white = outcome.get("white_fen")
+        black = outcome.get("black_fen")
+        if not full or not white or not black:
+            return None
+        return {"full": full, "white": white, "black": black}
+
+    @classmethod
+    def _to_transcript_move(cls, move: dict[str, Any], *, replay_fen: dict[str, str] | None = None) -> dict[str, Any]:
+        stored_replay = move.get("replay_fen")
+        replay_payload = stored_replay or replay_fen
         return {
             "ply": move.get("ply", 1),
             "color": move.get("color", "white"),
@@ -94,6 +136,7 @@ class GameService:
             },
             "move_done": bool(move.get("move_done", False)),
             "timestamp": move.get("timestamp"),
+            "replay_fen": replay_payload,
         }
 
     async def get_game_transcript(self, *, game_id: str, user_id: str) -> GameTranscriptResponse:
@@ -104,11 +147,16 @@ class GameService:
         if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
             raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access active game transcript")
 
+        raw_moves = game.get("moves", [])
+        replay_fens = self._build_replay_fens(raw_moves)
+
         return GameTranscriptResponse.model_validate(
             {
                 "game_id": str(game["_id"]),
                 "rule_variant": game.get("rule_variant", "berkeley_any"),
-                "moves": [self._to_transcript_move(m) for m in game.get("moves", [])],
+                "moves": [
+                    self._to_transcript_move(move, replay_fen=replay_fens[index]) for index, move in enumerate(raw_moves)
+                ],
             }
         )
 
@@ -456,6 +504,7 @@ class GameService:
             "capture_square": outcome["capture_square"],
             "move_done": outcome["move_done"],
             "timestamp": now,
+            "replay_fen": self._outcome_replay_fen(outcome),
         }
 
         time_control = self._active_time_control(game=game, now=now)
@@ -548,6 +597,7 @@ class GameService:
             "capture_square": outcome["capture_square"],
             "move_done": outcome["move_done"],
             "timestamp": now,
+            "replay_fen": self._outcome_replay_fen(outcome),
         }
 
         time_control = self._active_time_control(game=game, now=now)
