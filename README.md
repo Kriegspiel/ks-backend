@@ -4,14 +4,14 @@
 
 - `src/app`: active FastAPI application and API wiring.
 - `src/tests`: active pytest suite (configured by `backend/pyproject.toml`).
-- `models.py` and `kriegspiel_wrapper.py`: legacy gameplay/storage adapters still used by `src/app/main.py`.
+- `scripts`: ad hoc backend validation helpers.
 
-## 2025 File Audit
+## Legacy cleanup
 
-As part of issue #6, we removed files that were no longer referenced by the runtime or test configuration:
+Issue #12 removed the last unused pre-2026 backend leftovers:
 
-- `backend/main.py`
-- `backend/test_main.py`
-- `backend/test_database.py`
+- deleted `backend/models.py`
+- deleted `backend/kriegspiel_wrapper.py`
+- removed the unused legacy `/games` routes and SQLite bootstrap from `src/app/main.py`
 
-These files were superseded by the `src/app` and `src/tests` structure.
+The supported backend runtime now lives entirely under `backend/src/app` and `backend/src/tests`.
