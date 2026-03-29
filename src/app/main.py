@@ -1,9 +1,7 @@
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 import structlog
 
 from app.config import Settings, get_settings
@@ -13,13 +11,11 @@ from app.routers.auth import router as auth_router
 from app.routers.game import router as game_router
 from app.routers.user import router as user_router
 
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-FRONTEND_DIST_PATH = os.path.join(BASE_DIR, "frontend", "dist")
 logger = structlog.get_logger("app.main")
 
 
 def build_cors_origins(settings: Settings) -> list[str]:
-    origins = [settings.SITE_ORIGIN, "http://localhost:5173", "http://localhost:3000"]
+    origins = [settings.SITE_ORIGIN, "https://app.kriegspiel.org", "http://localhost:5173", "http://localhost:3000"]
     if settings.ENVIRONMENT == "development":
         origins.append("http://localhost:8000")
 
@@ -69,12 +65,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(game_router)
     app.include_router(user_router)
-
-    if os.path.exists(FRONTEND_DIST_PATH):
-        assets_path = os.path.join(FRONTEND_DIST_PATH, "assets")
-        if os.path.exists(assets_path):
-            app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
-        app.mount("/app", StaticFiles(directory=FRONTEND_DIST_PATH, html=True), name="frontend")
 
     @app.get("/")
     async def root():  # pragma: no cover
