@@ -34,6 +34,8 @@ jobs:
             src/app/requirements.txt
             src/app/requirements-dev.txt
       - name: Install backend dependencies
-        run: pip install -r src/app/requirements-dev.txt
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r src/app/requirements-dev.txt
       - name: Backend tests
         run: ./scripts/regression/backend-regression.sh
