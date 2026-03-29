@@ -392,7 +392,7 @@ class GameService:
             play_as=joiner_color,
             rule_variant=updated["rule_variant"],
             state="active",
-            game_url=f"{self._site_origin}/game/{updated["_id"]}",
+            game_url=f"{self._site_origin}/game/{updated['_id']}",
         )
 
     async def get_open_games(self, *, limit: int = 20) -> OpenGamesResponse:  # pragma: no cover
