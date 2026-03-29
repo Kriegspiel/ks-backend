@@ -1,17 +1,17 @@
-# Backend
+# ks-backend
 
-## Layout
+Backend repository for api.kriegspiel.org and the /api surface behind app.kriegspiel.org.
 
-- `src/app`: active FastAPI application and API wiring.
-- `src/tests`: active pytest suite (configured by `backend/pyproject.toml`).
-- `scripts`: ad hoc backend validation helpers.
+Scope:
+- FastAPI application under src/app
+- Backend tests under src/tests
+- Backend utilities under scripts/
 
-## Legacy cleanup
+Local development:
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r src/app/requirements-dev.txt
+uvicorn app.main:app --app-dir src --reload --port 8000
 
-Issue #12 removed the last unused pre-2026 backend leftovers:
-
-- deleted `backend/models.py`
-- deleted `backend/kriegspiel_wrapper.py`
-- removed the unused legacy `/games` routes and SQLite bootstrap from `src/app/main.py`
-
-The supported backend runtime now lives entirely under `backend/src/app` and `backend/src/tests`.
+Test:
+./scripts/regression/backend-regression.sh
