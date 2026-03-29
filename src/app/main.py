@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import RedirectResponse
 import structlog
 
 from app.config import Settings, get_settings
@@ -50,7 +52,7 @@ async def lifespan(app: FastAPI):
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings if settings is not None else get_settings()
     configure_logging(resolved_settings.ENVIRONMENT)
-    app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess", lifespan=lifespan)
+    app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.settings = resolved_settings
     logger.info("app_bootstrap", environment=resolved_settings.ENVIRONMENT)
 
@@ -66,9 +68,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(game_router)
     app.include_router(user_router)
 
+    shared_favicon_url = "https://kriegspiel.org/favicon-32x32.png"
+
     @app.get("/")
     async def root():  # pragma: no cover
         return {"message": "Kriegspiel Chess API"}
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():  # pragma: no cover
+        return RedirectResponse(url="https://kriegspiel.org/favicon.ico", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    @app.get("/docs", include_in_schema=False)
+    async def overridden_swagger(req: Request):  # pragma: no cover
+        root_path = req.scope.get("root_path", "").rstrip("/")
+        openapi_url = f"{root_path}{app.openapi_url}" if root_path else app.openapi_url
+        oauth2_redirect_url = app.swagger_ui_oauth2_redirect_url
+        if oauth2_redirect_url and root_path:
+            oauth2_redirect_url = f"{root_path}{oauth2_redirect_url}"
+        return get_swagger_ui_html(
+            openapi_url=openapi_url,
+            title=f"{app.title} - Swagger UI",
+            oauth2_redirect_url=oauth2_redirect_url,
+            init_oauth=app.swagger_ui_init_oauth,
+            swagger_ui_parameters=app.swagger_ui_parameters,
+            swagger_favicon_url=shared_favicon_url,
+        )
+
+    @app.get("/redoc", include_in_schema=False)
+    async def overridden_redoc(req: Request):  # pragma: no cover
+        root_path = req.scope.get("root_path", "").rstrip("/")
+        openapi_url = f"{root_path}{app.openapi_url}" if root_path else app.openapi_url
+        return get_redoc_html(
+            openapi_url=openapi_url,
+            title=f"{app.title} - ReDoc",
+            redoc_favicon_url=shared_favicon_url,
+        )
 
     @app.get("/api/health")
     async def api_health(response: Response) -> dict[str, str]:
