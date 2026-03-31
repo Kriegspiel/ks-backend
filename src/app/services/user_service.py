@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import secrets
 from typing import Any
 
 import bcrypt
@@ -8,7 +9,7 @@ from bson import ObjectId
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from app.models.auth import RegisterRequest
+from app.models.auth import BotRegisterRequest, RegisterRequest
 from app.models.user import UserModel, utcnow
 
 
@@ -38,6 +39,23 @@ class UserService:
     @staticmethod
     def verify_password(plain_password: str, password_hash: str) -> bool:
         return bcrypt.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
+
+    @staticmethod
+    def issue_bot_token() -> tuple[str, str, str]:
+        token_id = secrets.token_hex(8)
+        token_secret = secrets.token_urlsafe(24)
+        token = f"ksbot_{token_id}.{token_secret}"
+        token_hash = UserService.hash_password(token_secret)
+        return token_id, token_secret, token_hash
+
+    @staticmethod
+    def parse_bot_token(token: str) -> tuple[str, str] | None:
+        if not token.startswith("ksbot_") or "." not in token:
+            return None
+        token_id, token_secret = token[len("ksbot_") :].split(".", 1)
+        if not token_id or not token_secret:
+            return None
+        return token_id, token_secret
 
     @staticmethod
     def _safe_datetime(value: Any) -> datetime:
@@ -79,6 +97,7 @@ class UserService:
             "password_hash": self.hash_password(registration.password),
             "auth_providers": ["local"],
             "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": None,
             "stats": {
                 "games_played": 0,
                 "games_won": 0,
@@ -111,6 +130,61 @@ class UserService:
         payload["_id"] = result.inserted_id
         return UserModel.from_mongo(payload)
 
+    async def create_bot(self, registration: BotRegisterRequest) -> tuple[UserModel, str]:
+        username = self.canonical_username(registration.username)
+        existing = await self._users.find_one({"username": username})
+        if existing:
+            raise UserConflictError(field="username", code="USERNAME_TAKEN", message="Username already exists")
+
+        now = utcnow()
+        token_id, token_secret, token_hash = self.issue_bot_token()
+        token = f"ksbot_{token_id}.{token_secret}"
+        payload = {
+            "username": username,
+            "username_display": registration.display_name.strip(),
+            "email": f"{username}@bots.kriegspiel.local",
+            "email_verified": True,
+            "email_verification_sent_at": None,
+            "email_verified_at": now,
+            "password_hash": self.hash_password(secrets.token_urlsafe(24)),
+            "auth_providers": ["bot_token"],
+            "profile": {"bio": registration.description.strip(), "avatar_url": None, "country": None},
+            "bot_profile": {
+                "display_name": registration.display_name.strip(),
+                "description": registration.description.strip(),
+                "api_token_id": token_id,
+                "api_token_hash": token_hash,
+                "registered_at": now,
+            },
+            "stats": {
+                "games_played": 0,
+                "games_won": 0,
+                "games_lost": 0,
+                "games_drawn": 0,
+                "elo": 1200,
+                "elo_peak": 1200,
+            },
+            "settings": {
+                "board_theme": "default",
+                "piece_set": "cburnett",
+                "sound_enabled": False,
+                "auto_ask_any": False,
+            },
+            "role": "bot",
+            "status": "active",
+            "last_active_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        try:
+            result = await self._users.insert_one(payload)
+        except DuplicateKeyError as exc:
+            raise UserConflictError(field="username", code="USERNAME_TAKEN", message="Username already exists") from exc
+
+        payload["_id"] = result.inserted_id
+        return UserModel.from_mongo(payload), token
+
     async def authenticate(self, username: str, password: str) -> UserModel | None:
         canonical_username = self.canonical_username(username)
         user = await self._users.find_one({"username": canonical_username})
@@ -120,6 +194,19 @@ class UserService:
         if not self.verify_password(password, user["password_hash"]):
             return None
 
+        return UserModel.from_mongo(user)
+
+    async def authenticate_bot_token(self, token: str) -> UserModel | None:
+        parsed = self.parse_bot_token(token)
+        if parsed is None:
+            return None
+        token_id, token_secret = parsed
+        user = await self._users.find_one({"role": "bot", "bot_profile.api_token_id": token_id, "status": "active"})
+        if user is None:
+            return None
+        token_hash = user.get("bot_profile", {}).get("api_token_hash")
+        if not token_hash or not self.verify_password(token_secret, token_hash):
+            return None
         return UserModel.from_mongo(user)
 
     async def get_public_profile(self, db: Any, username: str) -> dict[str, Any] | None:
@@ -186,7 +273,7 @@ class UserService:
         bounded_per_page = min(max(per_page, 1), 100)
         offset = (bounded_page - 1) * bounded_per_page
 
-        query = {"status": "active", "stats.games_played": {"$gte": 5}}
+        query = {"status": "active", "stats.games_played": {"$gte": 5}, "role": {"$ne": "bot"}}
         total = await db.users.count_documents(query)
         cursor = db.users.find(query).sort([("stats.elo", -1), ("username", 1)]).skip(offset).limit(bounded_per_page)
 

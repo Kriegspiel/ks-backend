@@ -48,3 +48,19 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     user_id: str
     username: str
+
+
+class BotRegisterRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    username: str = Field(min_length=3, max_length=20, pattern=_USERNAME_PATTERN)
+    display_name: str = Field(min_length=3, max_length=40)
+    description: str = Field(default="", max_length=280)
+
+
+class BotRegisterResponse(BaseModel):
+    bot_id: str
+    username: str
+    display_name: str
+    api_token: str
+    message: str = "Bot registered. Save this token now; it will not be shown again."

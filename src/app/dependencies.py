@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, Request, status
 from app.db import get_db
 from app.models.user import UserModel
 from app.services.session_service import SessionService
+from app.services.user_service import UserService
 
 
 def require_db():
@@ -22,10 +23,28 @@ async def get_session_service() -> SessionService:
     return SessionService(db.sessions)
 
 
+def _bearer_token(request: Request) -> str | None:
+    header = request.headers.get("authorization")
+    if not header:
+        return None
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token.strip()
+
+
 async def get_current_user(
     request: Request,
     session_service: SessionService = Depends(get_session_service),
 ) -> UserModel:
+    token = _bearer_token(request)
+    if token:
+        db = require_db()
+        user_service = UserService(db.users)
+        bot_user = await user_service.authenticate_bot_token(token)
+        if bot_user is not None:
+            return bot_user
+
     session_id = request.cookies.get(SessionService.COOKIE_NAME)
     if not session_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")

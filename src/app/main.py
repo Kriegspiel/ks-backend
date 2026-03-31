@@ -10,6 +10,7 @@ from app.config import Settings, get_settings
 from app.db import close_db, get_db, init_db
 from app.logging_config import configure_logging
 from app.routers.auth import router as auth_router
+from app.routers.bot import router as bot_router
 from app.routers.game import router as game_router
 from app.routers.user import router as user_router
 
@@ -65,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.include_router(auth_router)
+    app.include_router(bot_router)
     app.include_router(game_router)
     app.include_router(user_router)
 

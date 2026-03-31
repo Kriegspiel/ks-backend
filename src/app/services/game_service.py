@@ -58,12 +58,14 @@ class GameService:
     def __init__(
         self,
         games_collection: Any,
+        users_collection: Any | None = None,
         archives_collection: Any | None = None,
         *,
         site_origin: str = "https://kriegspiel.org",
         rng: Any | None = None,
     ):
         self._games = games_collection
+        self._users = users_collection
         self._archives = archives_collection
         self._site_origin = site_origin.rstrip("/")
         self._rng = rng
@@ -139,27 +141,6 @@ class GameService:
             "replay_fen": replay_payload,
         }
 
-    async def get_game_transcript(self, *, game_id: str, user_id: str) -> GameTranscriptResponse:
-        game = await self.get_game_or_archive(game_id=game_id)
-        if game is None:
-            raise GameNotFoundError()
-
-        if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
-            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access active game transcript")
-
-        raw_moves = game.get("moves", [])
-        replay_fens = self._build_replay_fens(raw_moves)
-
-        return GameTranscriptResponse.model_validate(
-            {
-                "game_id": str(game["_id"]),
-                "rule_variant": game.get("rule_variant", "berkeley_any"),
-                "moves": [
-                    self._to_transcript_move(move, replay_fen=replay_fens[index]) for index, move in enumerate(raw_moves)
-                ],
-            }
-        )
-
     async def get_recent_completed_games(self, *, limit: int = 10) -> RecentGamesResponse:
         bounded = max(1, min(limit, 50))
         if self._archives is None:
@@ -176,8 +157,16 @@ class GameService:
                     game_id=str(doc["_id"]),
                     game_code=doc["game_code"],
                     rule_variant=doc.get("rule_variant", "berkeley_any"),
-                    white={"username": doc["white"]["username"], "connected": doc["white"].get("connected", True)},
-                    black={"username": black_player["username"], "connected": black_player.get("connected", True)},
+                    white={
+                        "username": doc["white"]["username"],
+                        "connected": doc["white"].get("connected", True),
+                        "role": doc["white"].get("role", "user"),
+                    },
+                    black={
+                        "username": black_player["username"],
+                        "connected": black_player.get("connected", True),
+                        "role": black_player.get("role", "user"),
+                    },
                     result=doc.get("result"),
                     completed_at=doc.get("updated_at", doc.get("created_at")),
                 )
@@ -189,7 +178,7 @@ class GameService:
         return datetime.now(UTC)
 
     @staticmethod
-    def _creator_color(requested: Literal["white", "black", "random"], rng: Any | None) -> PlayerColor:  # pragma: no cover
+    def _creator_color(requested: Literal["white", "black", "random"], rng: Any | None) -> PlayerColor:
         if requested in ("white", "black"):
             return requested
         if rng is not None and hasattr(rng, "choice"):
@@ -207,7 +196,7 @@ class GameService:
             raise GameNotFoundError() from exc
 
     @staticmethod
-    def _resolve_players(doc: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:  # pragma: no cover
+    def _resolve_players(doc: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         creator_color: PlayerColor = doc.get("creator_color", "white")
         white = doc.get("white")
         black = doc.get("black")
@@ -217,20 +206,27 @@ class GameService:
         return white, black
 
     @classmethod
-    def _to_metadata(cls, doc: dict[str, Any]) -> GameMetadataResponse:  # pragma: no cover
+    def _public_player(cls, player: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not player:
+            return None
+        return {
+            "username": player["username"],
+            "connected": player.get("connected", True),
+            "role": player.get("role", "user"),
+        }
+
+    @classmethod
+    def _to_metadata(cls, doc: dict[str, Any]) -> GameMetadataResponse:
         white, black = cls._resolve_players(doc)
-        white_payload = (
-            {"username": white["username"], "connected": white.get("connected", True)}
-            if white
-            else {"username": "", "connected": False}
-        )
-        black_payload = {"username": black["username"], "connected": black.get("connected", True)} if black else None
+        white_payload = cls._public_player(white) or {"username": "", "connected": False, "role": "user"}
+        black_payload = cls._public_player(black)
         return GameMetadataResponse.model_validate(
             {
                 "game_id": str(doc["_id"]),
                 "game_code": doc["game_code"],
                 "rule_variant": doc["rule_variant"],
                 "state": doc["state"],
+                "opponent_type": doc.get("opponent_type", "human"),
                 "white": white_payload,
                 "black": black_payload,
                 "turn": doc.get("turn"),
@@ -301,18 +297,39 @@ class GameService:
         )
         return updated or game
 
+    async def _load_bot(self, bot_id: str) -> dict[str, Any]:
+        if self._users is None:
+            raise GameValidationError(code="BOT_UNAVAILABLE", message="Bot support is unavailable")
+        try:
+            oid = ObjectId(bot_id)
+        except Exception as exc:
+            raise GameValidationError(code="BOT_NOT_FOUND", message="Selected bot was not found") from exc
+        bot = await self._users.find_one({"_id": oid, "role": "bot", "status": "active"})
+        if bot is None:
+            raise GameValidationError(code="BOT_NOT_FOUND", message="Selected bot was not found")
+        return bot
+
+    @staticmethod
+    def _player_embed(*, user_id: str, username: str, role: str = "user") -> dict[str, Any]:
+        return {"user_id": user_id, "username": username, "connected": True, "role": role}
+
     async def create_game(
-        self, *, user_id: str, username: str, request: CreateGameRequest
-    ) -> CreateGameResponse:  # pragma: no cover
+        self, *, user_id: str, username: str, request: CreateGameRequest, role: str = "user"
+    ) -> CreateGameResponse:
+        if role == "bot":
+            raise GameForbiddenError(code="FORBIDDEN", message="Bots cannot create new games")
+
         color = self._creator_color(request.play_as, self._rng)
         now = self.utcnow()
         code = await generate_game_code(SimpleNamespace(games=self._games))
 
-        creator = {"user_id": user_id, "username": username, "connected": True}
-        document = {
+        creator = self._player_embed(user_id=user_id, username=username, role=role)
+        document: dict[str, Any] = {
             "game_code": code,
             "rule_variant": request.rule_variant,
             "creator_color": color,
+            "opponent_type": request.opponent_type,
+            "selected_bot_id": request.bot_id,
             "white": creator,
             "black": None,
             "state": "waiting",
@@ -323,6 +340,34 @@ class GameService:
             "expires_at": now,
         }
 
+        bot_payload: dict[str, str] | None = None
+        state: Literal["waiting", "active"] = "waiting"
+        game_url: str | None = None
+
+        if request.opponent_type == "bot":
+            bot = await self._load_bot(request.bot_id or "")
+            joiner_color: PlayerColor = "black" if color == "white" else "white"
+            bot_player = self._player_embed(user_id=str(bot["_id"]), username=bot["username"], role="bot")
+            if color == "white":
+                document["white"] = creator
+                document["black"] = bot_player
+            else:
+                document["white"] = bot_player
+                document["black"] = creator
+            engine = create_new_game(any_rule=request.rule_variant == "berkeley_any")
+            document.update(
+                {
+                    "state": "active",
+                    "turn": "white",
+                    "engine_state": serialize_game_state(engine),
+                    "moves": [],
+                    "time_control": self._clock.default_time_control(now=now, active_color="white"),
+                    "expires_at": None,
+                }
+            )
+            state = "active"
+            bot_payload = {"bot_id": str(bot["_id"]), "username": bot["username"]}
+
         result = await self._games.insert_one(document)
         logger.info(
             "game_created",
@@ -330,17 +375,23 @@ class GameService:
             user_id=user_id,
             side=color,
             rule_variant=request.rule_variant,
+            opponent_type=request.opponent_type,
         )
+        if state == "active":
+            game_url = f"{self._site_origin}/game/{result.inserted_id}"
         return CreateGameResponse(
             game_id=str(result.inserted_id),
             game_code=code,
             play_as=color,
             rule_variant=request.rule_variant,
-            state="waiting",
+            state=state,
             join_url=f"{self._site_origin}/join/{code}",
+            game_url=game_url,
+            opponent_type=request.opponent_type,
+            bot=bot_payload,
         )
 
-    async def join_game(self, *, user_id: str, username: str, game_code: str) -> JoinGameResponse:  # pragma: no cover
+    async def join_game(self, *, user_id: str, username: str, game_code: str, role: str = "user") -> JoinGameResponse:
         normalized = game_code.strip().upper()
         game = await self._games.find_one({"game_code": normalized})
         if game is None:
@@ -350,17 +401,24 @@ class GameService:
         if creator["user_id"] == user_id:
             raise GameConflictError(code="CANNOT_JOIN_OWN_GAME", message="Cannot join your own game")
 
+        if game.get("opponent_type") == "bot":
+            raise GameConflictError(code="GAME_RESERVED_FOR_BOT", message="This game is reserved for its selected bot")
+
+        if role == "bot":
+            raise GameForbiddenError(code="FORBIDDEN", message="Bots cannot join human lobby games")
+
         if game["state"] != "waiting":
             raise GameConflictError(code="GAME_FULL", message="Game is not joinable")
 
         creator_color: PlayerColor = game.get("creator_color", "white")
         joiner_color: PlayerColor = "black" if creator_color == "white" else "white"
 
+        joiner = self._player_embed(user_id=user_id, username=username, role=role)
         if creator_color == "white":
             white = creator
-            black = {"user_id": user_id, "username": username, "connected": True}
+            black = joiner
         else:
-            white = {"user_id": user_id, "username": username, "connected": True}
+            white = joiner
             black = creator
 
         now = self.utcnow()
@@ -395,7 +453,7 @@ class GameService:
             game_url=f"{self._site_origin}/game/{updated['_id']}",
         )
 
-    async def get_open_games(self, *, limit: int = 20) -> OpenGamesResponse:  # pragma: no cover
+    async def get_open_games(self, *, limit: int = 20) -> OpenGamesResponse:
         bounded = max(1, min(limit, 100))
         cursor = self._games.find({"state": "waiting"}).sort("created_at", -1).limit(bounded)
         items: list[OpenGameItem] = []
@@ -412,7 +470,7 @@ class GameService:
             )
         return OpenGamesResponse(games=items)
 
-    async def get_my_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:  # pragma: no cover
+    async def get_my_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:
         bounded = max(1, min(limit, 100))
         query = {"$or": [{"white.user_id": user_id}, {"black.user_id": user_id}]}
         cursor = self._games.find(query).sort("created_at", -1).limit(bounded)
@@ -422,7 +480,7 @@ class GameService:
             out.append(self._to_metadata(doc))
         return out
 
-    async def get_game(self, *, game_id: str) -> GameMetadataResponse:  # pragma: no cover
+    async def get_game(self, *, game_id: str) -> GameMetadataResponse:
         game = await self._games.find_one({"_id": self._id_query(game_id)})
         if game is None:
             raise GameNotFoundError()
@@ -433,8 +491,9 @@ class GameService:
             "game_code": game["game_code"],
             "rule_variant": game["rule_variant"],
             "state": game["state"],
-            "white": {"username": white["username"], "connected": white.get("connected", True)} if white else None,
-            "black": {"username": black["username"], "connected": black.get("connected", True)} if black else None,
+            "opponent_type": game.get("opponent_type", "human"),
+            "white": self._public_player(white),
+            "black": self._public_player(black),
             "turn": game.get("turn"),
             "move_number": game.get("move_number", 1),
             "created_at": game["created_at"],
@@ -566,7 +625,7 @@ class GameService:
             "clock": self._clock.response_clock(time_control=set_payload["time_control"], now=now),
         }
 
-    async def execute_ask_any(self, *, game_id: str, user_id: str) -> dict[str, Any]:  # pragma: no cover
+    async def execute_ask_any(self, *, game_id: str, user_id: str) -> dict[str, Any]:
         oid = self._id_query(game_id)
         game = await self._games.find_one({"_id": oid})
         if game is None:
@@ -655,7 +714,7 @@ class GameService:
             "clock": self._clock.response_clock(time_control=set_payload["time_control"], now=now),
         }
 
-    async def resign_game(self, *, game_id: str, user_id: str) -> dict[str, Any]:  # pragma: no cover
+    async def resign_game(self, *, game_id: str, user_id: str) -> dict[str, Any]:
         oid = self._id_query(game_id)
         game = await self._games.find_one({"_id": oid})
         if game is None:
@@ -692,7 +751,7 @@ class GameService:
         logger.info("game_resigned", game_id=game_id, user_id=user_id, winner=winner)
         return {"result": {"winner": winner, "reason": "resignation"}}
 
-    async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:  # pragma: no cover
+    async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:
         oid = self._id_query(game_id)
         game = await self._games.find_one({"_id": oid})
         if game is None:
@@ -708,7 +767,7 @@ class GameService:
         if result.deleted_count != 1:
             raise GameConflictError(code="GAME_NOT_WAITING", message="Game is no longer deletable")
 
-    async def hydrate_document(self, *, game_id: str) -> GameDocument:  # pragma: no cover
+    async def hydrate_document(self, *, game_id: str) -> GameDocument:
         game = await self._games.find_one({"_id": self._id_query(game_id)})
         if game is None:
             raise GameNotFoundError()

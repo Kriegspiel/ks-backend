@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 GameState = Literal["waiting", "active", "completed"]
 RuleVariant = Literal["berkeley", "berkeley_any"]
 PlayerColor = Literal["white", "black"]
+OpponentType = Literal["human", "bot"]
 
 
 class PlayerEmbed(BaseModel):
@@ -16,6 +17,7 @@ class PlayerEmbed(BaseModel):
     user_id: str
     username: str
     connected: bool = True
+    role: Literal["user", "bot"] = "user"
 
 
 class GameDocument(BaseModel):
@@ -25,6 +27,8 @@ class GameDocument(BaseModel):
     game_code: str = Field(min_length=6, max_length=6, pattern=r"^[2-9A-HJ-KM-NP-Z]{6}$")
     rule_variant: RuleVariant = "berkeley_any"
     creator_color: PlayerColor = "white"
+    opponent_type: OpponentType = "human"
+    selected_bot_id: str | None = None
     white: PlayerEmbed
     black: PlayerEmbed | None = None
     state: GameState = "waiting"
@@ -52,6 +56,16 @@ class CreateGameRequest(BaseModel):
     rule_variant: RuleVariant = "berkeley_any"
     play_as: Literal["white", "black", "random"] = "random"
     time_control: Literal["rapid"] = "rapid"
+    opponent_type: OpponentType = "human"
+    bot_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_bot_fields(self) -> "CreateGameRequest":
+        if self.opponent_type == "bot" and not self.bot_id:
+            raise ValueError("bot_id is required when opponent_type is bot")
+        if self.opponent_type == "human" and self.bot_id is not None:
+            raise ValueError("bot_id is only allowed when opponent_type is bot")
+        return self
 
 
 class CreateGameResponse(BaseModel):
@@ -61,8 +75,11 @@ class CreateGameResponse(BaseModel):
     game_code: str = Field(min_length=6, max_length=6, pattern=r"^[2-9A-HJ-KM-NP-Z]{6}$")
     play_as: PlayerColor
     rule_variant: RuleVariant
-    state: Literal["waiting"] = "waiting"
+    state: Literal["waiting", "active"]
     join_url: str
+    game_url: str | None = None
+    opponent_type: OpponentType = "human"
+    bot: dict[str, str] | None = None
 
 
 class JoinGameResponse(BaseModel):
@@ -104,6 +121,14 @@ class MoveResponse(BaseModel):
 
 class AskAnyResponse(MoveResponse):
     has_any: bool
+
+
+class ReplayFen(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    full: str
+    white: str
+    black: str
 
 
 class RefereeLogItem(BaseModel):
@@ -156,14 +181,6 @@ class TranscriptAnswer(BaseModel):
     special: str | None = None
 
 
-class ReplayFen(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    full: str
-    white: str
-    black: str
-
-
 class TranscriptMoveItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -208,6 +225,7 @@ class PublicPlayer(BaseModel):
 
     username: str
     connected: bool
+    role: Literal["user", "bot"] = "user"
 
 
 class GameMetadataResponse(BaseModel):
@@ -217,6 +235,7 @@ class GameMetadataResponse(BaseModel):
     game_code: str = Field(min_length=6, max_length=6, pattern=r"^[2-9A-HJ-KM-NP-Z]{6}$")
     rule_variant: RuleVariant
     state: GameState
+    opponent_type: OpponentType = "human"
     white: PublicPlayer
     black: PublicPlayer | None = None
     turn: PlayerColor | None = None
