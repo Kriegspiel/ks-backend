@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "info"
     SITE_ORIGIN: str = "http://localhost:5173"
+    BOT_REGISTRATION_KEY: str = "dev-bot-registration-key"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

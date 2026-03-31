@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.bot import BotProfile
+
 
 class UserStats(BaseModel):
     games_played: int = 0
@@ -41,6 +43,7 @@ class UserModel(BaseModel):
     password_hash: str
     auth_providers: list[str] = Field(default_factory=lambda: ["local"])
     profile: UserProfile = Field(default_factory=UserProfile)
+    bot_profile: BotProfile | None = None
     stats: UserStats = Field(default_factory=UserStats)
     settings: UserSettings = Field(default_factory=UserSettings)
     role: str = "user"
