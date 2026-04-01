@@ -110,7 +110,9 @@ async def test_end_to_end_lifecycle_visibility_and_action_flow() -> None:
     white_open = await service.get_game_state(game_id=game_id, user_id="u1")
     black_open = await service.get_game_state(game_id=game_id, user_id="u2")
     assert white_open.possible_actions == ["move", "ask_any"]
+    assert "e2e4" in white_open.allowed_moves
     assert black_open.possible_actions == []
+    assert black_open.allowed_moves == []
 
     first = await service.execute_move(game_id=game_id, user_id="u1", uci="e2e4")
     assert first["move_done"] is True
@@ -166,6 +168,7 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
     participant_state = await service.get_game_state(game_id=str(gid), user_id="u1")
     assert participant_state.state == "completed"
     assert participant_state.possible_actions == []
+    assert participant_state.allowed_moves == []
 
     # simulate archival pipeline handoff for transcript/recent checks
     archived = deepcopy(games.docs[0])

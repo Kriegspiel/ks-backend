@@ -28,6 +28,17 @@ def project_player_fen(*, engine: Any, viewer_color: PlayerColor, game_state: st
     return visible_fen(engine, viewer_color)
 
 
+def allowed_moves_for_player(*, engine: Any, game_state: str, viewer_color: PlayerColor, turn: str | None) -> list[str]:
+    if game_state != "active" or turn != viewer_color:
+        return []
+
+    return sorted(
+        option.chess_move.uci()
+        for option in engine.possible_to_ask
+        if option.question_type.name == "COMMON" and option.chess_move is not None
+    )
+
+
 def compute_possible_actions(*, engine: Any, game_state: str, viewer_color: PlayerColor, turn: str | None) -> list[str]:
     if game_state != "active" or turn != viewer_color:
         return []

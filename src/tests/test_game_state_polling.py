@@ -135,7 +135,10 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
     assert "p" not in white_state.your_fen.split(" ")[0]
     assert "P" not in black_state.your_fen.split(" ")[0]
     assert white_state.possible_actions == ["move", "ask_any"]
+    assert "e2e4" in white_state.allowed_moves
+    assert "a2b3" in white_state.allowed_moves
     assert black_state.possible_actions == []
+    assert black_state.allowed_moves == []
     assert len(white_state.referee_log) == 1
     assert white_state.referee_log[0].announcement == "HAS_ANY"
 
@@ -166,6 +169,7 @@ async def test_get_game_state_completed_reveals_full_board(active_game_doc: dict
     assert state.result == {"winner": "white", "reason": "checkmate"}
     assert state.your_fen == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
     assert state.possible_actions == []
+    assert state.allowed_moves == []
 
 
 def test_build_referee_log_filters_private_announcements() -> None:
@@ -195,6 +199,7 @@ def app_with_state_service() -> tuple:
                 "move_number": 2,
                 "your_color": "white",
                 "your_fen": "8/8/8/8/4P3/8/PPPP1PPP/RNBQKBNR w - - 0 1",
+                "allowed_moves": ["a2a3", "a2a4"],
                 "referee_log": [{"ply": 1, "announcement": "HAS_ANY", "timestamp": None}],
                 "possible_actions": ["move", "ask_any"],
                 "result": None,
@@ -247,6 +252,7 @@ def test_get_game_state_route_happy_path(app_with_state_service) -> None:
 
     assert response.status_code == 200
     assert response.json()["possible_actions"] == ["move", "ask_any"]
+    assert response.json()["allowed_moves"] == ["a2a3", "a2a4"]
     service.get_game_state.assert_awaited_once()
 
 
