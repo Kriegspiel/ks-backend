@@ -151,6 +151,7 @@ class GameStateResponse(BaseModel):
     move_number: int = Field(ge=1)
     your_color: PlayerColor
     your_fen: str
+    allowed_moves: list[str] = Field(default_factory=list)
     referee_log: list[RefereeLogItem]
     possible_actions: list[Literal["move", "ask_any"]]
     result: dict[str, Any] | None = None
