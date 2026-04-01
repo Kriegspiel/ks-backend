@@ -40,7 +40,13 @@ async def register_bot(payload: BotRegisterRequest, request: Request, x_bot_regi
     try: user, token = await user_service.create_bot(payload)
     except UserConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={'field': exc.field, 'code': exc.code, 'message': str(exc)}) from exc
-    return BotRegisterResponse(bot_id=user.id, username=user.username, display_name=user.bot_profile.display_name if user.bot_profile else user.username_display, api_token=token)
+    return BotRegisterResponse(
+        bot_id=user.id,
+        username=user.username,
+        display_name=user.bot_profile.display_name if user.bot_profile else user.username_display,
+        owner_email=user.bot_profile.owner_email if user.bot_profile else payload.owner_email.strip().lower(),
+        api_token=token,
+    )
 
 @router.post('/login', response_model=LoginResponse)
 async def login(payload: LoginRequest, request: Request, response: Response, session_service: SessionService = Depends(get_session_service)) -> LoginResponse:

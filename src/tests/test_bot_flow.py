@@ -37,18 +37,22 @@ class FakeUsersCollection:
         class Cursor:
             def __init__(self, items):
                 self.items = items
+
             def sort(self, field, direction):
                 self.items.sort(key=lambda row: row[field], reverse=direction < 0)
                 return self
+
             def __aiter__(self):
                 self.index = 0
                 return self
+
             async def __anext__(self):
                 if self.index >= len(self.items):
                     raise StopAsyncIteration
                 item = self.items[self.index]
                 self.index += 1
                 return item
+
         return Cursor(rows)
 
     @staticmethod
@@ -76,7 +80,11 @@ async def test_create_game_with_bot_immediately_activates() -> None:
             "username_display": "Random Bot",
             "role": "bot",
             "status": "active",
-            "bot_profile": {"display_name": "Random Bot", "description": "Plays random moves"},
+            "bot_profile": {
+                "display_name": "Random Bot",
+                "owner_email": "owner@example.com",
+                "description": "Plays random moves",
+            },
         }
     )
     service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
@@ -127,10 +135,21 @@ async def test_user_service_can_issue_and_authenticate_bot_token() -> None:
     users = FakeUsersCollection()
     service = UserService(users)
     user, token = await service.create_bot(
-        type("Payload", (), {"username": "randobot", "display_name": "Random Bot", "description": "Plays random moves"})()
+        type(
+            "Payload",
+            (),
+            {
+                "username": "randobot",
+                "display_name": "Random Bot",
+                "owner_email": "Owner@Example.com",
+                "description": "Plays random moves",
+            },
+        )()
     )
 
     assert user.role == "bot"
+    assert user.bot_profile is not None
+    assert user.bot_profile.owner_email == "owner@example.com"
     authenticated = await service.authenticate_bot_token(token)
     assert authenticated is not None
     assert authenticated.username == "randobot"
@@ -147,7 +166,12 @@ async def test_bot_service_lists_active_bots() -> None:
                 "username_display": "Random Bot",
                 "role": "bot",
                 "status": "active",
-                "bot_profile": {"display_name": "Random Bot", "description": "Plays random moves", "listed": True},
+                "bot_profile": {
+                    "display_name": "Random Bot",
+                    "owner_email": "owner@example.com",
+                    "description": "Plays random moves",
+                    "listed": True,
+                },
             },
             {
                 "_id": ObjectId(),
@@ -155,7 +179,12 @@ async def test_bot_service_lists_active_bots() -> None:
                 "username_display": "Sleepy Bot",
                 "role": "bot",
                 "status": "inactive",
-                "bot_profile": {"display_name": "Sleepy Bot", "description": "Offline", "listed": True},
+                "bot_profile": {
+                    "display_name": "Sleepy Bot",
+                    "owner_email": "owner@example.com",
+                    "description": "Offline",
+                    "listed": True,
+                },
             },
         ]
     )
@@ -163,8 +192,6 @@ async def test_bot_service_lists_active_bots() -> None:
 
     listed = await service.list_bots()
     assert [bot.username for bot in listed.bots] == ["randobot"]
-
-
 
 
 @pytest.mark.asyncio
@@ -178,7 +205,12 @@ async def test_bot_service_hides_unlisted_bots() -> None:
                 "username_display": "Random Bot",
                 "role": "bot",
                 "status": "active",
-                "bot_profile": {"display_name": "Random Bot", "description": "Plays random moves", "listed": True},
+                "bot_profile": {
+                    "display_name": "Random Bot",
+                    "owner_email": "owner@example.com",
+                    "description": "Plays random moves",
+                    "listed": True,
+                },
             },
             {
                 "_id": ObjectId(),
@@ -186,7 +218,12 @@ async def test_bot_service_hides_unlisted_bots() -> None:
                 "username_display": "Random Bot e2eabcd",
                 "role": "bot",
                 "status": "active",
-                "bot_profile": {"display_name": "Random Bot e2eabcd", "description": "E2E random bot", "listed": False},
+                "bot_profile": {
+                    "display_name": "Random Bot e2eabcd",
+                    "owner_email": "owner@example.com",
+                    "description": "E2E random bot",
+                    "listed": False,
+                },
             },
         ]
     )
@@ -202,13 +239,49 @@ async def test_bot_registration_marks_e2e_bots_unlisted() -> None:
     service = UserService(users)
 
     user, _token = await service.create_bot(
-        type("Payload", (), {"username": "randobot_e2eabcd", "display_name": "Random Bot e2eabcd", "description": "E2E random bot", "listed": None})()
+        type(
+            "Payload",
+            (),
+            {
+                "username": "randobot_e2eabcd",
+                "display_name": "Random Bot e2eabcd",
+                "owner_email": "owner@example.com",
+                "description": "E2E random bot",
+                "listed": None,
+            },
+        )()
     )
 
     assert user.bot_profile is not None
     assert user.bot_profile.listed is False
 
+
 def test_bot_registration_route_returns_api_token() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing", BOT_REGISTRATION_KEY="secret-key"))
+    users = FakeUsersCollection()
+
+    from app.routers import auth as auth_router_module
+
+    auth_router_module.require_db = lambda: type("Db", (), {"users": users})()
+
+    with TestClient(app) as client:
+        registered = client.post(
+            "/api/auth/bots/register",
+            json={
+                "username": "randobot",
+                "display_name": "Random Bot",
+                "owner_email": "owner@example.com",
+                "description": "Plays random moves",
+            },
+            headers={"X-Bot-Registration-Key": "secret-key"},
+        )
+
+    assert registered.status_code == 201
+    assert registered.json()["api_token"].startswith("ksbot_")
+    assert registered.json()["owner_email"] == "owner@example.com"
+
+
+def test_bot_registration_route_requires_owner_email() -> None:
     app = create_app(Settings(ENVIRONMENT="testing", BOT_REGISTRATION_KEY="secret-key"))
     users = FakeUsersCollection()
 
@@ -223,5 +296,4 @@ def test_bot_registration_route_returns_api_token() -> None:
             headers={"X-Bot-Registration-Key": "secret-key"},
         )
 
-    assert registered.status_code == 201
-    assert registered.json()["api_token"].startswith("ksbot_")
+    assert registered.status_code == 422
