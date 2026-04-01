@@ -133,7 +133,8 @@ class UserService:
     @staticmethod
     def _default_bot_listed(*, username: str, display_name: str, description: str) -> bool:
         combined = f"{username} {display_name} {description}".lower()
-        return "e2e" not in combined and "test" not in combined
+        blocked_markers = ("e2e", "test", "probe")
+        return not any(marker in combined for marker in blocked_markers)
 
     async def create_bot(self, registration: BotRegisterRequest) -> tuple[UserModel, str]:
         username = self.canonical_username(registration.username)

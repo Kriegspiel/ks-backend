@@ -297,3 +297,52 @@ def test_bot_registration_route_requires_owner_email() -> None:
         )
 
     assert registered.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_user_service_authenticates_legacy_bot_without_owner_email() -> None:
+    users = FakeUsersCollection()
+    service = UserService(users)
+    _user, token = await service.create_bot(
+        type(
+            "Payload",
+            (),
+            {
+                "username": "legacybot",
+                "display_name": "Legacy Bot",
+                "owner_email": "owner@example.com",
+                "description": "Legacy registration",
+            },
+        )()
+    )
+    users.docs[0]["bot_profile"].pop("owner_email", None)
+
+    authenticated = await service.authenticate_bot_token(token)
+
+    assert authenticated is not None
+    assert authenticated.username == "legacybot"
+    assert authenticated.bot_profile is not None
+    assert authenticated.bot_profile.owner_email is None
+
+
+@pytest.mark.asyncio
+async def test_probe_bots_default_to_unlisted() -> None:
+    users = FakeUsersCollection()
+    service = UserService(users)
+
+    user, _token = await service.create_bot(
+        type(
+            "Payload",
+            (),
+            {
+                "username": "probebot",
+                "display_name": "Probe Bot",
+                "owner_email": "owner@example.com",
+                "description": "Probe runner",
+                "listed": None,
+            },
+        )()
+    )
+
+    assert user.bot_profile is not None
+    assert user.bot_profile.listed is False
