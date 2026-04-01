@@ -14,6 +14,8 @@ class BotService:
         bots: list[BotListItem] = []
         async for doc in cursor:
             profile = doc.get("bot_profile") or {}
+            if profile.get("listed", True) is False:
+                continue
             bots.append(
                 BotListItem(
                     bot_id=str(doc["_id"]),

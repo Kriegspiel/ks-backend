@@ -56,6 +56,7 @@ class BotRegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=20, pattern=_USERNAME_PATTERN)
     display_name: str = Field(min_length=3, max_length=40)
     description: str = Field(default="", max_length=280)
+    listed: bool | None = None
 
 
 class BotRegisterResponse(BaseModel):

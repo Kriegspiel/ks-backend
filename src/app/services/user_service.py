@@ -130,6 +130,11 @@ class UserService:
         payload["_id"] = result.inserted_id
         return UserModel.from_mongo(payload)
 
+    @staticmethod
+    def _default_bot_listed(*, username: str, display_name: str, description: str) -> bool:
+        combined = f"{username} {display_name} {description}".lower()
+        return "e2e" not in combined and "test" not in combined
+
     async def create_bot(self, registration: BotRegisterRequest) -> tuple[UserModel, str]:
         username = self.canonical_username(registration.username)
         existing = await self._users.find_one({"username": username})
@@ -139,6 +144,12 @@ class UserService:
         now = utcnow()
         token_id, token_secret, token_hash = self.issue_bot_token()
         token = f"ksbot_{token_id}.{token_secret}"
+        requested_listed = getattr(registration, "listed", None)
+        listed = requested_listed if requested_listed is not None else self._default_bot_listed(
+            username=username,
+            display_name=registration.display_name.strip(),
+            description=registration.description.strip(),
+        )
         payload = {
             "username": username,
             "username_display": registration.display_name.strip(),
@@ -152,6 +163,7 @@ class UserService:
             "bot_profile": {
                 "display_name": registration.display_name.strip(),
                 "description": registration.description.strip(),
+                "listed": listed,
                 "api_token_id": token_id,
                 "api_token_hash": token_hash,
                 "registered_at": now,
