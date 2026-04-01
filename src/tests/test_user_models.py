@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.models.auth import RegisterRequest
+from app.models.auth import BotRegisterRequest, RegisterRequest
 
 
 def test_register_requires_username_email_password() -> None:
@@ -41,3 +41,21 @@ def test_register_accepts_valid_payload() -> None:
 
     assert req.username == "Player_One"
     assert req.email == "x@example.com"
+
+
+def test_bot_register_requires_owner_email() -> None:
+    with pytest.raises(ValidationError):
+        BotRegisterRequest.model_validate({"username": "randobot", "display_name": "Random Bot"})
+
+
+def test_bot_register_accepts_valid_payload() -> None:
+    req = BotRegisterRequest.model_validate(
+        {
+            "username": "randobot",
+            "display_name": "Random Bot",
+            "owner_email": "Owner@Example.com",
+            "description": "Plays random moves",
+        }
+    )
+
+    assert req.owner_email == "Owner@Example.com"

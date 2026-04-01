@@ -55,13 +55,20 @@ class BotRegisterRequest(BaseModel):
 
     username: str = Field(min_length=3, max_length=20, pattern=_USERNAME_PATTERN)
     display_name: str = Field(min_length=3, max_length=40)
+    owner_email: str = Field(min_length=3, max_length=320)
     description: str = Field(default="", max_length=280)
     listed: bool | None = None
+
+    @field_validator("owner_email")
+    @classmethod
+    def validate_owner_email_format(cls, value: str) -> str:
+        return RegisterRequest.validate_email_format(value)
 
 
 class BotRegisterResponse(BaseModel):
     bot_id: str
     username: str
     display_name: str
+    owner_email: str
     api_token: str
     message: str = "Bot registered. Save this token now; it will not be shown again."

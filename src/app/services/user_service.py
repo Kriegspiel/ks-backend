@@ -144,6 +144,7 @@ class UserService:
         now = utcnow()
         token_id, token_secret, token_hash = self.issue_bot_token()
         token = f"ksbot_{token_id}.{token_secret}"
+        owner_email = self.canonical_email(registration.owner_email)
         requested_listed = getattr(registration, "listed", None)
         listed = requested_listed if requested_listed is not None else self._default_bot_listed(
             username=username,
@@ -162,6 +163,7 @@ class UserService:
             "profile": {"bio": registration.description.strip(), "avatar_url": None, "country": None},
             "bot_profile": {
                 "display_name": registration.display_name.strip(),
+                "owner_email": owner_email,
                 "description": registration.description.strip(),
                 "listed": listed,
                 "api_token_id": token_id,
