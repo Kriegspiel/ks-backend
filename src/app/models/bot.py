@@ -10,6 +10,7 @@ class BotProfile(BaseModel):
 
     display_name: str
     description: str = ""
+    listed: bool = True
     api_token_id: str | None = None
     api_token_hash: str | None = None
     registered_at: datetime | None = None

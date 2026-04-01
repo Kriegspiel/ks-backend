@@ -147,7 +147,7 @@ async def test_bot_service_lists_active_bots() -> None:
                 "username_display": "Random Bot",
                 "role": "bot",
                 "status": "active",
-                "bot_profile": {"display_name": "Random Bot", "description": "Plays random moves"},
+                "bot_profile": {"display_name": "Random Bot", "description": "Plays random moves", "listed": True},
             },
             {
                 "_id": ObjectId(),
@@ -155,7 +155,7 @@ async def test_bot_service_lists_active_bots() -> None:
                 "username_display": "Sleepy Bot",
                 "role": "bot",
                 "status": "inactive",
-                "bot_profile": {"display_name": "Sleepy Bot", "description": "Offline"},
+                "bot_profile": {"display_name": "Sleepy Bot", "description": "Offline", "listed": True},
             },
         ]
     )
@@ -164,6 +164,49 @@ async def test_bot_service_lists_active_bots() -> None:
     listed = await service.list_bots()
     assert [bot.username for bot in listed.bots] == ["randobot"]
 
+
+
+
+@pytest.mark.asyncio
+async def test_bot_service_hides_unlisted_bots() -> None:
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "username": "randobot",
+                "username_display": "Random Bot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Random Bot", "description": "Plays random moves", "listed": True},
+            },
+            {
+                "_id": ObjectId(),
+                "username": "randobot_e2eabcd",
+                "username_display": "Random Bot e2eabcd",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Random Bot e2eabcd", "description": "E2E random bot", "listed": False},
+            },
+        ]
+    )
+    service = BotService(users)
+
+    listed = await service.list_bots()
+    assert [bot.username for bot in listed.bots] == ["randobot"]
+
+
+@pytest.mark.asyncio
+async def test_bot_registration_marks_e2e_bots_unlisted() -> None:
+    users = FakeUsersCollection()
+    service = UserService(users)
+
+    user, _token = await service.create_bot(
+        type("Payload", (), {"username": "randobot_e2eabcd", "display_name": "Random Bot e2eabcd", "description": "E2E random bot", "listed": None})()
+    )
+
+    assert user.bot_profile is not None
+    assert user.bot_profile.listed is False
 
 def test_bot_registration_route_returns_api_token() -> None:
     app = create_app(Settings(ENVIRONMENT="testing", BOT_REGISTRATION_KEY="secret-key"))
