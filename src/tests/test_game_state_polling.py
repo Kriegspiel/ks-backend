@@ -172,18 +172,33 @@ async def test_get_game_state_completed_reveals_full_board(active_game_doc: dict
     assert state.allowed_moves == []
 
 
-def test_build_referee_log_filters_private_announcements() -> None:
+def test_build_referee_log_filters_private_announcements_but_keeps_all_public_announcements() -> None:
     now = datetime.now(UTC)
     log = build_referee_log(
         [
             {"ply": 1, "announcement": "REGULAR_MOVE", "timestamp": now},
             {"ply": 2, "announcement": "ILLEGAL_MOVE", "timestamp": now},
-            {"ply": 3, "announcement": "CAPTURE_DONE", "capture_square": "e4", "timestamp": now},
+            {
+                "ply": 3,
+                "announcement": "CAPTURE_DONE",
+                "special_announcement": "CHECK_FILE",
+                "capture_square": "e4",
+                "timestamp": now,
+            },
+            {
+                "ply": 4,
+                "announcement": "REGULAR_MOVE",
+                "special_announcement": "DRAW_TOOMANYREVERSIBLEMOVES",
+                "timestamp": now,
+            },
         ]
     )
-    assert len(log) == 1
+    assert len(log) == 3
     assert log[0]["announcement"] == "CAPTURE_DONE"
     assert log[0]["capture_square"] == "e4"
+    assert log[1]["announcement"] == "CHECK_FILE"
+    assert log[1]["capture_square"] is None
+    assert log[2]["announcement"] == "DRAW_TOOMANYREVERSIBLEMOVES"
 
 
 @pytest.fixture

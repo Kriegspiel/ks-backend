@@ -5,20 +5,24 @@ from typing import Any, Literal
 from app.services.engine_adapter import full_fen, visible_fen
 
 PlayerColor = Literal["white", "black"]
-_ALLOWED_PUBLIC_ANNOUNCEMENTS = {
+_ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS = {
     "CAPTURE_DONE",
     "HAS_ANY",
     "NO_ANY",
+}
+
+_ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS = {
+    "DRAW_TOOMANYREVERSIBLEMOVES",
+    "DRAW_STALEMATE",
+    "DRAW_INSUFFICIENT",
+    "CHECKMATE_WHITE_WINS",
+    "CHECKMATE_BLACK_WINS",
     "CHECK_RANK",
     "CHECK_FILE",
     "CHECK_LONG_DIAGONAL",
     "CHECK_SHORT_DIAGONAL",
     "CHECK_KNIGHT",
-    "CHECKMATE_WHITE_WINS",
-    "CHECKMATE_BLACK_WINS",
-    "DRAW_STALEMATE",
-    "DRAW_INSUFFICIENT_MATERIAL",
-    "DRAW_HALFMOVE_LIMIT",
+    "CHECK_DOUBLE",
 }
 
 
@@ -62,16 +66,29 @@ def build_referee_log(moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for move in moves:
         announcement = move.get("announcement")
-        if announcement not in _ALLOWED_PUBLIC_ANNOUNCEMENTS:
-            continue
+        special_announcement = move.get("special_announcement")
+        base_item = {
+            "ply": move.get("ply"),
+            "timestamp": move.get("timestamp"),
+        }
 
-        out.append(
-            {
-                "ply": move.get("ply"),
-                "announcement": announcement,
-                "special_announcement": move.get("special_announcement"),
-                "capture_square": move.get("capture_square"),
-                "timestamp": move.get("timestamp"),
-            }
-        )
+        if announcement in _ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS:
+            out.append(
+                {
+                    **base_item,
+                    "announcement": announcement,
+                    "special_announcement": None,
+                    "capture_square": move.get("capture_square"),
+                }
+            )
+
+        if special_announcement in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
+            out.append(
+                {
+                    **base_item,
+                    "announcement": special_announcement,
+                    "special_announcement": special_announcement,
+                    "capture_square": None,
+                }
+            )
     return out
