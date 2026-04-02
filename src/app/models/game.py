@@ -142,6 +142,14 @@ class RefereeLogItem(BaseModel):
     replay_fen: ReplayFen | None = None
 
 
+class RefereeTurnEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    turn: int = Field(ge=1)
+    white: list[str] = Field(default_factory=list)
+    black: list[str] = Field(default_factory=list)
+
+
 class GameStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -153,6 +161,7 @@ class GameStateResponse(BaseModel):
     your_fen: str
     allowed_moves: list[str] = Field(default_factory=list)
     referee_log: list[RefereeLogItem]
+    referee_turns: list[RefereeTurnEntry] = Field(default_factory=list)
     possible_actions: list[Literal["move", "ask_any"]]
     result: dict[str, Any] | None = None
     clock: ClockState

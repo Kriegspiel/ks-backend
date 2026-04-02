@@ -25,7 +25,7 @@ from app.models.game import (
 from app.services.clock_service import ClockService
 from app.services.code_generator import generate_game_code
 from app.services.engine_adapter import ask_any, attempt_move, create_new_game, deserialize_game_state, serialize_game_state
-from app.services.state_projection import allowed_moves_for_player, build_referee_log, compute_possible_actions, project_player_fen
+from app.services.state_projection import allowed_moves_for_player, build_referee_log, build_referee_turns, compute_possible_actions, project_player_fen
 
 PlayerColor = Literal["white", "black"]
 logger = structlog.get_logger("app.game")
@@ -528,6 +528,7 @@ class GameService:
                 turn=game.get("turn"),
             ),
             referee_log=build_referee_log(game.get("moves", [])),
+            referee_turns=build_referee_turns(game.get("moves", [])),
             possible_actions=compute_possible_actions(
                 engine=engine,
                 game_state=game["state"],

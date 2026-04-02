@@ -15,7 +15,7 @@ from app.models.user import UserModel
 from app.routers.game import get_game_service
 from app.services.engine_adapter import create_new_game, serialize_game_state
 from app.services.game_service import GameForbiddenError, GameService
-from app.services.state_projection import build_referee_log
+from app.services.state_projection import build_referee_log, build_referee_turns
 
 
 class FakeCursor:
@@ -139,8 +139,10 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
     assert "a2b3" in white_state.allowed_moves
     assert black_state.possible_actions == []
     assert black_state.allowed_moves == []
-    assert len(white_state.referee_log) == 1
-    assert white_state.referee_log[0].announcement == "HAS_ANY"
+    assert len(white_state.referee_log) == 2
+    assert white_state.referee_log[0].announcement == "REGULAR_MOVE"
+    assert white_state.referee_log[1].announcement == "HAS_ANY"
+    assert [turn.model_dump() for turn in white_state.referee_turns] == [{"turn": 1, "white": ["e2e4 — Move complete"], "black": ["Ask any pawn captures — Has pawn captures"]}]
 
 
 @pytest.mark.asyncio
@@ -193,12 +195,31 @@ def test_build_referee_log_filters_private_announcements_but_keeps_all_public_an
             },
         ]
     )
-    assert len(log) == 3
-    assert log[0]["announcement"] == "CAPTURE_DONE"
-    assert log[0]["capture_square"] == "e4"
-    assert log[1]["announcement"] == "CHECK_FILE"
-    assert log[1]["capture_square"] is None
-    assert log[2]["announcement"] == "DRAW_TOOMANYREVERSIBLEMOVES"
+    assert len(log) == 5
+    assert log[0]["announcement"] == "REGULAR_MOVE"
+    assert log[1]["announcement"] == "CAPTURE_DONE"
+    assert log[1]["capture_square"] == "e4"
+    assert log[2]["announcement"] == "CHECK_FILE"
+    assert log[2]["capture_square"] is None
+    assert log[3]["announcement"] == "REGULAR_MOVE"
+    assert log[4]["announcement"] == "DRAW_TOOMANYREVERSIBLEMOVES"
+
+
+def test_build_referee_turns_groups_live_moves_by_turn_and_color() -> None:
+    now = datetime.now(UTC)
+    turns = build_referee_turns(
+        [
+            {"ply": 1, "color": "white", "question_type": "COMMON", "uci": "c2c3", "announcement": "REGULAR_MOVE", "special_announcement": "NONE", "timestamp": now},
+            {"ply": 2, "color": "black", "question_type": "COMMON", "uci": "e7e5", "announcement": "REGULAR_MOVE", "special_announcement": "NONE", "timestamp": now},
+            {"ply": 3, "color": "white", "question_type": "ASK_ANY", "announcement": "HAS_ANY", "special_announcement": "NONE", "timestamp": now},
+            {"ply": 4, "color": "black", "question_type": "COMMON", "uci": "e5d4", "announcement": "CAPTURE_DONE", "capture_square": "d4", "special_announcement": "CHECK_FILE", "timestamp": now},
+        ]
+    )
+
+    assert turns == [
+        {"turn": 1, "white": ["c2c3 — Move complete"], "black": ["e7e5 — Move complete"]},
+        {"turn": 2, "white": ["Ask any pawn captures — Has pawn captures"], "black": ["e5d4 — Capture done at D4 · Check on file"]},
+    ]
 
 
 @pytest.fixture
@@ -215,7 +236,8 @@ def app_with_state_service() -> tuple:
                 "your_color": "white",
                 "your_fen": "8/8/8/8/4P3/8/PPPP1PPP/RNBQKBNR w - - 0 1",
                 "allowed_moves": ["a2a3", "a2a4"],
-                "referee_log": [{"ply": 1, "announcement": "HAS_ANY", "timestamp": None}],
+                "referee_log": [{"ply": 1, "announcement": "REGULAR_MOVE", "timestamp": None}, {"ply": 1, "announcement": "HAS_ANY", "timestamp": None}],
+                "referee_turns": [{"turn": 1, "white": ["e2e4 — Move complete", "Ask any pawn captures — Has pawn captures"], "black": []}],
                 "possible_actions": ["move", "ask_any"],
                 "result": None,
                 "clock": {"white_remaining": 1500.0, "black_remaining": 1500.0, "active_color": "white"},
