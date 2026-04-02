@@ -140,12 +140,12 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
     assert black_state.possible_actions == []
     assert black_state.allowed_moves == []
     assert white_state.scoresheet.viewer_color == "white"
-    assert white_state.scoresheet.turns[0].white == ["e2e4 — Move complete"]
+    assert white_state.scoresheet.turns[0].white == ["Move attempt — Move complete"]
     assert black_state.scoresheet.turns[0].white == ["Opponent move — Move complete"]
     assert len(white_state.referee_log) == 2
     assert white_state.referee_log[0].announcement == "REGULAR_MOVE"
     assert white_state.referee_log[1].announcement == "HAS_ANY"
-    assert [turn.model_dump() for turn in white_state.referee_turns] == [{"turn": 1, "white": ["e2e4 — Move complete"], "black": ["Ask any pawn captures — Has pawn captures"]}]
+    assert [turn.model_dump() for turn in white_state.referee_turns] == [{"turn": 1, "white": ["Move attempt — Move complete"], "black": ["Ask any pawn captures — Has pawn captures"]}]
 
 
 @pytest.mark.asyncio
@@ -198,14 +198,26 @@ def test_build_referee_log_filters_private_announcements_but_keeps_all_public_an
             },
         ]
     )
-    assert len(log) == 5
+    assert len(log) == 6
     assert log[0]["announcement"] == "REGULAR_MOVE"
-    assert log[1]["announcement"] == "CAPTURE_DONE"
-    assert log[1]["capture_square"] == "e4"
-    assert log[2]["announcement"] == "CHECK_FILE"
-    assert log[2]["capture_square"] is None
-    assert log[3]["announcement"] == "REGULAR_MOVE"
-    assert log[4]["announcement"] == "DRAW_TOOMANYREVERSIBLEMOVES"
+    assert log[1]["announcement"] == "ILLEGAL_MOVE"
+    assert log[2]["announcement"] == "CAPTURE_DONE"
+    assert log[2]["capture_square"] == "e4"
+    assert log[3]["announcement"] == "CHECK_FILE"
+    assert log[3]["capture_square"] is None
+    assert log[4]["announcement"] == "REGULAR_MOVE"
+    assert log[5]["announcement"] == "DRAW_TOOMANYREVERSIBLEMOVES"
+
+
+def test_build_referee_turns_records_illegal_move_announcements() -> None:
+    now = datetime.now(UTC)
+    turns = build_referee_turns(
+        [
+            {"ply": 1, "color": "white", "question_type": "COMMON", "uci": "e2e4", "announcement": "ILLEGAL_MOVE", "special_announcement": None, "timestamp": now},
+        ]
+    )
+
+    assert turns == [{"turn": 1, "white": ["Move attempt — Illegal move"], "black": []}]
 
 
 def test_build_referee_turns_groups_live_moves_by_turn_and_color() -> None:
@@ -220,8 +232,8 @@ def test_build_referee_turns_groups_live_moves_by_turn_and_color() -> None:
     )
 
     assert turns == [
-        {"turn": 1, "white": ["c2c3 — Move complete"], "black": ["e7e5 — Move complete"]},
-        {"turn": 2, "white": ["Ask any pawn captures — Has pawn captures"], "black": ["e5d4 — Capture done at D4 · Check on file"]},
+        {"turn": 1, "white": ["Move attempt — Move complete"], "black": ["Move attempt — Move complete"]},
+        {"turn": 2, "white": ["Ask any pawn captures — Has pawn captures"], "black": ["Move attempt — Capture done at D4 · Check on file"]},
     ]
 
 
@@ -239,9 +251,9 @@ def app_with_state_service() -> tuple:
                 "your_color": "white",
                 "your_fen": "8/8/8/8/4P3/8/PPPP1PPP/RNBQKBNR w - - 0 1",
                 "allowed_moves": ["a2a3", "a2a4"],
-                "scoresheet": {"viewer_color": "white", "last_move_number": 1, "turns": [{"turn": 1, "white": ["e2e4 — Move complete", "Ask any pawn captures — Has pawn captures"], "black": []}]},
+                "scoresheet": {"viewer_color": "white", "last_move_number": 1, "turns": [{"turn": 1, "white": ["Move attempt — Move complete", "Ask any pawn captures — Has pawn captures"], "black": []}]},
                 "referee_log": [{"ply": 1, "announcement": "REGULAR_MOVE", "timestamp": None}, {"ply": 1, "announcement": "HAS_ANY", "timestamp": None}],
-                "referee_turns": [{"turn": 1, "white": ["e2e4 — Move complete", "Ask any pawn captures — Has pawn captures"], "black": []}],
+                "referee_turns": [{"turn": 1, "white": ["Move attempt — Move complete", "Ask any pawn captures — Has pawn captures"], "black": []}],
                 "possible_actions": ["move", "ask_any"],
                 "result": None,
                 "clock": {"white_remaining": 1500.0, "black_remaining": 1500.0, "active_color": "white"},

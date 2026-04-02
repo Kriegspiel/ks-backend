@@ -10,6 +10,7 @@ _ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS = {
     "CAPTURE_DONE",
     "HAS_ANY",
     "NO_ANY",
+    "ILLEGAL_MOVE",
 }
 
 _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS = {
@@ -27,6 +28,7 @@ _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS = {
 }
 
 _PUBLIC_ANNOUNCEMENT_TEXT = {
+    "ILLEGAL_MOVE": "Illegal move",
     "REGULAR_MOVE": "Move complete",
     "CAPTURE_DONE": "Capture done",
     "HAS_ANY": "Has pawn captures",
@@ -97,9 +99,9 @@ def _move_prompt_label(move: dict[str, Any]) -> str:
 
     uci = move.get("uci")
     if isinstance(uci, str) and uci.strip():
-        return uci.strip().lower()
+        return "Move attempt"
 
-    return "Move"
+    return "Move attempt"
 
 
 def _move_announcements(move: dict[str, Any]) -> list[str]:
@@ -273,9 +275,7 @@ def _normalize_scoresheet_entry(entry: dict[str, Any], *, perspective: Literal["
     if perspective == "own":
         if question_type == "ASK_ANY":
             return "Ask any pawn captures — " + " · ".join(answer_texts)
-        if isinstance(move_uci, str) and move_uci.strip():
-            return move_uci.strip().lower() + " — " + " · ".join(answer_texts)
-        return " · ".join(answer_texts)
+        return "Move attempt — " + " · ".join(answer_texts)
 
     if question_type == "ASK_ANY":
         return "Opponent asked any pawn captures — " + " · ".join(answer_texts)
