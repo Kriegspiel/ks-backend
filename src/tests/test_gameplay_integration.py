@@ -134,8 +134,8 @@ async def test_end_to_end_lifecycle_visibility_and_action_flow() -> None:
     assert len(white_view.referee_log) >= 1
     assert white_view.scoresheet.viewer_color == "white"
     assert black_view.scoresheet.viewer_color == "black"
-    assert any(entry == "Move attempt — Move complete" for entry in white_view.scoresheet.turns[0].white)
-    assert any("Opponent move" in entry for entry in black_view.scoresheet.turns[0].white)
+    assert any(entry.message == "Move attempt — Move complete" for entry in white_view.scoresheet.turns[0].white)
+    assert any("Opponent move" in entry.message for entry in black_view.scoresheet.turns[0].white)
     assert games.docs[0]["white_scoresheet"]["moves_own"]
     assert games.docs[0]["black_scoresheet"]["moves_opponent"]
 
