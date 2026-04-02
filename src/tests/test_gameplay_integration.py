@@ -132,6 +132,12 @@ async def test_end_to_end_lifecycle_visibility_and_action_flow() -> None:
     assert "p" not in white_view.your_fen.split(" ")[0]
     assert "P" not in black_view.your_fen.split(" ")[0]
     assert len(white_view.referee_log) >= 1
+    assert white_view.scoresheet.viewer_color == "white"
+    assert black_view.scoresheet.viewer_color == "black"
+    assert any("e2e4" in entry for entry in white_view.scoresheet.turns[0].white)
+    assert any("Opponent move" in entry for entry in black_view.scoresheet.turns[0].white)
+    assert games.docs[0]["white_scoresheet"]["moves_own"]
+    assert games.docs[0]["black_scoresheet"]["moves_opponent"]
 
 
 @pytest.mark.asyncio
@@ -160,7 +166,7 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
     gid = ObjectId()
     games = FakeCollection([_active_game(now, gid)])
     archives = FakeCollection([])
-    service = GameService(games, archives)
+    service = GameService(games, archives_collection=archives)
 
     resigned = await service.resign_game(game_id=str(gid), user_id="u2")
     assert resigned["result"] == {"winner": "white", "reason": "resignation"}

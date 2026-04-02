@@ -143,6 +143,8 @@ async def test_execute_move_persists_and_flips_turn(active_game_doc: dict) -> No
     assert games.docs[0]["turn"] == "black"
     assert games.docs[0]["move_number"] == 2
     assert games.docs[0]["moves"][0]["question_type"] == "COMMON"
+    assert games.docs[0]["white_scoresheet"]["moves_own"]
+    assert games.docs[0]["black_scoresheet"]["moves_opponent"]
 
 
 @pytest.mark.asyncio

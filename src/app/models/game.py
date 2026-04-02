@@ -38,6 +38,8 @@ class GameDocument(BaseModel):
     updated_at: datetime
     expires_at: datetime | None = None
     engine_state: dict[str, Any] | None = None
+    white_scoresheet: dict[str, Any] | None = None
+    black_scoresheet: dict[str, Any] | None = None
     moves: list[dict[str, Any]] = Field(default_factory=list)
     result: dict[str, Any] | None = None
     time_control: dict[str, Any] | None = None
@@ -150,6 +152,22 @@ class RefereeTurnEntry(BaseModel):
     black: list[str] = Field(default_factory=list)
 
 
+class ScoresheetTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    turn: int = Field(ge=1)
+    white: list[str] = Field(default_factory=list)
+    black: list[str] = Field(default_factory=list)
+
+
+class ViewerScoresheet(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    viewer_color: PlayerColor
+    last_move_number: int = Field(ge=0)
+    turns: list[ScoresheetTurn] = Field(default_factory=list)
+
+
 class GameStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -160,6 +178,7 @@ class GameStateResponse(BaseModel):
     your_color: PlayerColor
     your_fen: str
     allowed_moves: list[str] = Field(default_factory=list)
+    scoresheet: ViewerScoresheet
     referee_log: list[RefereeLogItem]
     referee_turns: list[RefereeTurnEntry] = Field(default_factory=list)
     possible_actions: list[Literal["move", "ask_any"]]

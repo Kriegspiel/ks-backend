@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from app.services.engine_adapter import full_fen, visible_fen
+from app.services.engine_adapter import full_fen, serialize_scoresheet, visible_fen
 
 PlayerColor = Literal["white", "black"]
 _ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS = {
@@ -171,3 +171,123 @@ def build_referee_turns(moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
         entry[color].append(label + " — " + " · ".join(announcements))
 
     return [turns[key] for key in sorted(turns)]
+
+
+def build_viewer_scoresheet(*, viewer_color: PlayerColor, stored_scoresheet: dict[str, Any] | None) -> dict[str, Any]:
+    scoresheet = stored_scoresheet or {"color": viewer_color, "moves_own": [], "moves_opponent": [], "last_move_number": 0}
+    own_turns = scoresheet.get("moves_own") if isinstance(scoresheet.get("moves_own"), list) else []
+    opponent_turns = scoresheet.get("moves_opponent") if isinstance(scoresheet.get("moves_opponent"), list) else []
+    turn_count = max(len(own_turns), len(opponent_turns))
+
+    turns: list[dict[str, Any]] = []
+    for index in range(turn_count):
+        own_entries = [_normalize_scoresheet_entry(entry, perspective="own") for entry in own_turns[index] if entry] if index < len(own_turns) else []
+        opponent_entries = [_normalize_scoresheet_entry(entry, perspective="opponent") for entry in opponent_turns[index] if entry] if index < len(opponent_turns) else []
+        own_entries = [entry for entry in own_entries if entry]
+        opponent_entries = [entry for entry in opponent_entries if entry]
+        turn_item = {
+            "turn": index + 1,
+            "white": own_entries if viewer_color == "white" else opponent_entries,
+            "black": own_entries if viewer_color == "black" else opponent_entries,
+        }
+        if turn_item["white"] or turn_item["black"]:
+            turns.append(turn_item)
+
+    return {
+        "viewer_color": viewer_color,
+        "last_move_number": int(scoresheet.get("last_move_number", 0) or 0),
+        "turns": turns,
+    }
+
+
+def serialize_engine_scoresheets(engine: Any) -> dict[str, dict[str, Any]]:
+    return {
+        "white": serialize_scoresheet(getattr(engine, "_whites_scoresheet", None)),  # noqa: SLF001
+        "black": serialize_scoresheet(getattr(engine, "_blacks_scoresheet", None)),  # noqa: SLF001
+    }
+
+
+def reconstruct_scoresheets_from_moves(moves: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    white_own: list[list[dict[str, Any]]] = []
+    white_opponent: list[list[dict[str, Any]]] = []
+    black_own: list[list[dict[str, Any]]] = []
+    black_opponent: list[list[dict[str, Any]]] = []
+    last_move_number = 0
+
+    for index, move in enumerate(moves):
+        ply = move.get("ply")
+        turn = (ply + 1) // 2 if isinstance(ply, int) and ply > 0 else (index // 2) + 1
+        color = str(move.get("color") or "").lower()
+        if color not in {"white", "black"}:
+            color = "white" if index % 2 == 0 else "black"
+        last_move_number = max(last_move_number, turn)
+
+        pair = {
+            "question": {
+                "question_type": str(move.get("question_type") or "COMMON").upper(),
+                "move_uci": move.get("uci"),
+            },
+            "answer": {
+                "main_announcement": move.get("announcement"),
+                "special_announcement": move.get("special_announcement"),
+                "capture_square": move.get("capture_square"),
+                "checks": [],
+                "move_done": bool(move.get("move_done", False)),
+            },
+        }
+        opponent_pair = {
+            "question": {"question_type": pair["question"]["question_type"]},
+            "answer": dict(pair["answer"]),
+        }
+
+        _append_turn_entry(white_own, turn, pair if color == "white" else None)
+        _append_turn_entry(white_opponent, turn, opponent_pair if color == "black" else None)
+        _append_turn_entry(black_own, turn, pair if color == "black" else None)
+        _append_turn_entry(black_opponent, turn, opponent_pair if color == "white" else None)
+
+    return {
+        "white": {"color": "white", "last_move_number": last_move_number, "moves_own": white_own, "moves_opponent": white_opponent},
+        "black": {"color": "black", "last_move_number": last_move_number, "moves_own": black_own, "moves_opponent": black_opponent},
+    }
+
+
+def _append_turn_entry(target: list[list[dict[str, Any]]], turn: int, value: dict[str, Any] | None) -> None:
+    if value is None:
+        return
+    while len(target) < turn:
+        target.append([])
+    target[turn - 1].append(value)
+
+
+def _normalize_scoresheet_entry(entry: dict[str, Any], *, perspective: Literal["own", "opponent"]) -> str | None:
+    if not isinstance(entry, dict):
+        return None
+    question = entry.get("question") if isinstance(entry.get("question"), dict) else {}
+    answer = entry.get("answer") if isinstance(entry.get("answer"), dict) else {}
+    question_type = str(question.get("question_type") or "").upper()
+    move_uci = question.get("move_uci")
+    answer_texts = _scoresheet_answer_texts(answer)
+    if not answer_texts:
+        return None
+
+    if perspective == "own":
+        if question_type == "ASK_ANY":
+            return "Ask any pawn captures — " + " · ".join(answer_texts)
+        if isinstance(move_uci, str) and move_uci.strip():
+            return move_uci.strip().lower() + " — " + " · ".join(answer_texts)
+        return " · ".join(answer_texts)
+
+    if question_type == "ASK_ANY":
+        return "Opponent asked any pawn captures — " + " · ".join(answer_texts)
+    return "Opponent move — " + " · ".join(answer_texts)
+
+
+def _scoresheet_answer_texts(answer: dict[str, Any]) -> list[str]:
+    texts: list[str] = []
+    main = answer.get("main_announcement")
+    if isinstance(main, str) and main in _ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS:
+        texts.append(_format_public_announcement(main, answer.get("capture_square")))
+    special = answer.get("special_announcement")
+    if isinstance(special, str) and special in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
+        texts.append(_format_public_announcement(special, None))
+    return [text for text in texts if text]

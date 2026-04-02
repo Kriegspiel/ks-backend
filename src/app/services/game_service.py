@@ -25,7 +25,16 @@ from app.models.game import (
 from app.services.clock_service import ClockService
 from app.services.code_generator import generate_game_code
 from app.services.engine_adapter import ask_any, attempt_move, create_new_game, deserialize_game_state, serialize_game_state
-from app.services.state_projection import allowed_moves_for_player, build_referee_log, build_referee_turns, compute_possible_actions, project_player_fen
+from app.services.state_projection import (
+    allowed_moves_for_player,
+    build_referee_log,
+    build_referee_turns,
+    build_viewer_scoresheet,
+    compute_possible_actions,
+    project_player_fen,
+    reconstruct_scoresheets_from_moves,
+    serialize_engine_scoresheets,
+)
 
 PlayerColor = Literal["white", "black"]
 logger = structlog.get_logger("app.game")
@@ -259,6 +268,19 @@ class GameService:
             return deserialize_game_state(state)
         return create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
 
+    @staticmethod
+    def _stored_scoresheets(game: dict[str, Any], engine: Any | None = None) -> dict[str, dict[str, Any]]:
+        white = game.get("white_scoresheet")
+        black = game.get("black_scoresheet")
+        if isinstance(white, dict) and isinstance(black, dict):
+            return {"white": white, "black": black}
+        moves = game.get("moves", [])
+        if moves:
+            return reconstruct_scoresheets_from_moves(moves)
+        if engine is not None:
+            return serialize_engine_scoresheets(engine)
+        return reconstruct_scoresheets_from_moves(moves)
+
     def _active_time_control(self, *, game: dict[str, Any], now: datetime) -> dict[str, Any]:
         time_control = game.get("time_control")
         if isinstance(time_control, dict):
@@ -355,11 +377,14 @@ class GameService:
                 document["white"] = bot_player
                 document["black"] = creator
             engine = create_new_game(any_rule=request.rule_variant == "berkeley_any")
+            scoresheets = serialize_engine_scoresheets(engine)
             document.update(
                 {
                     "state": "active",
                     "turn": "white",
                     "engine_state": serialize_game_state(engine),
+                    "white_scoresheet": scoresheets["white"],
+                    "black_scoresheet": scoresheets["black"],
                     "moves": [],
                     "time_control": self._clock.default_time_control(now=now, active_color="white"),
                     "expires_at": None,
@@ -514,6 +539,7 @@ class GameService:
 
         engine = self._load_or_bootstrap_engine(game)
         time_control = self._active_time_control(game=game, now=now)
+        stored_scoresheets = self._stored_scoresheets(game, engine)
         return GameStateResponse(
             game_id=str(game["_id"]),
             state=game["state"],
@@ -527,6 +553,7 @@ class GameService:
                 viewer_color=color,
                 turn=game.get("turn"),
             ),
+            scoresheet=build_viewer_scoresheet(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
             referee_log=build_referee_log(game.get("moves", [])),
             referee_turns=build_referee_turns(game.get("moves", [])),
             possible_actions=compute_possible_actions(
@@ -583,8 +610,11 @@ class GameService:
         )
         timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
 
+        scoresheets = serialize_engine_scoresheets(engine)
         set_payload: dict[str, Any] = {
             "engine_state": serialize_game_state(engine),
+            "white_scoresheet": scoresheets["white"],
+            "black_scoresheet": scoresheets["black"],
             "turn": outcome["turn"],
             "time_control": advanced_time_control,
             "updated_at": now,
@@ -676,8 +706,11 @@ class GameService:
         )
         timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
 
+        scoresheets = serialize_engine_scoresheets(engine)
         set_payload: dict[str, Any] = {
             "engine_state": serialize_game_state(engine),
+            "white_scoresheet": scoresheets["white"],
+            "black_scoresheet": scoresheets["black"],
             "turn": outcome["turn"],
             "time_control": advanced_time_control,
             "updated_at": now,
@@ -757,6 +790,26 @@ class GameService:
 
         logger.info("game_resigned", game_id=game_id, user_id=user_id, winner=winner)
         return {"result": {"winner": winner, "reason": "resignation"}}
+
+    async def get_game_transcript(self, *, game_id: str, user_id: str) -> GameTranscriptResponse:
+        game = await self.get_game_or_archive(game_id=game_id)
+        if game is None:
+            raise GameNotFoundError()
+
+        if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
+            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access an active game transcript")
+
+        moves = game.get("moves", [])
+        replay_fens = self._build_replay_fens(moves)
+        transcript_moves = [
+            self._to_transcript_move(move, replay_fen=replay_fens[index] if index < len(replay_fens) else None)
+            for index, move in enumerate(moves)
+        ]
+        return GameTranscriptResponse(
+            game_id=str(game["_id"]),
+            rule_variant=game.get("rule_variant", "berkeley_any"),
+            moves=transcript_moves,
+        )
 
     async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:
         oid = self._id_query(game_id)
