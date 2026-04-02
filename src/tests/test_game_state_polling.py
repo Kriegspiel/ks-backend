@@ -140,12 +140,12 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
     assert black_state.possible_actions == []
     assert black_state.allowed_moves == []
     assert white_state.scoresheet.viewer_color == "white"
-    assert white_state.scoresheet.turns[0].white == ["Move attempt — Move complete"]
-    assert black_state.scoresheet.turns[0].white == ["Opponent move — Move complete"]
+    assert [entry.message for entry in white_state.scoresheet.turns[0].white] == ["Move attempt — Move complete"]
+    assert [entry.message for entry in black_state.scoresheet.turns[0].white] == ["Opponent move — Move complete"]
     assert len(white_state.referee_log) == 2
     assert white_state.referee_log[0].announcement == "REGULAR_MOVE"
     assert white_state.referee_log[1].announcement == "HAS_ANY"
-    assert [turn.model_dump() for turn in white_state.referee_turns] == [{"turn": 1, "white": ["Move attempt — Move complete"], "black": ["Ask any pawn captures — Has pawn captures"]}]
+    assert [turn.model_dump() for turn in white_state.referee_turns] == [{"turn": 1, "white": [{"kind": "move", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Move complete", "messages": ["Move complete"], "move_uci": "e2e4", "question_type": "COMMON"}], "black": [{"kind": "ask_any", "actor": "self", "prompt": "Ask any pawn captures", "message": "Ask any pawn captures — Has pawn captures", "messages": ["Has pawn captures"], "move_uci": None, "question_type": "ASK_ANY"}]}]
 
 
 @pytest.mark.asyncio
@@ -217,7 +217,7 @@ def test_build_referee_turns_records_illegal_move_announcements() -> None:
         ]
     )
 
-    assert turns == [{"turn": 1, "white": ["Move attempt — Illegal move"], "black": []}]
+    assert turns == [{"turn": 1, "white": [{"kind": "illegal_move", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Illegal move", "messages": ["Illegal move"], "move_uci": "e2e4", "question_type": "COMMON"}], "black": []}]
 
 
 def test_build_referee_turns_groups_live_moves_by_turn_and_color() -> None:
@@ -232,8 +232,8 @@ def test_build_referee_turns_groups_live_moves_by_turn_and_color() -> None:
     )
 
     assert turns == [
-        {"turn": 1, "white": ["Move attempt — Move complete"], "black": ["Move attempt — Move complete"]},
-        {"turn": 2, "white": ["Ask any pawn captures — Has pawn captures"], "black": ["Move attempt — Capture done at D4 · Check on file"]},
+        {"turn": 1, "white": [{"kind": "move", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Move complete", "messages": ["Move complete"], "move_uci": "c2c3", "question_type": "COMMON"}], "black": [{"kind": "move", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Move complete", "messages": ["Move complete"], "move_uci": "e7e5", "question_type": "COMMON"}]},
+        {"turn": 2, "white": [{"kind": "ask_any", "actor": "self", "prompt": "Ask any pawn captures", "message": "Ask any pawn captures — Has pawn captures", "messages": ["Has pawn captures"], "move_uci": None, "question_type": "ASK_ANY"}], "black": [{"kind": "capture", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Capture done at D4 · Check on file", "messages": ["Capture done at D4", "Check on file"], "move_uci": "e5d4", "question_type": "COMMON"}]},
     ]
 
 

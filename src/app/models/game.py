@@ -144,20 +144,32 @@ class RefereeLogItem(BaseModel):
     replay_fen: ReplayFen | None = None
 
 
+class AnnouncementEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["move", "ask_any", "illegal_move", "capture", "status"]
+    actor: Literal["self", "opponent"] | None = None
+    prompt: str | None = None
+    message: str
+    messages: list[str] = Field(default_factory=list)
+    move_uci: str | None = None
+    question_type: str | None = None
+
+
 class RefereeTurnEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     turn: int = Field(ge=1)
-    white: list[str] = Field(default_factory=list)
-    black: list[str] = Field(default_factory=list)
+    white: list[AnnouncementEntry | str] = Field(default_factory=list)
+    black: list[AnnouncementEntry | str] = Field(default_factory=list)
 
 
 class ScoresheetTurn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     turn: int = Field(ge=1)
-    white: list[str] = Field(default_factory=list)
-    black: list[str] = Field(default_factory=list)
+    white: list[AnnouncementEntry | str] = Field(default_factory=list)
+    black: list[AnnouncementEntry | str] = Field(default_factory=list)
 
 
 class ViewerScoresheet(BaseModel):
