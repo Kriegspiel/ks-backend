@@ -164,6 +164,10 @@ async def test_join_game_transitions_waiting_to_active_and_assigns_opposite_colo
     assert saved["state"] == "active"
     assert saved["white"]["user_id"] == "u2"
     assert saved["black"]["user_id"] == "u1"
+    assert saved["white_scoresheet"]["color"] == "white"
+    assert saved["black_scoresheet"]["color"] == "black"
+    assert saved["white_scoresheet"]["moves_own"] == []
+    assert saved["black_scoresheet"]["moves_opponent"] == []
 
 
 @pytest.mark.asyncio

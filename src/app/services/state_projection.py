@@ -221,6 +221,38 @@ def build_viewer_scoresheet(*, viewer_color: PlayerColor, stored_scoresheet: dic
     }
 
 
+def build_viewer_referee_turns(*, viewer_color: PlayerColor, stored_scoresheet: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return build_viewer_scoresheet(viewer_color=viewer_color, stored_scoresheet=stored_scoresheet)['turns']
+
+
+def build_viewer_referee_log(*, viewer_color: PlayerColor, stored_scoresheet: dict[str, Any] | None) -> list[dict[str, Any]]:
+    turns = build_viewer_referee_turns(viewer_color=viewer_color, stored_scoresheet=stored_scoresheet)
+    out: list[dict[str, Any]] = []
+
+    for turn in turns:
+        turn_number = int(turn.get('turn', 0) or 0)
+        for color in ('white', 'black'):
+            entries = turn.get(color, [])
+            if not isinstance(entries, list):
+                continue
+
+            ply = ((turn_number - 1) * 2) + (1 if color == 'white' else 2) if turn_number > 0 else None
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                out.append(
+                    {
+                        'ply': ply,
+                        'announcement': entry.get('message', ''),
+                        'special_announcement': None,
+                        'capture_square': None,
+                        'timestamp': None,
+                    }
+                )
+
+    return out
+
+
 def serialize_engine_scoresheets(engine: Any) -> dict[str, dict[str, Any]]:
     return {
         'white': serialize_scoresheet(getattr(engine, '_whites_scoresheet', None)),  # noqa: SLF001

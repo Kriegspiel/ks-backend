@@ -24,7 +24,8 @@ async def get_session_service() -> SessionService:
 
 
 def _bearer_token(request: Request) -> str | None:
-    header = request.headers.get("authorization")
+    headers = getattr(request, "headers", None)
+    header = headers.get("authorization") if headers is not None else None
     if not header:
         return None
     scheme, _, token = header.partition(" ")

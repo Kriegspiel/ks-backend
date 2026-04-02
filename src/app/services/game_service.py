@@ -27,8 +27,8 @@ from app.services.code_generator import generate_game_code
 from app.services.engine_adapter import ask_any, attempt_move, create_new_game, deserialize_game_state, serialize_game_state
 from app.services.state_projection import (
     allowed_moves_for_player,
-    build_referee_log,
-    build_referee_turns,
+    build_viewer_referee_log,
+    build_viewer_referee_turns,
     build_viewer_scoresheet,
     compute_possible_actions,
     project_player_fen,
@@ -67,8 +67,8 @@ class GameService:
     def __init__(
         self,
         games_collection: Any,
-        users_collection: Any | None = None,
         archives_collection: Any | None = None,
+        users_collection: Any | None = None,
         *,
         site_origin: str = "https://kriegspiel.org",
         rng: Any | None = None,
@@ -448,6 +448,7 @@ class GameService:
 
         now = self.utcnow()
         engine = create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
+        scoresheets = serialize_engine_scoresheets(engine)
         updated = await self._games.find_one_and_update(
             {"_id": game["_id"], "state": "waiting"},
             {
@@ -457,6 +458,8 @@ class GameService:
                     "state": "active",
                     "turn": "white",
                     "engine_state": serialize_game_state(engine),
+                    "white_scoresheet": scoresheets["white"],
+                    "black_scoresheet": scoresheets["black"],
                     "moves": [],
                     "time_control": self._clock.default_time_control(now=now, active_color="white"),
                     "updated_at": now,
@@ -540,6 +543,7 @@ class GameService:
         engine = self._load_or_bootstrap_engine(game)
         time_control = self._active_time_control(game=game, now=now)
         stored_scoresheets = self._stored_scoresheets(game, engine)
+        viewer_scoresheet = build_viewer_scoresheet(viewer_color=color, stored_scoresheet=stored_scoresheets[color])
         return GameStateResponse(
             game_id=str(game["_id"]),
             state=game["state"],
@@ -553,9 +557,9 @@ class GameService:
                 viewer_color=color,
                 turn=game.get("turn"),
             ),
-            scoresheet=build_viewer_scoresheet(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
-            referee_log=build_referee_log(game.get("moves", [])),
-            referee_turns=build_referee_turns(game.get("moves", [])),
+            scoresheet=viewer_scoresheet,
+            referee_log=build_viewer_referee_log(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
+            referee_turns=build_viewer_referee_turns(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
             possible_actions=compute_possible_actions(
                 engine=engine,
                 game_state=game["state"],

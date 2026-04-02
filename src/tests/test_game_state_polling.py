@@ -143,9 +143,13 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
     assert [entry.message for entry in white_state.scoresheet.turns[0].white] == ["Move attempt — Move complete"]
     assert [entry.message for entry in black_state.scoresheet.turns[0].white] == ["Opponent move — Move complete"]
     assert len(white_state.referee_log) == 2
-    assert white_state.referee_log[0].announcement == "REGULAR_MOVE"
-    assert white_state.referee_log[1].announcement == "HAS_ANY"
-    assert [turn.model_dump() for turn in white_state.referee_turns] == [{"turn": 1, "white": [{"kind": "move", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Move complete", "messages": ["Move complete"], "move_uci": "e2e4", "question_type": "COMMON"}], "black": [{"kind": "ask_any", "actor": "self", "prompt": "Ask any pawn captures", "message": "Ask any pawn captures — Has pawn captures", "messages": ["Has pawn captures"], "move_uci": None, "question_type": "ASK_ANY"}]}]
+    assert white_state.referee_log[0].announcement == "Move attempt — Move complete"
+    assert white_state.referee_log[1].announcement == "Opponent asked any pawn captures — Has pawn captures"
+    assert len(black_state.referee_log) == 2
+    assert black_state.referee_log[0].announcement == "Opponent move — Move complete"
+    assert black_state.referee_log[1].announcement == "Ask any pawn captures — Has pawn captures"
+    assert [turn.model_dump() for turn in white_state.referee_turns] == [{"turn": 1, "white": [{"kind": "move", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Move complete", "messages": ["Move complete"], "move_uci": "e2e4", "question_type": "COMMON"}], "black": [{"kind": "ask_any", "actor": "opponent", "prompt": "Opponent asked any pawn captures", "message": "Opponent asked any pawn captures — Has pawn captures", "messages": ["Has pawn captures"], "move_uci": None, "question_type": "ASK_ANY"}]}]
+    assert [turn.model_dump() for turn in black_state.referee_turns] == [{"turn": 1, "white": [{"kind": "move", "actor": "opponent", "prompt": "Opponent move", "message": "Opponent move — Move complete", "messages": ["Move complete"], "move_uci": None, "question_type": "COMMON"}], "black": [{"kind": "ask_any", "actor": "self", "prompt": "Ask any pawn captures", "message": "Ask any pawn captures — Has pawn captures", "messages": ["Has pawn captures"], "move_uci": None, "question_type": "ASK_ANY"}]}]
 
 
 @pytest.mark.asyncio
