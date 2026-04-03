@@ -112,7 +112,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     async def health(response: Response) -> dict[str, str]:
-        disconnected = {"status": "error", "db": "disconnected"}
+        disconnected = {
+            "status": "error",
+            "db": "disconnected",
+            "version": app.state.settings.APP_VERSION,
+        }
 
         if not getattr(app.state, "db_ready", False):
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -121,7 +125,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             db = get_db()
             await db.command("ping")
-            return {"status": "ok", "db": "connected"}
+            return {
+                "status": "ok",
+                "db": "connected",
+                "version": app.state.settings.APP_VERSION,
+            }
         except Exception:
             app.state.db_ready = False
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
