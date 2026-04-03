@@ -199,10 +199,12 @@ async def test_join_game_transitions_waiting_to_active_and_assigns_opposite_colo
     assert saved["state"] == "active"
     assert saved["white"]["user_id"] == "u2"
     assert saved["black"]["user_id"] == "u1"
-    assert saved["white_scoresheet"]["color"] == "white"
-    assert saved["black_scoresheet"]["color"] == "black"
-    assert saved["white_scoresheet"]["moves_own"] == []
-    assert saved["black_scoresheet"]["moves_opponent"] == []
+    assert "white_scoresheet" not in saved
+    assert "black_scoresheet" not in saved
+    assert saved["engine_state"]["white_scoresheet"]["color"] == "white"
+    assert saved["engine_state"]["black_scoresheet"]["color"] == "black"
+    assert saved["engine_state"]["white_scoresheet"]["moves_own"] == []
+    assert saved["engine_state"]["black_scoresheet"]["moves_opponent"] == []
 
 
 @pytest.mark.asyncio
@@ -396,6 +398,20 @@ async def test_get_lobby_stats_counts_active_and_completed_windows() -> None:
     assert stats.completed_last_hour == 1
     assert stats.completed_last_24_hours == 2
     assert stats.completed_total == 3
+
+
+@pytest.mark.asyncio
+async def test_stored_scoresheets_falls_back_to_legacy_root_fields() -> None:
+    legacy = {
+        "white_scoresheet": {"color": "white", "last_move_number": 3, "moves_own": [], "moves_opponent": []},
+        "black_scoresheet": {"color": "black", "last_move_number": 3, "moves_own": [], "moves_opponent": []},
+        "moves": [],
+    }
+
+    scoresheets = GameService._stored_scoresheets(legacy)
+
+    assert scoresheets["white"]["color"] == "white"
+    assert scoresheets["black"]["color"] == "black"
 
 
 @pytest.mark.asyncio

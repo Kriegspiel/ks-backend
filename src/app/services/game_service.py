@@ -486,6 +486,12 @@ class GameService:
 
     @staticmethod
     def _stored_scoresheets(game: dict[str, Any], engine: Any | None = None) -> dict[str, dict[str, Any]]:
+        engine_state = game.get("engine_state")
+        if isinstance(engine_state, dict):
+            white = engine_state.get("white_scoresheet")
+            black = engine_state.get("black_scoresheet")
+            if isinstance(white, dict) and isinstance(black, dict):
+                return {"white": white, "black": black}
         white = game.get("white_scoresheet")
         black = game.get("black_scoresheet")
         if isinstance(white, dict) and isinstance(black, dict):
@@ -657,14 +663,11 @@ class GameService:
                 document["white"] = bot_player
                 document["black"] = creator
             engine = create_new_game(any_rule=request.rule_variant == "berkeley_any")
-            scoresheets = serialize_engine_scoresheets(engine)
             document.update(
                 {
                     "state": "active",
                     "turn": "white",
                     "engine_state": serialize_game_state(engine),
-                    "white_scoresheet": scoresheets["white"],
-                    "black_scoresheet": scoresheets["black"],
                     "moves": [],
                     "time_control": self._clock.default_time_control(now=now, active_color="white"),
                     "expires_at": None,
@@ -729,7 +732,6 @@ class GameService:
             black = creator
 
         engine = create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
-        scoresheets = serialize_engine_scoresheets(engine)
         updated = await self._games.find_one_and_update(
             {"_id": game["_id"], "state": "waiting"},
             {
@@ -739,13 +741,12 @@ class GameService:
                     "state": "active",
                     "turn": "white",
                     "engine_state": serialize_game_state(engine),
-                    "white_scoresheet": scoresheets["white"],
-                    "black_scoresheet": scoresheets["black"],
                     "moves": [],
                     "time_control": self._clock.default_time_control(now=now, active_color="white"),
                     "updated_at": now,
                     "expires_at": None,
-                }
+                },
+                "$unset": {"white_scoresheet": "", "black_scoresheet": ""},
             },
             return_document=ReturnDocument.AFTER,
         )
@@ -900,11 +901,8 @@ class GameService:
         )
         timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
 
-        scoresheets = serialize_engine_scoresheets(engine)
         set_payload: dict[str, Any] = {
             "engine_state": serialize_game_state(engine),
-            "white_scoresheet": scoresheets["white"],
-            "black_scoresheet": scoresheets["black"],
             "turn": outcome["turn"],
             "time_control": advanced_time_control,
             "updated_at": now,
@@ -925,6 +923,7 @@ class GameService:
             {"_id": oid, "state": "active"},
             {
                 "$set": set_payload,
+                "$unset": {"white_scoresheet": "", "black_scoresheet": ""},
                 "$push": {"moves": move_record},
                 "$inc": {"move_number": 1 if outcome["move_done"] else 0},
             },
@@ -997,11 +996,8 @@ class GameService:
         )
         timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
 
-        scoresheets = serialize_engine_scoresheets(engine)
         set_payload: dict[str, Any] = {
             "engine_state": serialize_game_state(engine),
-            "white_scoresheet": scoresheets["white"],
-            "black_scoresheet": scoresheets["black"],
             "turn": outcome["turn"],
             "time_control": advanced_time_control,
             "updated_at": now,
@@ -1018,6 +1014,7 @@ class GameService:
             {"_id": oid, "state": "active"},
             {
                 "$set": set_payload,
+                "$unset": {"white_scoresheet": "", "black_scoresheet": ""},
                 "$push": {"moves": move_record},
             },
             return_document=ReturnDocument.AFTER,
