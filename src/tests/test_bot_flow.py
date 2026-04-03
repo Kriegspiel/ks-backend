@@ -96,6 +96,7 @@ async def test_create_game_with_bot_immediately_activates() -> None:
                 "display_name": "Random Bot",
                 "owner_email": "owner@example.com",
                 "description": "Plays random moves",
+                "supported_rule_variants": ["berkeley", "berkeley_any"],
             },
             "stats": {"elo": 1315},
         }
@@ -112,6 +113,38 @@ async def test_create_game_with_bot_immediately_activates() -> None:
     assert response.bot == {"bot_id": str(bot_id), "username": "randobot"}
     assert games.docs[0]["black"]["role"] == "bot"
     assert games.docs[0]["state"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_create_game_with_bot_rejects_unsupported_ruleset() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "randobotany",
+            "username_display": "Random Any Bot",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "Random Any Bot",
+                "owner_email": "owner@example.com",
+                "description": "Asks any first",
+                "supported_rule_variants": ["berkeley_any"],
+            },
+        }
+    )
+    service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
+
+    with pytest.raises(GameValidationError) as exc:
+        await service.create_game(
+            user_id="u1",
+            username="creator",
+            request=CreateGameRequest(rule_variant="berkeley", opponent_type="bot", bot_id=str(bot_id), play_as="white", time_control="rapid"),
+        )
+
+    assert exc.value.code == "BOT_RULE_VARIANT_UNSUPPORTED"
 
 
 @pytest.mark.asyncio
@@ -441,6 +474,7 @@ async def test_user_service_can_issue_and_authenticate_bot_token() -> None:
     assert user.role == "bot"
     assert user.bot_profile is not None
     assert user.bot_profile.owner_email == "owner@example.com"
+    assert user.bot_profile.supported_rule_variants == ["berkeley", "berkeley_any"]
     authenticated = await service.authenticate_bot_token(token)
     assert authenticated is not None
     assert authenticated.username == "randobot"
@@ -462,6 +496,7 @@ async def test_bot_service_lists_active_bots() -> None:
                     "owner_email": "owner@example.com",
                     "description": "Plays random moves",
                     "listed": True,
+                    "supported_rule_variants": ["berkeley", "berkeley_any"],
                 },
             },
             {
@@ -484,6 +519,7 @@ async def test_bot_service_lists_active_bots() -> None:
     listed = await service.list_bots()
     assert [bot.username for bot in listed.bots] == ["randobot"]
     assert listed.bots[0].elo == 1200
+    assert listed.bots[0].supported_rule_variants == ["berkeley", "berkeley_any"]
 
 
 @pytest.mark.asyncio
@@ -638,3 +674,27 @@ async def test_probe_bots_default_to_unlisted() -> None:
 
     assert user.bot_profile is not None
     assert user.bot_profile.listed is False
+
+
+@pytest.mark.asyncio
+async def test_random_any_defaults_to_berkeley_any_only() -> None:
+    users = FakeUsersCollection()
+    service = UserService(users)
+
+    user, _token = await service.create_bot(
+        type(
+            "Payload",
+            (),
+            {
+                "username": "randobotany",
+                "display_name": "Random Any Bot",
+                "owner_email": "owner@example.com",
+                "description": "Asks any first",
+                "listed": True,
+                "supported_rule_variants": None,
+            },
+        )()
+    )
+
+    assert user.bot_profile is not None
+    assert user.bot_profile.supported_rule_variants == ["berkeley_any"]

@@ -58,11 +58,28 @@ class BotRegisterRequest(BaseModel):
     owner_email: str = Field(min_length=3, max_length=320)
     description: str = Field(default="", max_length=280)
     listed: bool | None = None
+    supported_rule_variants: list[str] | None = None
 
     @field_validator("owner_email")
     @classmethod
     def validate_owner_email_format(cls, value: str) -> str:
         return RegisterRequest.validate_email_format(value)
+
+    @field_validator("supported_rule_variants")
+    @classmethod
+    def validate_supported_rule_variants(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized: list[str] = []
+        for item in value:
+            rule = item.strip()
+            if rule not in {"berkeley", "berkeley_any"}:
+                raise ValueError("Unsupported rule variant")
+            if rule not in normalized:
+                normalized.append(rule)
+        if not normalized:
+            raise ValueError("At least one supported rule variant is required")
+        return normalized
 
 
 class BotRegisterResponse(BaseModel):

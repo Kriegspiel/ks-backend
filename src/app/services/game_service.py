@@ -487,6 +487,17 @@ class GameService:
         return bot
 
     @staticmethod
+    def _bot_supported_rule_variants(bot: dict[str, Any]) -> list[str]:
+        profile = bot.get("bot_profile") or {}
+        variants = profile.get("supported_rule_variants")
+        if isinstance(variants, list) and variants:
+            return [str(item) for item in variants if str(item) in {"berkeley", "berkeley_any"}]
+        username = str(bot.get("username") or "").strip().lower()
+        if username == "randobotany":
+            return ["berkeley_any"]
+        return ["berkeley", "berkeley_any"]
+
+    @staticmethod
     def _player_embed(*, user_id: str, username: str, role: str = "user") -> dict[str, Any]:
         return {"user_id": user_id, "username": username, "connected": True, "role": role}
 
@@ -574,6 +585,8 @@ class GameService:
 
         if request.opponent_type == "bot":
             bot = await self._load_bot(request.bot_id or "")
+            if request.rule_variant not in self._bot_supported_rule_variants(bot):
+                raise GameValidationError(code="BOT_RULE_VARIANT_UNSUPPORTED", message="Selected bot does not support that ruleset")
             joiner_color: PlayerColor = "black" if color == "white" else "white"
             bot_player = self._player_embed(user_id=str(bot["_id"]), username=bot["username"], role="bot")
             if color == "white":
