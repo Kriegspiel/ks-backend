@@ -59,3 +59,43 @@ def test_serialize_deserialize_round_trip_preserves_state() -> None:
     assert restored.turn == game.turn
     assert restored.must_use_pawns == game.must_use_pawns
     assert [m.uci() for m in restored._board.move_stack] == [m.uci() for m in game._board.move_stack]  # noqa: SLF001
+
+
+def test_deserialize_repairs_empty_possible_to_ask_when_pawn_captures_required() -> None:
+    game = create_new_game(any_rule=True)
+    attempt_move(game, "d2c3")
+    attempt_move(game, "b2b3")
+    attempt_move(game, "e7e5")
+    attempt_move(game, "g2f3")
+    attempt_move(game, "d2d4")
+    result = ask_any(game)
+
+    assert result["announcement"] == "HAS_ANY"
+
+    payload = serialize_game_state(game)
+    payload["possible_to_ask"] = []
+
+    restored = deserialize_game_state(payload)
+    restored_moves = sorted(
+        move.chess_move.uci()
+        for move in restored.possible_to_ask
+        if move.question_type.name == "COMMON" and move.chess_move is not None
+    )
+
+    assert restored.must_use_pawns is True
+    assert restored_moves == [
+        "a7b6",
+        "b7a6",
+        "b7c6",
+        "c7b6",
+        "c7d6",
+        "d7c6",
+        "d7e6",
+        "e5d4",
+        "e5f4",
+        "f7e6",
+        "f7g6",
+        "g7f6",
+        "g7h6",
+        "h7g6",
+    ]
