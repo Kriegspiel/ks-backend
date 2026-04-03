@@ -136,6 +136,12 @@ class UserService:
         blocked_markers = ("e2e", "test", "probe")
         return not any(marker in combined for marker in blocked_markers)
 
+    @staticmethod
+    def _default_supported_rule_variants(*, username: str) -> list[str]:
+        if username == "randobotany":
+            return ["berkeley_any"]
+        return ["berkeley", "berkeley_any"]
+
     async def create_bot(self, registration: BotRegisterRequest) -> tuple[UserModel, str]:
         username = self.canonical_username(registration.username)
         existing = await self._users.find_one({"username": username})
@@ -152,6 +158,7 @@ class UserService:
             display_name=registration.display_name.strip(),
             description=registration.description.strip(),
         )
+        supported_rule_variants = getattr(registration, "supported_rule_variants", None) or self._default_supported_rule_variants(username=username)
         payload = {
             "username": username,
             "username_display": registration.display_name.strip(),
@@ -170,6 +177,7 @@ class UserService:
                 "api_token_id": token_id,
                 "api_token_hash": token_hash,
                 "registered_at": now,
+                "supported_rule_variants": supported_rule_variants,
             },
             "stats": {
                 "games_played": 0,

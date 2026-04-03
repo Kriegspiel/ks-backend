@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+SupportedRuleVariant = str
+
 
 class BotProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -16,6 +18,7 @@ class BotProfile(BaseModel):
     api_token_hash: str | None = None
     registered_at: datetime | None = None
     last_bot_game_joined_at: datetime | None = None
+    supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: ["berkeley", "berkeley_any"])
 
 
 class BotListItem(BaseModel):
@@ -26,6 +29,7 @@ class BotListItem(BaseModel):
     display_name: str
     description: str = ""
     elo: int = 1200
+    supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: ["berkeley", "berkeley_any"])
 
 
 class BotListResponse(BaseModel):
