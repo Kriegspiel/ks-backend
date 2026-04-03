@@ -24,6 +24,7 @@ class BotListItem(BaseModel):
     username: str
     display_name: str
     description: str = ""
+    elo: int = 1200
 
 
 class BotListResponse(BaseModel):

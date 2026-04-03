@@ -22,6 +22,7 @@ class BotService:
                     username=doc["username"],
                     display_name=profile.get("display_name") or doc.get("username_display") or doc["username"],
                     description=profile.get("description") or "",
+                    elo=int((doc.get("stats") or {}).get("elo", 1200)),
                 )
             )
         return BotListResponse(bots=bots)

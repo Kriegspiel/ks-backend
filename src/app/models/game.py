@@ -269,6 +269,7 @@ class PublicPlayer(BaseModel):
     username: str
     connected: bool
     role: Literal["user", "bot"] = "user"
+    elo: int = 1200
 
 
 class GameMetadataResponse(BaseModel):

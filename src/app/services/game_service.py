@@ -344,6 +344,7 @@ class GameService:
             "username": player["username"],
             "connected": player.get("connected", True),
             "role": player.get("role", "user"),
+            "elo": int((player.get("stats") or {}).get("elo", 1200)),
         }
 
     @classmethod
