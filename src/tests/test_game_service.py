@@ -103,6 +103,28 @@ class FakeGamesCollection:
         return current
 
 
+class FakeUsersCollection:
+    def __init__(self, docs: list[dict] | None = None):
+        self.docs = docs or []
+
+    async def find_one(self, query: dict, projection: dict | None = None):
+        for doc in self.docs:
+            matches = True
+            for key, expected in query.items():
+                current = doc
+                for part in key.split("."):
+                    if not isinstance(current, dict):
+                        matches = False
+                        break
+                    current = current.get(part)
+                if not matches or current != expected:
+                    matches = False
+                    break
+            if matches:
+                return doc
+        return None
+
+
 @pytest.mark.asyncio
 async def test_create_game_assigns_black_when_requested() -> None:
     games = FakeGamesCollection()
@@ -298,6 +320,39 @@ async def test_get_game_and_my_games_include_only_participant_games() -> None:
 
     with pytest.raises(GameNotFoundError):
         await service.get_game(game_id="invalid")
+
+
+@pytest.mark.asyncio
+async def test_get_game_uses_live_user_elo_over_stale_embedded_elo() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection(
+        docs=[
+            {"_id": "u1", "username": "w", "stats": {"elo": 1333}},
+            {"_id": "u2", "username": "b", "stats": {"elo": 1444}},
+        ]
+    )
+    now = datetime.now(UTC)
+    gid = ObjectId()
+    games.docs.append(
+        {
+            "_id": gid,
+            "game_code": "R4N7P2",
+            "rule_variant": "berkeley_any",
+            "white": {"user_id": "u1", "username": "w", "connected": True, "elo": 1200},
+            "black": {"user_id": "u2", "username": "b", "connected": True, "elo": 1200},
+            "state": "active",
+            "turn": "white",
+            "move_number": 12,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games, users_collection=users)
+
+    game = await service.get_game(game_id=str(gid))
+
+    assert game.white.elo == 1333
+    assert game.black.elo == 1444
 
 
 @pytest.mark.asyncio

@@ -337,22 +337,28 @@ class GameService:
             return None, white
         return white, black
 
-    @classmethod
-    def _public_player(cls, player: dict[str, Any] | None) -> dict[str, Any] | None:
+    async def _public_player(self, player: dict[str, Any] | None) -> dict[str, Any] | None:
         if not player:
             return None
+        elo = player.get("elo")
+        if not isinstance(elo, int):
+            elo = int((player.get("stats") or {}).get("elo", 1200))
+        user_id = player.get("user_id")
+        if user_id:
+            user_doc = await self._find_user_doc(str(user_id))
+            if user_doc is not None:
+                elo = int((user_doc.get("stats") or {}).get("elo", elo))
         return {
             "username": player["username"],
             "connected": player.get("connected", True),
             "role": player.get("role", "user"),
-            "elo": int((player.get("stats") or {}).get("elo", 1200)),
+            "elo": elo,
         }
 
-    @classmethod
-    def _to_metadata(cls, doc: dict[str, Any]) -> GameMetadataResponse:
-        white, black = cls._resolve_players(doc)
-        white_payload = cls._public_player(white) or {"username": "", "connected": False, "role": "user"}
-        black_payload = cls._public_player(black)
+    async def _to_metadata(self, doc: dict[str, Any]) -> GameMetadataResponse:
+        white, black = self._resolve_players(doc)
+        white_payload = await self._public_player(white) or {"username": "", "connected": False, "role": "user", "elo": 1200}
+        black_payload = await self._public_player(black)
         return GameMetadataResponse.model_validate(
             {
                 "game_id": str(doc["_id"]),
@@ -728,7 +734,7 @@ class GameService:
 
         out: list[GameMetadataResponse] = []
         async for doc in cursor:
-            out.append(self._to_metadata(doc))
+            out.append(await self._to_metadata(doc))
         return out
 
     async def get_game(self, *, game_id: str) -> GameMetadataResponse:
@@ -743,8 +749,8 @@ class GameService:
             "rule_variant": game["rule_variant"],
             "state": game["state"],
             "opponent_type": game.get("opponent_type", "human"),
-            "white": self._public_player(white),
-            "black": self._public_player(black),
+            "white": await self._public_player(white),
+            "black": await self._public_player(black),
             "turn": game.get("turn"),
             "move_number": game.get("move_number", 1),
             "created_at": game["created_at"],
