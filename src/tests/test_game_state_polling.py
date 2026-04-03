@@ -14,6 +14,7 @@ from app.main import create_app
 from app.models.user import UserModel
 from app.routers.game import get_game_service
 from app.services.engine_adapter import create_new_game, serialize_game_state
+from app.services.engine_adapter import ask_any, attempt_move
 from app.services.game_service import GameForbiddenError, GameService
 from app.services.state_projection import build_referee_log, build_referee_turns
 
@@ -141,6 +142,60 @@ def active_game_doc() -> dict:
     }
 
 
+@pytest.fixture
+def corrupted_has_any_game_doc() -> dict:
+    gid = ObjectId()
+    now = datetime.now(UTC)
+    engine = create_new_game(any_rule=True)
+    attempt_move(engine, "e2e4")
+    attempt_move(engine, "b7c6")
+    attempt_move(engine, "d7d6")
+    attempt_move(engine, "e4d5")
+    attempt_move(engine, "e4e5")
+    attempt_move(engine, "c8e6")
+    ask_any(engine)
+    payload = serialize_game_state(engine)
+    payload["possible_to_ask"] = [
+        {"question_type": "COMMON", "move_uci": "a2b3"},
+        {"question_type": "COMMON", "move_uci": "b2a3"},
+        {"question_type": "COMMON", "move_uci": "b2c3"},
+        {"question_type": "COMMON", "move_uci": "c2b3"},
+        {"question_type": "COMMON", "move_uci": "c2d3"},
+        {"question_type": "COMMON", "move_uci": "d2c3"},
+        {"question_type": "COMMON", "move_uci": "d2e3"},
+        {"question_type": "COMMON", "move_uci": "f2e3"},
+        {"question_type": "COMMON", "move_uci": "f2g3"},
+        {"question_type": "COMMON", "move_uci": "g2f3"},
+        {"question_type": "COMMON", "move_uci": "g2h3"},
+        {"question_type": "COMMON", "move_uci": "h2g3"},
+    ]
+
+    return {
+        "_id": gid,
+        "game_code": "A7K2M9",
+        "rule_variant": "berkeley_any",
+        "creator_color": "white",
+        "white": {"user_id": "u1", "username": "fil", "connected": True},
+        "black": {"user_id": "u2", "username": "randobot", "connected": True},
+        "state": "active",
+        "turn": "white",
+        "move_number": 5,
+        "moves": [
+            {"ply": 1, "color": "white", "question_type": "COMMON", "uci": "e2e4", "announcement": "REGULAR_MOVE", "special_announcement": None, "capture_square": None, "move_done": True, "timestamp": now},
+            {"ply": 2, "color": "black", "question_type": "COMMON", "uci": "b7c6", "announcement": "ILLEGAL_MOVE", "special_announcement": None, "capture_square": None, "move_done": False, "timestamp": now},
+            {"ply": 3, "color": "black", "question_type": "COMMON", "uci": "d7d6", "announcement": "REGULAR_MOVE", "special_announcement": None, "capture_square": None, "move_done": True, "timestamp": now},
+            {"ply": 4, "color": "white", "question_type": "COMMON", "uci": "e4d5", "announcement": "ILLEGAL_MOVE", "special_announcement": None, "capture_square": None, "move_done": False, "timestamp": now},
+            {"ply": 5, "color": "white", "question_type": "COMMON", "uci": "e4e5", "announcement": "REGULAR_MOVE", "special_announcement": None, "capture_square": None, "move_done": True, "timestamp": now},
+            {"ply": 6, "color": "black", "question_type": "COMMON", "uci": "c8e6", "announcement": "REGULAR_MOVE", "special_announcement": None, "capture_square": None, "move_done": True, "timestamp": now},
+            {"ply": 7, "color": "white", "question_type": "ASK_ANY", "uci": None, "announcement": "HAS_ANY", "special_announcement": None, "capture_square": None, "move_done": False, "timestamp": now},
+        ],
+        "engine_state": payload,
+        "created_at": now,
+        "updated_at": now,
+        "time_control": {"white_remaining": 600.0, "black_remaining": 600.0, "increment_seconds": 3, "active_color": "white", "last_updated_at": now},
+    }
+
+
 @pytest.mark.asyncio
 async def test_get_game_state_returns_projected_view_and_actions(active_game_doc: dict) -> None:
     games = FakeGamesCollection()
@@ -170,6 +225,20 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
     assert black_state.referee_log[1].announcement == "Ask any pawn captures — Has pawn captures"
     assert [turn.model_dump() for turn in white_state.referee_turns] == [{"turn": 1, "white": [{"kind": "move", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Move complete", "messages": ["Move complete"], "move_uci": "e2e4", "question_type": "COMMON"}], "black": [{"kind": "ask_any", "actor": "opponent", "prompt": "Opponent asked any pawn captures", "message": "Opponent asked any pawn captures — Has pawn captures", "messages": ["Has pawn captures"], "move_uci": None, "question_type": "ASK_ANY"}]}]
     assert [turn.model_dump() for turn in black_state.referee_turns] == [{"turn": 1, "white": [{"kind": "move", "actor": "opponent", "prompt": "Opponent move", "message": "Opponent move — Move complete", "messages": ["Move complete"], "move_uci": None, "question_type": "COMMON"}], "black": [{"kind": "ask_any", "actor": "self", "prompt": "Ask any pawn captures", "message": "Ask any pawn captures — Has pawn captures", "messages": ["Has pawn captures"], "move_uci": None, "question_type": "ASK_ANY"}]}]
+
+
+@pytest.mark.asyncio
+async def test_get_game_state_repairs_missing_forced_pawn_captures(corrupted_has_any_game_doc: dict) -> None:
+    games = FakeGamesCollection()
+    games.docs.append(corrupted_has_any_game_doc)
+    service = GameService(games)
+
+    state = await service.get_game_state(game_id=str(corrupted_has_any_game_doc["_id"]), user_id="u1")
+
+    assert state.turn == "white"
+    assert state.possible_actions == ["move"]
+    assert "e5d6" in state.allowed_moves
+    assert "e5f6" in state.allowed_moves
 
 
 @pytest.mark.asyncio

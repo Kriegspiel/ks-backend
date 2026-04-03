@@ -388,8 +388,39 @@ class GameService:
     def _load_or_bootstrap_engine(self, game: dict[str, Any]) -> Any:
         state = game.get("engine_state")
         if state:
-            return deserialize_game_state(state)
-        return create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
+            engine = deserialize_game_state(state)
+        else:
+            engine = create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
+        self._repair_forced_pawn_capture_state(game=game, engine=engine)
+        return engine
+
+    @staticmethod
+    def _repair_forced_pawn_capture_state(*, game: dict[str, Any], engine: Any) -> None:
+        if game.get("state") != "active" or not getattr(engine, "must_use_pawns", False):
+            return
+
+        moves = game.get("moves", [])
+        if not moves:
+            return
+
+        last_move = moves[-1]
+        if (
+            last_move.get("question_type") != "ASK_ANY"
+            or last_move.get("announcement") != "HAS_ANY"
+            or bool(last_move.get("move_done"))
+        ):
+            return
+
+        pawn_capture_factory = getattr(engine, "_generate_possible_pawn_captures", None) or getattr(engine, "_generate_posible_pawn_captures", None)
+        if pawn_capture_factory is None:
+            return
+
+        prepare_players_board = getattr(engine, "_prepare_players_board", None)
+        if prepare_players_board is not None:
+            prepare_players_board()
+        repaired_moves = list(pawn_capture_factory())
+        if repaired_moves:
+            engine._possible_to_ask = repaired_moves  # noqa: SLF001
 
     @staticmethod
     def _stored_scoresheets(game: dict[str, Any], engine: Any | None = None) -> dict[str, dict[str, Any]]:
