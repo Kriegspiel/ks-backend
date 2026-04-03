@@ -1,10 +1,11 @@
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.version import APP_VERSION
 
 
 class Settings(BaseSettings):
-    APP_VERSION: str = "1.1.2"
+    APP_VERSION: str = APP_VERSION
     SECRET_KEY: str = "dev-secret-change-me"
     MONGO_URI: str = "mongodb://localhost:27017/kriegspiel?replicaSet=rs0"
     ENVIRONMENT: str = "development"

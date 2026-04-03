@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.version import APP_VERSION
 
 
 def test_create_app_sets_expected_title():
@@ -88,4 +89,4 @@ def test_api_health_mirrors_health_endpoint():
         api_response = client.get("/api/health")
 
     assert api_response.status_code in (200, 503)
-    assert api_response.json()["version"] == "1.1.0"
+    assert api_response.json()["version"] == APP_VERSION
