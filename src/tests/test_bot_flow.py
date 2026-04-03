@@ -139,6 +139,7 @@ async def test_bot_can_create_one_open_lobby_game_only() -> None:
 
     assert response.state == "waiting"
     assert games.docs[0]["white"]["role"] == "bot"
+    assert games.docs[0]["expires_at"] - games.docs[0]["created_at"] == timedelta(hours=24)
 
     with pytest.raises(GameConflictError) as exc:
         await service.create_game(
@@ -364,6 +365,60 @@ async def test_bot_can_join_another_bot_game_once_per_minute_but_not_its_own() -
     )
     joined_again = await service.join_game(user_id=str(joiner_id), username="joinerbot", game_code="M7K2M9", role="bot")
     assert joined_again.state == "active"
+
+
+@pytest.mark.asyncio
+async def test_bot_join_cooldown_accepts_naive_stored_datetime() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    creator_id = ObjectId()
+    joiner_id = ObjectId()
+    now = datetime.now(UTC)
+    users.docs.extend(
+        [
+            {
+                "_id": creator_id,
+                "username": "creatorbot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Creator Bot", "description": "Creates"},
+            },
+            {
+                "_id": joiner_id,
+                "username": "joinerbot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {
+                    "display_name": "Joiner Bot",
+                    "description": "Joins",
+                    "last_bot_game_joined_at": now.replace(tzinfo=None),
+                },
+            },
+        ]
+    )
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "N7K2M9",
+            "rule_variant": "berkeley_any",
+            "creator_color": "white",
+            "opponent_type": "human",
+            "white": {"user_id": str(creator_id), "username": "creatorbot", "connected": True, "role": "bot"},
+            "black": None,
+            "state": "waiting",
+            "turn": None,
+            "move_number": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games, users_collection=users)
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    with pytest.raises(GameConflictError) as exc:
+        await service.join_game(user_id=str(joiner_id), username="joinerbot", game_code="N7K2M9", role="bot")
+
+    assert exc.value.code == "BOT_JOIN_COOLDOWN"
 
 
 @pytest.mark.asyncio

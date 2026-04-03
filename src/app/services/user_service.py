@@ -230,8 +230,18 @@ class UserService:
         if user is None:
             return None
 
+        bot_profile = user.get("bot_profile") or {}
+        display_name = (
+            bot_profile.get("display_name")
+            or user.get("username_display")
+            or user.get("username")
+        )
+
         return {
             "username": user.get("username"),
+            "display_name": display_name,
+            "role": user.get("role", "user"),
+            "is_bot": user.get("role") == "bot",
             "profile": user.get("profile", {}),
             "stats": user.get("stats", {}),
             "member_since": self._safe_datetime(user.get("created_at")),
@@ -293,7 +303,13 @@ class UserService:
         bounded_per_page = min(max(per_page, 1), 100)
         offset = (bounded_page - 1) * bounded_per_page
 
-        query = {"status": "active", "stats.games_played": {"$gte": 5}, "role": {"$ne": "bot"}}
+        query = {
+            "status": "active",
+            "$or": [
+                {"role": {"$ne": "bot"}, "stats.games_played": {"$gte": 5}},
+                {"role": "bot", "bot_profile.listed": True},
+            ],
+        }
         total = await db.users.count_documents(query)
         cursor = db.users.find(query).sort([("stats.elo", -1), ("username", 1)]).skip(offset).limit(bounded_per_page)
 
@@ -303,10 +319,15 @@ class UserService:
             stats = user.get("stats", {})
             games_played = int(stats.get("games_played", 0))
             games_won = int(stats.get("games_won", 0))
+            bot_profile = user.get("bot_profile") or {}
             players.append(
                 {
                     "rank": rank,
                     "username": user.get("username"),
+                    "display_name": bot_profile.get("display_name") or user.get("username_display") or user.get("username"),
+                    "role": user.get("role", "user"),
+                    "is_bot": user.get("role") == "bot",
+                    "profile_path": f"/players/{user.get('username')}",
                     "elo": int(stats.get("elo", 1200)),
                     "games_played": games_played,
                     "win_rate": round((games_won / games_played) if games_played else 0.0, 4),

@@ -16,6 +16,9 @@ class StubService:
         self.get_public_profile = AsyncMock(
             return_value={
                 "username": "playerone",
+                "display_name": "Player One",
+                "role": "user",
+                "is_bot": False,
                 "profile": {"bio": "Hello", "avatar_url": None, "country": "US"},
                 "stats": {"games_played": 7, "elo": 1337},
                 "member_since": datetime(2025, 1, 1, tzinfo=UTC),
@@ -39,7 +42,7 @@ class StubService:
         )
         self.get_leaderboard = AsyncMock(
             return_value=(
-                [{"rank": 1, "username": "alpha", "elo": 1500, "games_played": 10, "win_rate": 0.6}],
+                [{"rank": 1, "username": "alpha", "display_name": "Alpha", "role": "user", "is_bot": False, "profile_path": "/players/alpha", "elo": 1500, "games_played": 10, "win_rate": 0.6}],
                 1,
             )
         )

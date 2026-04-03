@@ -118,6 +118,8 @@ def _build_app_and_db():
             {
                 "_id": ObjectId(user_id),
                 "username": "playerone",
+                "username_display": "Player One",
+                "role": "user",
                 "profile": {"bio": "hey", "avatar_url": None, "country": "US"},
                 "stats": {
                     "games_played": 8,
@@ -139,13 +141,47 @@ def _build_app_and_db():
             {
                 "_id": ObjectId("507f1f77bcf86cd799439012"),
                 "username": "alpha",
+                "username_display": "Alpha",
+                "role": "user",
                 "stats": {"games_played": 10, "games_won": 7, "elo": 1500},
+                "status": "active",
+                "settings": {},
+            },
+            {
+                "_id": ObjectId("507f1f77bcf86cd799439015"),
+                "username": "randobot",
+                "username_display": "Random Bot",
+                "role": "bot",
+                "bot_profile": {"display_name": "Random Bot", "listed": True},
+                "stats": {"games_played": 9, "games_won": 4, "elo": 1450},
+                "status": "active",
+                "settings": {},
+            },
+            {
+                "_id": ObjectId("507f1f77bcf86cd799439017"),
+                "username": "gptnano",
+                "username_display": "GPT Nano",
+                "role": "bot",
+                "bot_profile": {"display_name": "GPT Nano", "listed": True},
+                "stats": {"games_played": 1, "games_won": 0, "elo": 1184},
+                "status": "active",
+                "settings": {},
+            },
+            {
+                "_id": ObjectId("507f1f77bcf86cd799439016"),
+                "username": "hiddenbot",
+                "username_display": "Hidden Bot",
+                "role": "bot",
+                "bot_profile": {"display_name": "Hidden Bot", "listed": False},
+                "stats": {"games_played": 11, "games_won": 7, "elo": 1550},
                 "status": "active",
                 "settings": {},
             },
             {
                 "_id": ObjectId("507f1f77bcf86cd799439013"),
                 "username": "inactive",
+                "username_display": "Inactive",
+                "role": "user",
                 "stats": {"games_played": 12, "games_won": 6, "elo": 1600},
                 "status": "disabled",
                 "settings": {},
@@ -153,6 +189,8 @@ def _build_app_and_db():
             {
                 "_id": ObjectId("507f1f77bcf86cd799439014"),
                 "username": "newbie",
+                "username_display": "Newbie",
+                "role": "user",
                 "stats": {"games_played": 3, "games_won": 3, "elo": 1700},
                 "status": "active",
                 "settings": {},
@@ -219,6 +257,9 @@ def test_existing_profile_returns_expected_payload() -> None:
     assert profile.status_code == 200
     body = profile.json()
     assert body["username"] == "playerone"
+    assert body["display_name"] == "Player One"
+    assert body["role"] == "user"
+    assert body["is_bot"] is False
     assert body["stats"]["games_played"] == 8
 
 
@@ -279,8 +320,12 @@ def test_leaderboard_orders_by_elo_and_filters_min_games() -> None:
 
     assert leaderboard.status_code == 200
     players = leaderboard.json()["players"]
-    assert [p["username"] for p in players] == ["alpha", "playerone"]
-    assert all(p["games_played"] >= 5 for p in players)
+    assert [p["username"] for p in players] == ["alpha", "randobot", "playerone", "gptnano"]
+    assert all(p["games_played"] >= 5 for p in players if not p["is_bot"])
+    assert players[1]["is_bot"] is True
+    assert players[1]["display_name"] == "Random Bot"
+    assert players[1]["profile_path"] == "/players/randobot"
+    assert players[3]["is_bot"] is True
 
 
 def test_settings_patch_requires_authentication() -> None:
