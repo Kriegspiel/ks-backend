@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -40,6 +40,7 @@ from app.services.state_projection import (
 PlayerColor = Literal["white", "black"]
 logger = structlog.get_logger("app.game")
 ELO_K_FACTOR = 32
+WAITING_GAME_TTL = timedelta(hours=24)
 
 
 class GameServiceError(Exception):
@@ -489,6 +490,14 @@ class GameService:
     def _player_embed(*, user_id: str, username: str, role: str = "user") -> dict[str, Any]:
         return {"user_id": user_id, "username": username, "connected": True, "role": role}
 
+    @staticmethod
+    def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
     async def _find_waiting_game_for_creator(self, *, user_id: str) -> dict[str, Any] | None:
         return await self._games.find_one({"state": "waiting", "white.user_id": user_id})
 
@@ -519,7 +528,7 @@ class GameService:
         if bot_user is None:
             raise GameForbiddenError(code="FORBIDDEN", message="Bot account could not be loaded")
 
-        last_joined = ((bot_user.get("bot_profile") or {}).get("last_bot_game_joined_at"))
+        last_joined = self._normalize_utc_datetime((bot_user.get("bot_profile") or {}).get("last_bot_game_joined_at"))
         if isinstance(last_joined, datetime):
             seconds_since = (now - last_joined).total_seconds()
             if seconds_since < 60:
@@ -556,7 +565,7 @@ class GameService:
             "move_number": 1,
             "created_at": now,
             "updated_at": now,
-            "expires_at": now,
+            "expires_at": now + WAITING_GAME_TTL,
         }
 
         bot_payload: dict[str, str] | None = None
