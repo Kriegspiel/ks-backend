@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from bson import ObjectId
@@ -10,7 +10,7 @@ from app.config import Settings
 from app.main import create_app
 from app.models.game import CreateGameRequest
 from app.services.bot_service import BotService
-from app.services.game_service import GameConflictError, GameService
+from app.services.game_service import GameConflictError, GameForbiddenError, GameService, GameValidationError
 from app.services.user_service import UserService
 from tests.test_game_service import FakeGamesCollection
 
@@ -30,6 +30,18 @@ class FakeUsersCollection:
         doc["_id"] = ObjectId()
         self.docs.append(doc)
         return type("InsertResult", (), {"inserted_id": doc["_id"]})
+
+    async def find_one_and_update(self, query: dict, update: dict, return_document=None):  # noqa: ANN001
+        for doc in self.docs:
+            if self._matches(doc, query):
+                for key, value in update.get("$set", {}).items():
+                    current = doc
+                    parts = key.split(".")
+                    for part in parts[:-1]:
+                        current = current.setdefault(part, {})
+                    current[parts[-1]] = value
+                return doc
+        return None
 
     def find(self, query: dict):
         rows = [doc for doc in self.docs if self._matches(doc, query)]
@@ -103,6 +115,80 @@ async def test_create_game_with_bot_immediately_activates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bot_can_create_one_open_lobby_game_only() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "randobot",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {"display_name": "Random Bot", "description": "Plays random moves"},
+        }
+    )
+    service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
+
+    response = await service.create_game(
+        user_id=str(bot_id),
+        username="randobot",
+        request=CreateGameRequest(opponent_type="human", play_as="white", time_control="rapid"),
+        role="bot",
+    )
+
+    assert response.state == "waiting"
+    assert games.docs[0]["white"]["role"] == "bot"
+
+    with pytest.raises(GameConflictError) as exc:
+        await service.create_game(
+            user_id=str(bot_id),
+            username="randobot",
+            request=CreateGameRequest(opponent_type="human", play_as="black", time_control="rapid"),
+            role="bot",
+        )
+
+    assert exc.value.code == "BOT_ALREADY_HAS_OPEN_GAME"
+
+
+@pytest.mark.asyncio
+async def test_bot_cannot_create_selected_bot_game() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    creator_id = ObjectId()
+    opponent_id = ObjectId()
+    users.docs.extend(
+        [
+            {
+                "_id": creator_id,
+                "username": "botcreator",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Bot Creator", "description": "Creates games"},
+            },
+            {
+                "_id": opponent_id,
+                "username": "otherbot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Other Bot", "description": "Other bot"},
+            },
+        ]
+    )
+    service = GameService(games, users_collection=users)
+
+    with pytest.raises(GameValidationError) as exc:
+        await service.create_game(
+            user_id=str(creator_id),
+            username="botcreator",
+            request=CreateGameRequest(opponent_type="bot", bot_id=str(opponent_id), time_control="rapid"),
+            role="bot",
+        )
+
+    assert exc.value.code == "BOT_CREATE_REQUIRES_HUMAN_OPPONENT"
+
+
+@pytest.mark.asyncio
 async def test_join_rejects_bot_reserved_game() -> None:
     games = FakeGamesCollection()
     now = datetime.now(UTC)
@@ -129,6 +215,155 @@ async def test_join_rejects_bot_reserved_game() -> None:
         await service.join_game(user_id="u2", username="joiner", game_code="A7K2M9")
 
     assert exc.value.code == "GAME_RESERVED_FOR_BOT"
+
+
+@pytest.mark.asyncio
+async def test_bot_cannot_join_human_waiting_game() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "randobot",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {"display_name": "Random Bot", "description": "Bot"},
+        }
+    )
+    now = datetime.now(UTC)
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "H7K2M9",
+            "rule_variant": "berkeley_any",
+            "creator_color": "white",
+            "opponent_type": "human",
+            "white": {"user_id": "u1", "username": "creator", "connected": True, "role": "user"},
+            "black": None,
+            "state": "waiting",
+            "turn": None,
+            "move_number": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games, users_collection=users)
+
+    with pytest.raises(GameForbiddenError) as exc:
+        await service.join_game(user_id=str(bot_id), username="randobot", game_code="H7K2M9", role="bot")
+
+    assert exc.value.code == "FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_bot_can_join_another_bot_game_once_per_minute_but_not_its_own() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    creator_id = ObjectId()
+    joiner_id = ObjectId()
+    users.docs.extend(
+        [
+            {
+                "_id": creator_id,
+                "username": "creatorbot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Creator Bot", "description": "Creates"},
+            },
+            {
+                "_id": joiner_id,
+                "username": "joinerbot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Joiner Bot", "description": "Joins"},
+            },
+        ]
+    )
+    now = datetime.now(UTC)
+    games.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "J7K2M9",
+                "rule_variant": "berkeley_any",
+                "creator_color": "white",
+                "opponent_type": "human",
+                "white": {"user_id": str(creator_id), "username": "creatorbot", "connected": True, "role": "bot"},
+                "black": None,
+                "state": "waiting",
+                "turn": None,
+                "move_number": 1,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "K7K2M9",
+                "rule_variant": "berkeley_any",
+                "creator_color": "white",
+                "opponent_type": "human",
+                "white": {"user_id": str(joiner_id), "username": "joinerbot", "connected": True, "role": "bot"},
+                "black": None,
+                "state": "waiting",
+                "turn": None,
+                "move_number": 1,
+                "created_at": now,
+                "updated_at": now,
+            },
+        ]
+    )
+    service = GameService(games, users_collection=users)
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    joined = await service.join_game(user_id=str(joiner_id), username="joinerbot", game_code="J7K2M9", role="bot")
+    assert joined.state == "active"
+    assert users.docs[1]["bot_profile"]["last_bot_game_joined_at"] == now
+
+    with pytest.raises(GameConflictError) as own_exc:
+        await service.join_game(user_id=str(joiner_id), username="joinerbot", game_code="K7K2M9", role="bot")
+    assert own_exc.value.code == "CANNOT_JOIN_OWN_GAME"
+
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "L7K2M9",
+            "rule_variant": "berkeley_any",
+            "creator_color": "white",
+            "opponent_type": "human",
+            "white": {"user_id": str(creator_id), "username": "creatorbot", "connected": True, "role": "bot"},
+            "black": None,
+            "state": "waiting",
+            "turn": None,
+            "move_number": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+
+    with pytest.raises(GameConflictError) as cooldown_exc:
+        await service.join_game(user_id=str(joiner_id), username="joinerbot", game_code="L7K2M9", role="bot")
+    assert cooldown_exc.value.code == "BOT_JOIN_COOLDOWN"
+
+    service.utcnow = lambda: now + timedelta(minutes=1, seconds=1)  # type: ignore[method-assign]
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "M7K2M9",
+            "rule_variant": "berkeley_any",
+            "creator_color": "white",
+            "opponent_type": "human",
+            "white": {"user_id": str(creator_id), "username": "creatorbot", "connected": True, "role": "bot"},
+            "black": None,
+            "state": "waiting",
+            "turn": None,
+            "move_number": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    joined_again = await service.join_game(user_id=str(joiner_id), username="joinerbot", game_code="M7K2M9", role="bot")
+    assert joined_again.state == "active"
 
 
 @pytest.mark.asyncio

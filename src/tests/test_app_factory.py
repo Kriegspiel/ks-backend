@@ -88,4 +88,4 @@ def test_api_health_mirrors_health_endpoint():
         api_response = client.get("/api/health")
 
     assert api_response.status_code in (200, 503)
-    assert api_response.json()["version"] == "1.0.0"
+    assert api_response.json()["version"] == "1.1.0"
