@@ -85,6 +85,7 @@ async def test_create_game_with_bot_immediately_activates() -> None:
                 "owner_email": "owner@example.com",
                 "description": "Plays random moves",
             },
+            "stats": {"elo": 1315},
         }
     )
     service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
@@ -192,6 +193,7 @@ async def test_bot_service_lists_active_bots() -> None:
 
     listed = await service.list_bots()
     assert [bot.username for bot in listed.bots] == ["randobot"]
+    assert listed.bots[0].elo == 1200
 
 
 @pytest.mark.asyncio
