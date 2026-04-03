@@ -458,15 +458,58 @@ class GameService:
     def _player_embed(*, user_id: str, username: str, role: str = "user") -> dict[str, Any]:
         return {"user_id": user_id, "username": username, "connected": True, "role": role}
 
+    async def _find_waiting_game_for_creator(self, *, user_id: str) -> dict[str, Any] | None:
+        return await self._games.find_one({"state": "waiting", "white.user_id": user_id})
+
+    async def _set_bot_join_cooldown(self, *, user_id: str, now: datetime) -> None:
+        if self._users is None:
+            return
+
+        update = {"$set": {"bot_profile.last_bot_game_joined_at": now, "updated_at": now}}
+        updated = await self._users.find_one_and_update({"_id": user_id}, update, return_document=ReturnDocument.AFTER)
+        if updated is not None:
+            return
+
+        try:
+            oid = ObjectId(user_id)
+        except Exception:
+            return
+        await self._users.find_one_and_update({"_id": oid}, update, return_document=ReturnDocument.AFTER)
+
+    async def _enforce_bot_join_rules(self, *, user_id: str, game: dict[str, Any], now: datetime) -> None:
+        creator = game["white"]
+        if creator["user_id"] == user_id:
+            raise GameConflictError(code="CANNOT_JOIN_OWN_GAME", message="Cannot join your own game")
+
+        if creator.get("role") != "bot":
+            raise GameForbiddenError(code="FORBIDDEN", message="Bots cannot join human-created lobby games")
+
+        bot_user = await self._find_user_doc(user_id)
+        if bot_user is None:
+            raise GameForbiddenError(code="FORBIDDEN", message="Bot account could not be loaded")
+
+        last_joined = ((bot_user.get("bot_profile") or {}).get("last_bot_game_joined_at"))
+        if isinstance(last_joined, datetime):
+            seconds_since = (now - last_joined).total_seconds()
+            if seconds_since < 60:
+                raise GameConflictError(
+                    code="BOT_JOIN_COOLDOWN",
+                    message="Bots can only join another bot's lobby game once per minute",
+                )
+
     async def create_game(
         self, *, user_id: str, username: str, request: CreateGameRequest, role: str = "user"
     ) -> CreateGameResponse:
-        if role == "bot":
-            raise GameForbiddenError(code="FORBIDDEN", message="Bots cannot create new games")
-
         color = self._creator_color(request.play_as, self._rng)
         now = self.utcnow()
         code = await generate_game_code(SimpleNamespace(games=self._games))
+
+        if role == "bot":
+            if request.opponent_type != "human":
+                raise GameValidationError(code="BOT_CREATE_REQUIRES_HUMAN_OPPONENT", message="Bots can only create open lobby games")
+            waiting = await self._find_waiting_game_for_creator(user_id=user_id)
+            if waiting is not None:
+                raise GameConflictError(code="BOT_ALREADY_HAS_OPEN_GAME", message="A bot can only have one open lobby game at a time")
 
         creator = self._player_embed(user_id=user_id, username=username, role=role)
         document: dict[str, Any] = {
@@ -552,11 +595,13 @@ class GameService:
         if game.get("opponent_type") == "bot":
             raise GameConflictError(code="GAME_RESERVED_FOR_BOT", message="This game is reserved for its selected bot")
 
-        if role == "bot":
-            raise GameForbiddenError(code="FORBIDDEN", message="Bots cannot join human lobby games")
-
         if game["state"] != "waiting":
             raise GameConflictError(code="GAME_FULL", message="Game is not joinable")
+
+        now = self.utcnow()
+
+        if role == "bot":
+            await self._enforce_bot_join_rules(user_id=user_id, game=game, now=now)
 
         creator_color: PlayerColor = game.get("creator_color", "white")
         joiner_color: PlayerColor = "black" if creator_color == "white" else "white"
@@ -569,7 +614,6 @@ class GameService:
             white = joiner
             black = creator
 
-        now = self.utcnow()
         engine = create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
         scoresheets = serialize_engine_scoresheets(engine)
         updated = await self._games.find_one_and_update(
@@ -593,6 +637,9 @@ class GameService:
         )
         if updated is None:
             raise GameConflictError(code="GAME_FULL", message="Game is no longer joinable")
+
+        if role == "bot":
+            await self._set_bot_join_cooldown(user_id=user_id, now=now)
 
         logger.info("game_joined", game_id=str(updated["_id"]), user_id=user_id, side=joiner_color, game_code=normalized)
         return JoinGameResponse(
