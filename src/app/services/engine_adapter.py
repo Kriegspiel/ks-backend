@@ -128,7 +128,23 @@ def deserialize_game_state(payload: dict[str, Any]) -> BerkeleyGame:
     game._possible_to_ask = [_deserialize_ks_move(item) for item in payload.get("possible_to_ask", [])]  # noqa: SLF001
     game._whites_scoresheet = deserialize_scoresheet(payload.get("white_scoresheet"), fallback_color="white")  # noqa: SLF001
     game._blacks_scoresheet = deserialize_scoresheet(payload.get("black_scoresheet"), fallback_color="black")  # noqa: SLF001
+    _repair_possible_to_ask(game)
     return game
+
+
+def _repair_possible_to_ask(game: BerkeleyGame) -> None:
+    current = list(getattr(game, "_possible_to_ask", []))  # noqa: SLF001
+    if current or getattr(game, "_game_over", False):  # noqa: SLF001
+        return
+
+    game._generate_possible_to_ask_list()  # noqa: SLF001
+    if not getattr(game, "_must_use_pawns", False):  # noqa: SLF001
+        return
+
+    pawn_capture_factory = getattr(game, "_generate_possible_pawn_captures", None) or getattr(game, "_generate_posible_pawn_captures", None)
+    if pawn_capture_factory is None:
+        raise AttributeError("BerkeleyGame pawn-capture generator is unavailable")
+    game._possible_to_ask = list(pawn_capture_factory())  # noqa: SLF001
 
 
 def _deserialize_ks_move(item: dict[str, Any]) -> KriegspielMove:

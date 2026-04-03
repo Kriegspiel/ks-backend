@@ -52,6 +52,14 @@ class FakeGamesCollection:
                 return doc
         return None
 
+    async def find_one_and_update(self, query: dict, update: dict, return_document=None):
+        for doc in self.docs:
+            if self._matches(doc, query):
+                for key, value in update.get("$set", {}).items():
+                    self._assign(doc, key, value)
+                return doc
+        return None
+
     def find(self, query: dict):
         return FakeCursor([d for d in self.docs if self._matches(d, query)])
 
@@ -73,6 +81,18 @@ class FakeGamesCollection:
                 return None
             current = current.get(part)
         return current
+
+    @staticmethod
+    def _assign(doc: dict, key: str, value):
+        parts = key.split(".")
+        current = doc
+        for part in parts[:-1]:
+            next_value = current.get(part)
+            if not isinstance(next_value, dict):
+                next_value = {}
+                current[part] = next_value
+            current = next_value
+        current[parts[-1]] = value
 
 
 @pytest.fixture

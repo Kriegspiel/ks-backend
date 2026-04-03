@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    APP_VERSION: str = "1.1.0"
+    APP_VERSION: str = "1.1.1"
     SECRET_KEY: str = "dev-secret-change-me"
     MONGO_URI: str = "mongodb://localhost:27017/kriegspiel?replicaSet=rs0"
     ENVIRONMENT: str = "development"
