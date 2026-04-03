@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -38,6 +39,7 @@ from app.services.state_projection import (
 
 PlayerColor = Literal["white", "black"]
 logger = structlog.get_logger("app.game")
+ELO_K_FACTOR = 32
 
 
 class GameServiceError(Exception):
@@ -79,6 +81,126 @@ class GameService:
         self._site_origin = site_origin.rstrip("/")
         self._rng = rng
         self._clock = ClockService()
+
+    @staticmethod
+    def _expected_score(rating: int, opponent_rating: int) -> float:
+        return 1.0 / (1.0 + 10 ** ((opponent_rating - rating) / 400))
+
+    @classmethod
+    def _rating_snapshot(cls, *, white_rating: int, black_rating: int, winner: str | None) -> dict[str, int]:
+        white_score = 1.0 if winner == "white" else 0.5 if winner is None else 0.0
+        expected_white = cls._expected_score(white_rating, black_rating)
+        white_delta = int(round(ELO_K_FACTOR * (white_score - expected_white)))
+        black_delta = -white_delta
+        white_after = white_rating + white_delta
+        black_after = black_rating + black_delta
+        return {
+            "k_factor": ELO_K_FACTOR,
+            "white_before": white_rating,
+            "black_before": black_rating,
+            "white_after": white_after,
+            "black_after": black_after,
+            "white_delta": white_delta,
+            "black_delta": black_delta,
+        }
+
+    async def _find_user_doc(self, user_id: str | None) -> dict[str, Any] | None:
+        if self._users is None or not user_id:
+            return None
+
+        user = await self._users.find_one({"_id": user_id})
+        if user is not None:
+            return user
+
+        try:
+            oid = ObjectId(user_id)
+        except Exception:
+            return None
+        return await self._users.find_one({"_id": oid})
+
+    async def _update_user_stats(self, *, user_id: str | None, stats: dict[str, Any]) -> None:
+        if self._users is None or not user_id:
+            return
+
+        update = {"$set": {"stats": stats, "updated_at": self.utcnow()}}
+        updated = await self._users.find_one_and_update({"_id": user_id}, update, return_document=ReturnDocument.AFTER)
+        if updated is not None:
+            return
+
+        try:
+            oid = ObjectId(user_id)
+        except Exception:
+            return
+        await self._users.find_one_and_update({"_id": oid}, update, return_document=ReturnDocument.AFTER)
+
+    async def _upsert_archive(self, archived_game: dict[str, Any]) -> None:
+        if self._archives is None:
+            return
+
+        if hasattr(self._archives, "replace_one"):
+            await self._archives.replace_one({"_id": archived_game["_id"]}, archived_game, upsert=True)
+            return
+
+        docs = getattr(self._archives, "docs", None)
+        if isinstance(docs, list):
+            for index, doc in enumerate(docs):
+                if doc.get("_id") == archived_game.get("_id"):
+                    docs[index] = archived_game
+                    return
+            docs.append(archived_game)
+
+    async def _finalize_completed_game(self, game: dict[str, Any]) -> dict[str, Any]:
+        if game.get("state") != "completed":
+            return game
+        if game.get("stats_recorded_at"):
+            await self._upsert_archive(deepcopy(game))
+            return game
+
+        result = game.get("result") or {}
+        winner = result.get("winner")
+        white_user_id = game.get("white", {}).get("user_id")
+        black_user_id = game.get("black", {}).get("user_id")
+        white_doc = await self._find_user_doc(white_user_id)
+        black_doc = await self._find_user_doc(black_user_id)
+
+        rating_snapshot: dict[str, int] | None = None
+        if white_doc is not None and black_doc is not None:
+            white_stats = dict(white_doc.get("stats") or {})
+            black_stats = dict(black_doc.get("stats") or {})
+            white_rating = int(white_stats.get("elo", 1200))
+            black_rating = int(black_stats.get("elo", 1200))
+            rating_snapshot = self._rating_snapshot(white_rating=white_rating, black_rating=black_rating, winner=winner)
+
+            white_stats["games_played"] = int(white_stats.get("games_played", 0)) + 1
+            black_stats["games_played"] = int(black_stats.get("games_played", 0)) + 1
+            if winner == "white":
+                white_stats["games_won"] = int(white_stats.get("games_won", 0)) + 1
+                black_stats["games_lost"] = int(black_stats.get("games_lost", 0)) + 1
+            elif winner == "black":
+                black_stats["games_won"] = int(black_stats.get("games_won", 0)) + 1
+                white_stats["games_lost"] = int(white_stats.get("games_lost", 0)) + 1
+            else:
+                white_stats["games_drawn"] = int(white_stats.get("games_drawn", 0)) + 1
+                black_stats["games_drawn"] = int(black_stats.get("games_drawn", 0)) + 1
+
+            white_stats["elo"] = rating_snapshot["white_after"]
+            black_stats["elo"] = rating_snapshot["black_after"]
+            white_stats["elo_peak"] = max(int(white_stats.get("elo_peak", white_rating)), rating_snapshot["white_after"])
+            black_stats["elo_peak"] = max(int(black_stats.get("elo_peak", black_rating)), rating_snapshot["black_after"])
+
+            await self._update_user_stats(user_id=white_user_id, stats=white_stats)
+            await self._update_user_stats(user_id=black_user_id, stats=black_stats)
+
+        processed_at = self.utcnow()
+        finalized_fields: dict[str, Any] = {"stats_recorded_at": processed_at}
+        if rating_snapshot is not None:
+            finalized_fields["rating_snapshot"] = rating_snapshot
+
+        updated = await self._games.find_one_and_update({"_id": game["_id"]}, {"$set": finalized_fields}, return_document=ReturnDocument.AFTER)
+        finalized = updated or game
+        finalized.update(finalized_fields)
+        await self._upsert_archive(deepcopy(finalized))
+        return finalized
 
     async def get_game_or_archive(self, *, game_id: str) -> dict[str, Any] | None:
         oid = self._id_query(game_id)
@@ -317,7 +439,7 @@ class GameService:
             },
             return_document=ReturnDocument.AFTER,
         )
-        return updated or game
+        return await self._finalize_completed_game(updated or game)
 
     async def _load_bot(self, bot_id: str) -> dict[str, Any]:
         if self._users is None:
@@ -535,6 +657,8 @@ class GameService:
 
         now = self.utcnow()
         game = await self._adjudicate_timeout_if_needed(game=game, now=now)
+        if game.get("state") == "completed":
+            game = await self._finalize_completed_game(game)
 
         color = self._player_color_for_user(game, user_id)
         if color is None:
@@ -646,6 +770,7 @@ class GameService:
         )
         if updated is None:
             raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+        updated = await self._finalize_completed_game(updated)
 
         logger.info(
             "move_submitted",
@@ -737,6 +862,7 @@ class GameService:
         )
         if updated is None:
             raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+        updated = await self._finalize_completed_game(updated)
 
         logger.info(
             "move_submitted",
@@ -791,6 +917,7 @@ class GameService:
         )
         if updated is None:
             raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+        await self._finalize_completed_game(updated)
 
         logger.info("game_resigned", game_id=game_id, user_id=user_id, winner=winner)
         return {"result": {"winner": winner, "reason": "resignation"}}

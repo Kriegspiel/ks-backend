@@ -14,7 +14,7 @@ async def test_health_returns_connected_payload_when_db_ping_succeeds(monkeypatc
     response = await test_client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "db": "connected", "version": "0.1.0"}
+    assert response.json() == {"status": "ok", "db": "connected", "version": "1.0.0"}
 
 
 @pytest.mark.asyncio
@@ -28,7 +28,7 @@ async def test_health_returns_disconnected_payload_when_db_ping_fails(monkeypatc
     response = await test_client.get("/health")
 
     assert response.status_code == 503
-    assert response.json() == {"status": "error", "db": "disconnected", "version": "0.1.0"}
+    assert response.json() == {"status": "error", "db": "disconnected", "version": "1.0.0"}
 
 
 @pytest.mark.asyncio
@@ -38,7 +38,7 @@ async def test_health_returns_disconnected_payload_when_db_not_initialized(test_
     response = await test_client.get("/health")
 
     assert response.status_code == 503
-    assert response.json() == {"status": "error", "db": "disconnected", "version": "0.1.0"}
+    assert response.json() == {"status": "error", "db": "disconnected", "version": "1.0.0"}
 
 
 @pytest.mark.asyncio
@@ -54,6 +54,6 @@ async def test_health_recovers_after_transient_dependency_outage(monkeypatch, te
     recovered_response = await test_client.get("/health")
 
     assert down_response.status_code == 503
-    assert down_response.json() == {"status": "error", "db": "disconnected", "version": "0.1.0"}
+    assert down_response.json() == {"status": "error", "db": "disconnected", "version": "1.0.0"}
     assert recovered_response.status_code == 200
-    assert recovered_response.json() == {"status": "ok", "db": "connected", "version": "0.1.0"}
+    assert recovered_response.json() == {"status": "ok", "db": "connected", "version": "1.0.0"}

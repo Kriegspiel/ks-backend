@@ -101,6 +101,9 @@ def _matches(doc, query):
         if isinstance(expected, dict) and "$gte" in expected:
             if val is None or val < expected["$gte"]:
                 return False
+        elif isinstance(expected, dict) and "$ne" in expected:
+            if val == expected["$ne"]:
+                return False
         elif not _same_id(val, expected):
             return False
     return True
