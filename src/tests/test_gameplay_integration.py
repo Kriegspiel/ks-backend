@@ -166,7 +166,21 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
     gid = ObjectId()
     games = FakeCollection([_active_game(now, gid)])
     archives = FakeCollection([])
-    service = GameService(games, archives_collection=archives)
+    users = FakeCollection(
+        [
+            {
+                "_id": "u1",
+                "username": "w",
+                "stats": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0, "elo": 1200, "elo_peak": 1200},
+            },
+            {
+                "_id": "u2",
+                "username": "b",
+                "stats": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0, "elo": 1200, "elo_peak": 1200},
+            },
+        ]
+    )
+    service = GameService(games, archives_collection=archives, users_collection=users)
 
     resigned = await service.resign_game(game_id=str(gid), user_id="u2")
     assert resigned["result"] == {"winner": "white", "reason": "resignation"}
@@ -175,10 +189,17 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
     assert participant_state.state == "completed"
     assert participant_state.possible_actions == []
     assert participant_state.allowed_moves == []
+    assert games.docs[0]["rating_snapshot"]["white_after"] > 1200
+    assert games.docs[0]["rating_snapshot"]["black_after"] < 1200
+    assert users.docs[0]["stats"]["games_won"] == 1
+    assert users.docs[0]["stats"]["games_played"] == 1
+    assert users.docs[0]["stats"]["elo"] == games.docs[0]["rating_snapshot"]["white_after"]
+    assert users.docs[1]["stats"]["games_lost"] == 1
+    assert users.docs[1]["stats"]["games_played"] == 1
+    assert len(archives.docs) == 1
+    assert archives.docs[0]["rating_snapshot"] == games.docs[0]["rating_snapshot"]
 
     # simulate archival pipeline handoff for transcript/recent checks
-    archived = deepcopy(games.docs[0])
-    archives.docs.append(archived)
     games.docs.clear()
 
     spectator_transcript = await service.get_game_transcript(game_id=str(gid), user_id="u9")
@@ -188,6 +209,49 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
     recent = await service.get_recent_completed_games(limit=10)
     assert len(recent.games) == 1
     assert recent.games[0].game_id == str(gid)
+
+
+@pytest.mark.asyncio
+async def test_completed_bot_game_updates_bot_elo_and_stats() -> None:
+    now = datetime.now(UTC)
+    gid = ObjectId()
+    game = _active_game(now, gid)
+    game["black"]["role"] = "bot"
+    game["opponent_type"] = "bot"
+    game["selected_bot_id"] = "bot1"
+    games = FakeCollection([game])
+    archives = FakeCollection([])
+    users = FakeCollection(
+        [
+            {
+                "_id": "u1",
+                "username": "w",
+                "role": "user",
+                "status": "active",
+                "stats": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0, "elo": 1200, "elo_peak": 1200},
+            },
+            {
+                "_id": "u2",
+                "username": "nano",
+                "role": "bot",
+                "status": "active",
+                "stats": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0, "elo": 1200, "elo_peak": 1200},
+            },
+        ]
+    )
+    service = GameService(games, archives_collection=archives, users_collection=users)
+
+    resigned = await service.resign_game(game_id=str(gid), user_id="u2")
+    assert resigned["result"] == {"winner": "white", "reason": "resignation"}
+
+    assert games.docs[0]["rating_snapshot"]["white_after"] > 1200
+    assert games.docs[0]["rating_snapshot"]["black_after"] < 1200
+    assert users.docs[0]["stats"]["games_won"] == 1
+    assert users.docs[0]["stats"]["games_played"] == 1
+    assert users.docs[1]["stats"]["games_lost"] == 1
+    assert users.docs[1]["stats"]["games_played"] == 1
+    assert users.docs[1]["stats"]["elo"] == games.docs[0]["rating_snapshot"]["black_after"]
+    assert archives.docs[0]["rating_snapshot"] == games.docs[0]["rating_snapshot"]
 
 
 @pytest.mark.asyncio

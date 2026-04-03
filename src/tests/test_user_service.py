@@ -99,6 +99,9 @@ class FakeUsersCollection:
             if isinstance(expected, dict) and "$gte" in expected:
                 if value is None or value < expected["$gte"]:
                     return False
+            elif isinstance(expected, dict) and "$ne" in expected:
+                if value == expected["$ne"]:
+                    return False
             elif value != expected:
                 return False
         return True
@@ -235,6 +238,7 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
                 "white": {"user_id": str(user_id), "username": "playerone"},
                 "black": {"user_id": str(other_id), "username": "rival-a"},
                 "result": {"winner": "white", "reason": "checkmate"},
+                "rating_snapshot": {"white_before": 1200, "white_after": 1216, "white_delta": 16, "black_before": 1200, "black_after": 1184, "black_delta": -16},
                 "moves": [1, 2, 3],
                 "created_at": datetime(2026, 3, 10, tzinfo=UTC),
                 "updated_at": datetime(2026, 3, 10, tzinfo=UTC),
@@ -259,6 +263,9 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
     assert total == 2
     assert total_2 == 2
     assert page_1[0]["opponent"] == "rival-a"
+    assert page_1[0]["elo_before"] == 1200
+    assert page_1[0]["elo_after"] == 1216
+    assert page_1[0]["elo_delta"] == 16
     assert out_of_range == []
 
 
