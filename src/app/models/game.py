@@ -216,6 +216,15 @@ class OpenGamesResponse(BaseModel):
     games: list[OpenGameItem]
 
 
+class LobbyStatsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active_games_now: int = 0
+    completed_last_hour: int = 0
+    completed_last_24_hours: int = 0
+    completed_total: int = 0
+
+
 class TranscriptAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

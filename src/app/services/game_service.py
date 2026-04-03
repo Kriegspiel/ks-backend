@@ -14,6 +14,7 @@ from app.models.game import (
     CreateGameRequest,
     CreateGameResponse,
     GameDocument,
+    LobbyStatsResponse,
     GameMetadataResponse,
     GameStateResponse,
     GameTranscriptResponse,
@@ -216,6 +217,42 @@ class GameService:
         return bool(game.get("white", {}).get("user_id") == user_id or game.get("black", {}).get("user_id") == user_id)
 
     @staticmethod
+    def _matches_query(doc: dict[str, Any], query: dict[str, Any]) -> bool:
+        for key, expected in query.items():
+            current = doc
+            for part in key.split("."):
+                if not isinstance(current, dict):
+                    return False
+                current = current.get(part)
+            if isinstance(expected, dict):
+                if "$gte" in expected and not (current is not None and current >= expected["$gte"]):
+                    return False
+                if "$gt" in expected and not (current is not None and current > expected["$gt"]):
+                    return False
+                if "$lte" in expected and not (current is not None and current <= expected["$lte"]):
+                    return False
+                if "$lt" in expected and not (current is not None and current < expected["$lt"]):
+                    return False
+                continue
+            if current != expected:
+                return False
+        return True
+
+    async def _count_documents(self, collection: Any | None, query: dict[str, Any]) -> int:
+        if collection is None:
+            return 0
+        if hasattr(collection, "count_documents"):
+            return int(await collection.count_documents(query))
+        docs = getattr(collection, "docs", None)
+        if isinstance(docs, list):
+            return sum(1 for doc in docs if self._matches_query(doc, query))
+        cursor = collection.find(query)
+        count = 0
+        async for _doc in cursor:
+            count += 1
+        return count
+
+    @staticmethod
     def _visible_board_fen_from_board(board: chess.Board, viewer: PlayerColor) -> str:
         projected = board.copy(stack=False)
         viewer_color = chess.WHITE if viewer == "white" else chess.BLACK
@@ -304,6 +341,24 @@ class GameService:
                 )
             )
         return RecentGamesResponse(games=items)
+
+    async def get_lobby_stats(self) -> LobbyStatsResponse:
+        now = self.utcnow()
+        last_hour = now - timedelta(hours=1)
+        last_day = now - timedelta(hours=24)
+
+        active_games_now = await self._count_documents(self._games, {"state": "active"})
+        completed_source = self._archives if self._archives is not None else self._games
+        completed_total = await self._count_documents(completed_source, {"state": "completed"})
+        completed_last_hour = await self._count_documents(completed_source, {"state": "completed", "updated_at": {"$gte": last_hour}})
+        completed_last_24_hours = await self._count_documents(completed_source, {"state": "completed", "updated_at": {"$gte": last_day}})
+
+        return LobbyStatsResponse(
+            active_games_now=active_games_now,
+            completed_last_hour=completed_last_hour,
+            completed_last_24_hours=completed_last_24_hours,
+            completed_total=completed_total,
+        )
 
     @staticmethod
     def utcnow() -> datetime:

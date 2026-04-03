@@ -65,6 +65,9 @@ class FakeGamesCollection:
         self.docs.append(doc)
         return FakeInsertResult(doc["_id"])
 
+    async def count_documents(self, query: dict):
+        return sum(1 for doc in self.docs if self._matches(doc, query))
+
     def find(self, query: dict):
         return FakeCursor([d for d in self.docs if self._matches(d, query)])
 
@@ -89,6 +92,16 @@ class FakeGamesCollection:
 
         for key, expected in query.items():
             value = self._resolve(doc, key)
+            if isinstance(expected, dict):
+                if "$gte" in expected and not (value is not None and value >= expected["$gte"]):
+                    return False
+                if "$gt" in expected and not (value is not None and value > expected["$gt"]):
+                    return False
+                if "$lte" in expected and not (value is not None and value <= expected["$lte"]):
+                    return False
+                if "$lt" in expected and not (value is not None and value < expected["$lt"]):
+                    return False
+                continue
             if value != expected:
                 return False
         return True
@@ -353,6 +366,36 @@ async def test_get_game_uses_live_user_elo_over_stale_embedded_elo() -> None:
 
     assert game.white.elo == 1333
     assert game.black.elo == 1444
+
+
+@pytest.mark.asyncio
+async def test_get_lobby_stats_counts_active_and_completed_windows() -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    now = datetime(2026, 4, 3, 22, 0, tzinfo=UTC)
+    games.docs.extend(
+        [
+            {"_id": ObjectId(), "state": "active", "updated_at": now},
+            {"_id": ObjectId(), "state": "active", "updated_at": now},
+            {"_id": ObjectId(), "state": "waiting", "updated_at": now},
+        ]
+    )
+    archives.docs.extend(
+        [
+            {"_id": ObjectId(), "state": "completed", "updated_at": now - timedelta(minutes=15)},
+            {"_id": ObjectId(), "state": "completed", "updated_at": now - timedelta(hours=3)},
+            {"_id": ObjectId(), "state": "completed", "updated_at": now - timedelta(days=2)},
+        ]
+    )
+    service = GameService(games, archives_collection=archives)
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    stats = await service.get_lobby_stats()
+
+    assert stats.active_games_now == 2
+    assert stats.completed_last_hour == 1
+    assert stats.completed_last_24_hours == 2
+    assert stats.completed_total == 3
 
 
 @pytest.mark.asyncio
