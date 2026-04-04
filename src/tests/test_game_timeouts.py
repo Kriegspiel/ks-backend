@@ -32,6 +32,26 @@ class FakeGamesCollection:
                 return doc
         return None
 
+    def find(self, query: dict):
+        docs = [doc for doc in self.docs if all(self._resolve(doc, k) == v for k, v in query.items())]
+
+        class Cursor:
+            def __init__(self, rows):
+                self._rows = list(rows)
+                self._index = 0
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self._index >= len(self._rows):
+                    raise StopAsyncIteration
+                row = self._rows[self._index]
+                self._index += 1
+                return row
+
+        return Cursor(docs)
+
     @staticmethod
     def _resolve(doc: dict, key: str):
         cur = doc
@@ -95,6 +115,12 @@ async def test_move_rejected_if_timeout_already_elapsed() -> None:
         await service.execute_move(game_id=str(game_id), user_id="u1", uci="e2e4")
 
     assert exc.value.code == "GAME_NOT_ACTIVE"
+    entry = await service._get_cached_entry(game_id)
+    assert entry is not None
+    assert entry.game["state"] == "completed"
+    assert entry.game["result"] == {"winner": "black", "reason": "timeout"}
+
+    await service._flush_entry(entry, reason="test")
     assert games.docs[0]["state"] == "completed"
     assert games.docs[0]["result"] == {"winner": "black", "reason": "timeout"}
 
@@ -170,3 +196,60 @@ async def test_move_rejects_when_game_not_active() -> None:
     with pytest.raises(GameValidationError) as exc:
         await service.execute_move(game_id=str(gid), user_id="u1", uci="e2e4")
     assert exc.value.code == "GAME_NOT_ACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_timeout_sweeper_completes_persisted_active_games_without_requests() -> None:
+    now = datetime.now(UTC)
+    gid = ObjectId()
+    games = FakeGamesCollection()
+    doc = _active_doc(now, gid)
+    doc["time_control"]["white_remaining"] = 0.1
+    doc["time_control"]["last_updated_at"] = now - timedelta(seconds=5)
+    games.docs.append(doc)
+
+    service = GameService(games)
+    await service._sweep_timeouts(now=now)
+
+    assert games.docs[0]["state"] == "completed"
+    assert games.docs[0]["result"] == {"winner": "black", "reason": "timeout"}
+
+
+@pytest.mark.asyncio
+async def test_timeout_sweeper_completes_cached_active_games_without_requests() -> None:
+    now = datetime.now(UTC)
+    gid = ObjectId()
+    games = FakeGamesCollection()
+    doc = _active_doc(now, gid)
+    doc["time_control"]["black_remaining"] = 0.1
+    doc["time_control"]["active_color"] = "black"
+    doc["time_control"]["last_updated_at"] = now - timedelta(seconds=5)
+    games.docs.append(doc)
+
+    service = GameService(games)
+    entry = await service._prime_cache(doc, persisted=True)
+
+    await service._sweep_timeouts(now=now)
+    await service._flush_entry(entry, reason="test")
+
+    assert entry.game["state"] == "completed"
+    assert games.docs[0]["state"] == "completed"
+    assert games.docs[0]["result"] == {"winner": "white", "reason": "timeout"}
+
+
+@pytest.mark.asyncio
+async def test_service_start_runs_timeout_sweep_immediately() -> None:
+    service = GameService(FakeGamesCollection())
+    calls = 0
+
+    async def fake_sweep() -> None:
+        nonlocal calls
+        calls += 1
+
+    service._maybe_sweep_timeouts = fake_sweep  # type: ignore[method-assign]
+
+    await service.start()
+    try:
+        assert calls == 1
+    finally:
+        await service.shutdown()

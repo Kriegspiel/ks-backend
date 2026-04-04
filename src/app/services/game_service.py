@@ -47,6 +47,7 @@ WAITING_GAME_TTL = timedelta(hours=24)
 BOT_GAME_FLUSH_PLIES = 20
 BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
 FLUSH_LOOP_INTERVAL_SECONDS = 1.0
+TIMEOUT_SWEEP_INTERVAL = timedelta(seconds=30)
 
 
 class GameServiceError(Exception):
@@ -103,9 +104,11 @@ class GameService:
         self._cache_lock = asyncio.Lock()
         self._flush_loop_task: asyncio.Task[None] | None = None
         self._shutdown = False
+        self._last_timeout_sweep_at: datetime | None = None
 
     async def start(self) -> None:
         self._shutdown = False
+        await self._maybe_sweep_timeouts()
         if self._flush_loop_task is None or self._flush_loop_task.done():
             self._flush_loop_task = asyncio.create_task(self._flush_loop(), name="game-service-flush-loop")
 
@@ -131,8 +134,16 @@ class GameService:
             while not self._shutdown:
                 await asyncio.sleep(FLUSH_LOOP_INTERVAL_SECONDS)
                 await self._flush_due_entries()
+                await self._maybe_sweep_timeouts()
         except asyncio.CancelledError:
             raise
+
+    async def _maybe_sweep_timeouts(self) -> None:
+        now = self.utcnow()
+        if self._last_timeout_sweep_at is not None and now - self._last_timeout_sweep_at < TIMEOUT_SWEEP_INTERVAL:
+            return
+        self._last_timeout_sweep_at = now
+        await self._sweep_timeouts(now=now)
 
     async def _flush_due_entries(self) -> None:
         async with self._cache_lock:
@@ -140,6 +151,46 @@ class GameService:
         for entry in entries:
             if await self._should_flush_entry(entry):
                 self._schedule_flush(entry, reason="background")
+
+    async def _active_games_not_in_cache(self) -> list[dict[str, Any]]:
+        async with self._cache_lock:
+            cached_ids = set(self._cache.keys())
+
+        if hasattr(self._games, "find"):
+            cursor = self._games.find({"state": "active"})
+            docs: list[dict[str, Any]] = []
+            async for doc in cursor:
+                if doc.get("_id") not in cached_ids:
+                    docs.append(doc)
+            return docs
+
+        docs = getattr(self._games, "docs", None)
+        if isinstance(docs, list):
+            return [doc for doc in docs if doc.get("state") == "active" and doc.get("_id") not in cached_ids]
+
+        return []
+
+    async def _sweep_timeouts(self, *, now: datetime) -> None:
+        async with self._cache_lock:
+            cached_entries = list(self._cache.values())
+
+        for entry in cached_entries:
+            async with entry.lock:
+                game = entry.game
+                if game.get("state") != "active":
+                    continue
+                time_control = self._active_time_control(game=game, now=now)
+                timeout = self._clock.check_timeout(time_control=time_control, now=now)
+                if timeout is None:
+                    continue
+                self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
+                self._mark_entry_dirty_locked(entry, now=now)
+                self._schedule_flush(entry, reason="timeout_sweep")
+
+        for game in await self._active_games_not_in_cache():
+            updated = await self._adjudicate_timeout_if_needed(game=game, now=now)
+            if updated.get("state") == "completed":
+                logger.info("game_timeout_swept", game_id=str(updated.get("_id")))
 
     async def _should_flush_entry(self, entry: CachedGameEntry) -> bool:
         async with entry.lock:
