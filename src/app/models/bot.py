@@ -30,6 +30,7 @@ class BotListItem(BaseModel):
     display_name: str
     description: str = ""
     elo: int = 1200
+    ratings: dict[str, dict[str, int]] = Field(default_factory=dict)
     supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: ["berkeley", "berkeley_any"])
 
 

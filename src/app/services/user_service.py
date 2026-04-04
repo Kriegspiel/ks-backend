@@ -14,7 +14,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.config import get_settings
 from app.models.auth import BotRegisterRequest, RegisterRequest
-from app.models.user import UserModel, utcnow
+from app.models.user import UserModel, default_user_stats_payload, normalize_user_stats_payload, utcnow
 
 
 class UserConflictError(Exception):
@@ -133,14 +133,7 @@ class UserService:
             "auth_providers": ["local"],
             "profile": {"bio": "", "avatar_url": None, "country": None},
             "bot_profile": None,
-            "stats": {
-                "games_played": 0,
-                "games_won": 0,
-                "games_lost": 0,
-                "games_drawn": 0,
-                "elo": 1200,
-                "elo_peak": 1200,
-            },
+            "stats": default_user_stats_payload(),
             "settings": {
                 "board_theme": "default",
                 "piece_set": "cburnett",
@@ -215,14 +208,7 @@ class UserService:
                 "registered_at": now,
                 "supported_rule_variants": supported_rule_variants,
             },
-            "stats": {
-                "games_played": 0,
-                "games_won": 0,
-                "games_lost": 0,
-                "games_drawn": 0,
-                "elo": 1200,
-                "elo_peak": 1200,
-            },
+            "stats": default_user_stats_payload(),
             "settings": {
                 "board_theme": "default",
                 "piece_set": "cburnett",
@@ -315,7 +301,7 @@ class UserService:
             "role": user.get("role", "user"),
             "is_bot": user.get("role") == "bot",
             "profile": user.get("profile", {}),
-            "stats": user.get("stats", {}),
+            "stats": normalize_user_stats_payload(user.get("stats")),
             "member_since": self._safe_datetime(user.get("created_at")),
         }
 
@@ -341,6 +327,7 @@ class UserService:
             winner = result.get("winner")
             rating_snapshot = game.get("rating_snapshot") if isinstance(game.get("rating_snapshot"), dict) else {}
             prefix = "white" if play_as == "white" else "black"
+            overall_snapshot = rating_snapshot.get("overall") if isinstance(rating_snapshot.get("overall"), dict) else rating_snapshot
             games.append(
                 {
                     "game_id": str(game.get("_id")),
@@ -350,9 +337,10 @@ class UserService:
                     "reason": result.get("reason"),
                     "move_count": len(game.get("moves", [])),
                     "played_at": self._safe_datetime(game.get("updated_at") or game.get("created_at")),
-                    "elo_before": rating_snapshot.get(f"{prefix}_before"),
-                    "elo_after": rating_snapshot.get(f"{prefix}_after"),
-                    "elo_delta": rating_snapshot.get(f"{prefix}_delta"),
+                    "elo_before": overall_snapshot.get(f"{prefix}_before"),
+                    "elo_after": overall_snapshot.get(f"{prefix}_after"),
+                    "elo_delta": overall_snapshot.get(f"{prefix}_delta"),
+                    "rating_snapshot": rating_snapshot,
                 }
             )
 
@@ -389,9 +377,10 @@ class UserService:
         players: list[dict[str, Any]] = []
         rank = offset + 1
         async for user in cursor:
-            stats = user.get("stats", {})
+            stats = normalize_user_stats_payload(user.get("stats"))
             games_played = int(stats.get("games_played", 0))
             games_won = int(stats.get("games_won", 0))
+            ratings = stats.get("ratings", {})
             bot_profile = user.get("bot_profile") or {}
             players.append(
                 {
@@ -402,6 +391,7 @@ class UserService:
                     "is_bot": user.get("role") == "bot",
                     "profile_path": f"/players/{user.get('username')}",
                     "elo": int(stats.get("elo", 1200)),
+                    "ratings": ratings,
                     "games_played": games_played,
                     "win_rate": round((games_won / games_played) if games_played else 0.0, 4),
                 }

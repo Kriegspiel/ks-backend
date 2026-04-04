@@ -39,6 +39,7 @@ from app.services.state_projection import (
     reconstruct_scoresheets_from_moves,
     serialize_engine_scoresheets,
 )
+from app.models.user import normalize_user_stats_payload
 
 PlayerColor = Literal["white", "black"]
 logger = structlog.get_logger("app.game")
@@ -364,6 +365,10 @@ class GameService:
             "black_delta": black_delta,
         }
 
+    @staticmethod
+    def _track_for_opponent_role(opponent_role: str) -> str:
+        return "vs_bots" if opponent_role == "bot" else "vs_humans"
+
     async def _find_user_doc(self, user_id: str | None) -> dict[str, Any] | None:
         if self._users is None or not user_id:
             return None
@@ -382,7 +387,7 @@ class GameService:
         if self._users is None or not user_id:
             return
 
-        update = {"$set": {"stats": stats, "updated_at": self.utcnow()}}
+        update = {"$set": {"stats": normalize_user_stats_payload(stats), "updated_at": self.utcnow()}}
         updated = await self._users.find_one_and_update({"_id": user_id}, update, return_document=ReturnDocument.AFTER)
         if updated is not None:
             return
@@ -423,13 +428,34 @@ class GameService:
         white_doc = await self._find_user_doc(white_user_id)
         black_doc = await self._find_user_doc(black_user_id)
 
-        rating_snapshot: dict[str, int] | None = None
+        rating_snapshot: dict[str, Any] | None = None
         if white_doc is not None and black_doc is not None:
-            white_stats = dict(white_doc.get("stats") or {})
-            black_stats = dict(black_doc.get("stats") or {})
-            white_rating = int(white_stats.get("elo", 1200))
-            black_rating = int(black_stats.get("elo", 1200))
-            rating_snapshot = self._rating_snapshot(white_rating=white_rating, black_rating=black_rating, winner=winner)
+            white_stats = normalize_user_stats_payload(white_doc.get("stats"))
+            black_stats = normalize_user_stats_payload(black_doc.get("stats"))
+            white_role = str(white_doc.get("role", game.get("white", {}).get("role", "user")))
+            black_role = str(black_doc.get("role", game.get("black", {}).get("role", "user")))
+            white_track = self._track_for_opponent_role(black_role)
+            black_track = self._track_for_opponent_role(white_role)
+
+            white_overall = int(white_stats["ratings"]["overall"]["elo"])
+            black_overall = int(black_stats["ratings"]["overall"]["elo"])
+            white_matchup = int(white_stats["ratings"][white_track]["elo"])
+            black_matchup = int(black_stats["ratings"][black_track]["elo"])
+            overall_snapshot = self._rating_snapshot(white_rating=white_overall, black_rating=black_overall, winner=winner)
+            specific_snapshot = self._rating_snapshot(white_rating=white_matchup, black_rating=black_matchup, winner=winner)
+            rating_snapshot = {
+                "overall": overall_snapshot,
+                "specific": specific_snapshot,
+                "white_track": white_track,
+                "black_track": black_track,
+                "white_before": overall_snapshot["white_before"],
+                "white_after": overall_snapshot["white_after"],
+                "white_delta": overall_snapshot["white_delta"],
+                "black_before": overall_snapshot["black_before"],
+                "black_after": overall_snapshot["black_after"],
+                "black_delta": overall_snapshot["black_delta"],
+                "k_factor": ELO_K_FACTOR,
+            }
 
             white_stats["games_played"] = int(white_stats.get("games_played", 0)) + 1
             black_stats["games_played"] = int(black_stats.get("games_played", 0)) + 1
@@ -443,10 +469,18 @@ class GameService:
                 white_stats["games_drawn"] = int(white_stats.get("games_drawn", 0)) + 1
                 black_stats["games_drawn"] = int(black_stats.get("games_drawn", 0)) + 1
 
-            white_stats["elo"] = rating_snapshot["white_after"]
-            black_stats["elo"] = rating_snapshot["black_after"]
-            white_stats["elo_peak"] = max(int(white_stats.get("elo_peak", white_rating)), rating_snapshot["white_after"])
-            black_stats["elo_peak"] = max(int(black_stats.get("elo_peak", black_rating)), rating_snapshot["black_after"])
+            white_stats["ratings"]["overall"]["elo"] = overall_snapshot["white_after"]
+            black_stats["ratings"]["overall"]["elo"] = overall_snapshot["black_after"]
+            white_stats["ratings"]["overall"]["peak"] = max(int(white_stats["ratings"]["overall"].get("peak", white_overall)), overall_snapshot["white_after"])
+            black_stats["ratings"]["overall"]["peak"] = max(int(black_stats["ratings"]["overall"].get("peak", black_overall)), overall_snapshot["black_after"])
+            white_stats["ratings"][white_track]["elo"] = specific_snapshot["white_after"]
+            black_stats["ratings"][black_track]["elo"] = specific_snapshot["black_after"]
+            white_stats["ratings"][white_track]["peak"] = max(int(white_stats["ratings"][white_track].get("peak", white_matchup)), specific_snapshot["white_after"])
+            black_stats["ratings"][black_track]["peak"] = max(int(black_stats["ratings"][black_track].get("peak", black_matchup)), specific_snapshot["black_after"])
+            white_stats["elo"] = white_stats["ratings"]["overall"]["elo"]
+            black_stats["elo"] = black_stats["ratings"]["overall"]["elo"]
+            white_stats["elo_peak"] = white_stats["ratings"]["overall"]["peak"]
+            black_stats["elo_peak"] = black_stats["ratings"]["overall"]["peak"]
 
             await self._update_user_stats(user_id=white_user_id, stats=white_stats)
             await self._update_user_stats(user_id=black_user_id, stats=black_stats)
@@ -657,18 +691,23 @@ class GameService:
         if not player:
             return None
         elo = player.get("elo")
+        stats = normalize_user_stats_payload(player.get("stats"))
+        ratings = stats.get("ratings", {})
         if not isinstance(elo, int):
-            elo = int((player.get("stats") or {}).get("elo", 1200))
+            elo = int(stats.get("elo", 1200))
         user_id = player.get("user_id")
         if user_id:
             user_doc = await self._find_user_doc(str(user_id))
             if user_doc is not None:
-                elo = int((user_doc.get("stats") or {}).get("elo", elo))
+                user_stats = normalize_user_stats_payload(user_doc.get("stats"))
+                ratings = user_stats.get("ratings", ratings)
+                elo = int(user_stats.get("elo", elo))
         return {
             "username": player["username"],
             "connected": player.get("connected", True),
             "role": player.get("role", "user"),
             "elo": elo,
+            "ratings": ratings,
         }
 
     async def _to_metadata(self, doc: dict[str, Any]) -> GameMetadataResponse:

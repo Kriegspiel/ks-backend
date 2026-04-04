@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.bot import BotListItem, BotListResponse
+from app.models.user import normalize_user_stats_payload
 
 
 class BotService:
@@ -27,13 +28,15 @@ class BotService:
             profile = doc.get("bot_profile") or {}
             if profile.get("listed", True) is False:
                 continue
+            stats = normalize_user_stats_payload(doc.get("stats"))
             bots.append(
                 BotListItem(
                     bot_id=str(doc["_id"]),
                     username=doc["username"],
                     display_name=profile.get("display_name") or doc.get("username_display") or doc["username"],
                     description=profile.get("description") or "",
-                    elo=int((doc.get("stats") or {}).get("elo", 1200)),
+                    elo=int(stats.get("elo", 1200)),
+                    ratings=stats.get("ratings", {}),
                     supported_rule_variants=self._supported_rule_variants(doc),
                 )
             )
