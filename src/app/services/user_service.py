@@ -337,7 +337,8 @@ class UserService:
         async for game in cursor:
             play_as = "white" if game.get("white", {}).get("user_id") == user_id else "black"
             opponent = game.get("black") if play_as == "white" else game.get("white")
-            winner = game.get("result", {}).get("winner")
+            result = game.get("result") if isinstance(game.get("result"), dict) else {}
+            winner = result.get("winner")
             rating_snapshot = game.get("rating_snapshot") if isinstance(game.get("rating_snapshot"), dict) else {}
             prefix = "white" if play_as == "white" else "black"
             games.append(
@@ -346,7 +347,7 @@ class UserService:
                     "opponent": opponent.get("username") if isinstance(opponent, dict) else None,
                     "play_as": play_as,
                     "result": self._winner_result(winner, play_as),
-                    "reason": game.get("result", {}).get("reason"),
+                    "reason": result.get("reason"),
                     "move_count": len(game.get("moves", [])),
                     "played_at": self._safe_datetime(game.get("updated_at") or game.get("created_at")),
                     "elo_before": rating_snapshot.get(f"{prefix}_before"),
