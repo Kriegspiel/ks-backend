@@ -47,7 +47,7 @@ WAITING_GAME_TTL = timedelta(hours=24)
 BOT_GAME_FLUSH_PLIES = 20
 BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
 FLUSH_LOOP_INTERVAL_SECONDS = 1.0
-TIMEOUT_SWEEP_INTERVAL = timedelta(seconds=30)
+TIMEOUT_SWEEP_INTERVAL = timedelta(minutes=25)
 
 
 class GameServiceError(Exception):
