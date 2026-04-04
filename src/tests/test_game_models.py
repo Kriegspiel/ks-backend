@@ -95,6 +95,9 @@ def test_create_game_response_contract_shape() -> None:
         "rule_variant": "berkeley_any",
         "state": "waiting",
         "join_url": "https://kriegspiel.org/join/A7K2M9",
+        "game_url": None,
+        "opponent_type": "human",
+        "bot": None,
     }
 
 

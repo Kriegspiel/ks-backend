@@ -198,8 +198,11 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
     assert users.docs[0]["stats"]["games_won"] == 1
     assert users.docs[0]["stats"]["games_played"] == 1
     assert users.docs[0]["stats"]["elo"] == games.docs[0]["rating_snapshot"]["white_after"]
+    assert users.docs[0]["stats"]["ratings"]["overall"]["elo"] == games.docs[0]["rating_snapshot"]["overall"]["white_after"]
+    assert users.docs[0]["stats"]["ratings"]["vs_humans"]["elo"] == games.docs[0]["rating_snapshot"]["specific"]["white_after"]
     assert users.docs[1]["stats"]["games_lost"] == 1
     assert users.docs[1]["stats"]["games_played"] == 1
+    assert users.docs[1]["stats"]["ratings"]["vs_humans"]["elo"] == games.docs[0]["rating_snapshot"]["specific"]["black_after"]
     assert len(archives.docs) == 1
     assert archives.docs[0]["rating_snapshot"] == games.docs[0]["rating_snapshot"]
 
@@ -256,6 +259,8 @@ async def test_completed_bot_game_updates_bot_elo_and_stats() -> None:
     assert users.docs[1]["stats"]["games_lost"] == 1
     assert users.docs[1]["stats"]["games_played"] == 1
     assert users.docs[1]["stats"]["elo"] == games.docs[0]["rating_snapshot"]["black_after"]
+    assert users.docs[0]["stats"]["ratings"]["vs_bots"]["elo"] == games.docs[0]["rating_snapshot"]["specific"]["white_after"]
+    assert users.docs[1]["stats"]["ratings"]["vs_humans"]["elo"] == games.docs[0]["rating_snapshot"]["specific"]["black_after"]
     assert archives.docs[0]["rating_snapshot"] == games.docs[0]["rating_snapshot"]
 
 

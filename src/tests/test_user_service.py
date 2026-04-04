@@ -323,6 +323,7 @@ async def test_get_public_profile_and_missing_user() -> None:
     assert profile is not None
     assert profile["username"] == "playerone"
     assert profile["stats"]["elo"] == 1337
+    assert profile["stats"]["ratings"]["overall"]["elo"] == 1337
     assert missing is None
 
 
@@ -462,3 +463,4 @@ async def test_get_leaderboard_filters_ranks_and_tiebreaks_by_username() -> None
     assert [p["username"] for p in players] == ["alpha", "zeta"]
     assert players[0]["rank"] == 1
     assert players[1]["rank"] == 2
+    assert players[0]["ratings"]["overall"]["elo"] == 1500
