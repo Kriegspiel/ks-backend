@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
 from app.db import get_db
 from app.dependencies import get_current_user
@@ -22,8 +22,12 @@ def _map_game_error(exc: GameServiceError) -> JSONResponse:
     if isinstance(exc, GameValidationError): return _error_response(status_code=status.HTTP_400_BAD_REQUEST, code=exc.code, message=str(exc))
     return _error_response(status_code=status.HTTP_400_BAD_REQUEST, code=exc.code, message=str(exc))
 
-def get_game_service() -> GameService:
-    db = get_db(); return GameService(db.games, users_collection=db.users, archives_collection=db.game_archives)
+def get_game_service(request: Request) -> GameService:
+    game_service = getattr(request.app.state, "game_service", None)
+    if game_service is not None:
+        return game_service
+    db = get_db()
+    return GameService(db.games, users_collection=db.users, archives_collection=db.game_archives, site_origin=request.app.state.settings.SITE_ORIGIN)
 
 @router.post('/create', response_model=CreateGameResponse, status_code=status.HTTP_201_CREATED)
 async def create_game(payload: CreateGameRequest, user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:

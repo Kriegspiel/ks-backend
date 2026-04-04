@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = APP_VERSION
     SECRET_KEY: str = "dev-secret-change-me"
     BOT_TOKEN_HMAC_SECRET: str = "dev-bot-token-hmac-change-me"
+    BOT_TOKEN_CACHE_TTL_SECONDS: float = 3600.0
     MONGO_URI: str = "mongodb://localhost:27017/kriegspiel?replicaSet=rs0"
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "info"

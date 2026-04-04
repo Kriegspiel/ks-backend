@@ -290,6 +290,10 @@ async def test_authenticate_bot_token_migrates_legacy_bcrypt_hash_to_digest() ->
     assert users.docs[0]["bot_profile"].get("api_token_digest") == service.bot_token_digest(token_secret)
 
 
+def test_bot_token_cache_ttl_uses_one_hour_default() -> None:
+    assert UserService._bot_token_cache_ttl_seconds == 3600.0
+
+
 @pytest.mark.asyncio
 async def test_get_public_profile_and_missing_user() -> None:
     users = FakeUsersCollection()

@@ -124,6 +124,7 @@ async def test_end_to_end_lifecycle_visibility_and_action_flow() -> None:
 
     ask = await service.execute_ask_any(game_id=game_id, user_id="u2")
     assert "has_any" in ask
+    await service.flush_all()
     assert games.docs[0]["moves"][-1]["question_type"] == "ASK_ANY"
     assert games.docs[0]["moves"][-1]["uci"] is None
 
@@ -186,6 +187,7 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
 
     resigned = await service.resign_game(game_id=str(gid), user_id="u2")
     assert resigned["result"] == {"winner": "white", "reason": "resignation"}
+    await service.flush_all()
 
     participant_state = await service.get_game_state(game_id=str(gid), user_id="u1")
     assert participant_state.state == "completed"
@@ -245,6 +247,7 @@ async def test_completed_bot_game_updates_bot_elo_and_stats() -> None:
 
     resigned = await service.resign_game(game_id=str(gid), user_id="u2")
     assert resigned["result"] == {"winner": "white", "reason": "resignation"}
+    await service.flush_all()
 
     assert games.docs[0]["rating_snapshot"]["white_after"] > 1200
     assert games.docs[0]["rating_snapshot"]["black_after"] < 1200
