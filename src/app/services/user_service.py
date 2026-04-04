@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
+import hmac
 import secrets
+import time
 from typing import Any
 
 import bcrypt
@@ -9,6 +12,7 @@ from bson import ObjectId
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
+from app.config import get_settings
 from app.models.auth import BotRegisterRequest, RegisterRequest
 from app.models.user import UserModel, utcnow
 
@@ -21,6 +25,9 @@ class UserConflictError(Exception):
 
 
 class UserService:
+    _bot_token_cache: dict[str, tuple[float, UserModel]] = {}
+    _bot_token_cache_ttl_seconds = 300.0
+
     def __init__(self, users_collection: Any):
         self._users = users_collection
 
@@ -41,12 +48,40 @@ class UserService:
         return bcrypt.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
 
     @staticmethod
+    def bot_token_digest(token_secret: str) -> str:
+        settings = get_settings()
+        return hmac.new(
+            settings.BOT_TOKEN_HMAC_SECRET.encode("utf-8"),
+            token_secret.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    @classmethod
+    def _cache_bot_user(cls, token: str, user: UserModel) -> None:
+        cls._bot_token_cache[token] = (time.monotonic() + cls._bot_token_cache_ttl_seconds, user)
+
+    @classmethod
+    def _get_cached_bot_user(cls, token: str) -> UserModel | None:
+        cached = cls._bot_token_cache.get(token)
+        if cached is None:
+            return None
+        expires_at, user = cached
+        if expires_at <= time.monotonic():
+            cls._bot_token_cache.pop(token, None)
+            return None
+        return user
+
+    @classmethod
+    def clear_bot_token_cache(cls) -> None:
+        cls._bot_token_cache.clear()
+
+    @staticmethod
     def issue_bot_token() -> tuple[str, str, str]:
         token_id = secrets.token_hex(8)
         token_secret = secrets.token_urlsafe(24)
         token = f"ksbot_{token_id}.{token_secret}"
-        token_hash = UserService.hash_password(token_secret)
-        return token_id, token_secret, token_hash
+        token_digest = UserService.bot_token_digest(token_secret)
+        return token_id, token_secret, token_digest
 
     @staticmethod
     def parse_bot_token(token: str) -> tuple[str, str] | None:
@@ -149,7 +184,7 @@ class UserService:
             raise UserConflictError(field="username", code="USERNAME_TAKEN", message="Username already exists")
 
         now = utcnow()
-        token_id, token_secret, token_hash = self.issue_bot_token()
+        token_id, token_secret, token_digest = self.issue_bot_token()
         token = f"ksbot_{token_id}.{token_secret}"
         owner_email = self.canonical_email(registration.owner_email)
         requested_listed = getattr(registration, "listed", None)
@@ -175,7 +210,8 @@ class UserService:
                 "description": registration.description.strip(),
                 "listed": listed,
                 "api_token_id": token_id,
-                "api_token_hash": token_hash,
+                "api_token_hash": None,
+                "api_token_digest": token_digest,
                 "registered_at": now,
                 "supported_rule_variants": supported_rule_variants,
             },
@@ -220,6 +256,9 @@ class UserService:
         return UserModel.from_mongo(user)
 
     async def authenticate_bot_token(self, token: str) -> UserModel | None:
+        cached_user = self._get_cached_bot_user(token)
+        if cached_user is not None:
+            return cached_user
         parsed = self.parse_bot_token(token)
         if parsed is None:
             return None
@@ -227,10 +266,35 @@ class UserService:
         user = await self._users.find_one({"role": "bot", "bot_profile.api_token_id": token_id, "status": "active"})
         if user is None:
             return None
-        token_hash = user.get("bot_profile", {}).get("api_token_hash")
+        bot_profile = user.get("bot_profile", {})
+        token_digest = bot_profile.get("api_token_digest")
+        computed_digest = self.bot_token_digest(token_secret)
+        if token_digest:
+            if not hmac.compare_digest(computed_digest, token_digest):
+                return None
+            authenticated = UserModel.from_mongo(user)
+            self._cache_bot_user(token, authenticated)
+            return authenticated
+
+        token_hash = bot_profile.get("api_token_hash")
         if not token_hash or not self.verify_password(token_secret, token_hash):
             return None
-        return UserModel.from_mongo(user)
+
+        now = utcnow()
+        updated_user = await self._users.find_one_and_update(
+            {"_id": user["_id"]},
+            {
+                "$set": {
+                    "bot_profile.api_token_digest": computed_digest,
+                    "updated_at": now,
+                },
+                "$unset": {"bot_profile.api_token_hash": ""},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        authenticated = UserModel.from_mongo(updated_user or user)
+        self._cache_bot_user(token, authenticated)
+        return authenticated
 
     async def get_public_profile(self, db: Any, username: str) -> dict[str, Any] | None:
         canonical = self.canonical_username(username)

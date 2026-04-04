@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from bson import ObjectId
 
-from app.models.auth import RegisterRequest
+from app.models.auth import BotRegisterRequest, RegisterRequest
 from app.services.user_service import UserConflictError, UserService
 
 
@@ -79,6 +79,8 @@ class FakeUsersCollection:
             if self._matches(doc, query):
                 for key, value in update.get("$set", {}).items():
                     self._set_nested(doc, key, value)
+                for key in update.get("$unset", {}):
+                    self._unset_nested(doc, key)
                 self.docs[idx] = doc
                 return dict(doc)
         return None
@@ -122,6 +124,17 @@ class FakeUsersCollection:
         for part in parts[:-1]:
             cur = cur.setdefault(part, {})
         cur[parts[-1]] = value
+
+    @staticmethod
+    def _unset_nested(doc: dict, key: str):
+        parts = key.split(".")
+        cur = doc
+        for part in parts[:-1]:
+            cur = cur.get(part)
+            if not isinstance(cur, dict):
+                return
+        if isinstance(cur, dict):
+            cur.pop(parts[-1], None)
 
 
 class FakeDB:
@@ -191,6 +204,90 @@ async def test_authenticate_returns_user_for_valid_credentials_else_none() -> No
     assert valid.id == created.id
     assert invalid_password is None
     assert missing_user is None
+
+
+@pytest.mark.asyncio
+async def test_create_bot_stores_hmac_digest_and_authenticates_without_bcrypt_hash() -> None:
+    users = FakeUsersCollection()
+    service = UserService(users)
+    UserService.clear_bot_token_cache()
+
+    bot, token = await service.create_bot(
+        BotRegisterRequest(
+            username="digestbot",
+            display_name="Digest Bot",
+            owner_email="digestbot@example.com",
+            description="Digest-backed bot auth",
+            supported_rule_variants=["berkeley", "berkeley_any"],
+        )
+    )
+
+    stored = users.docs[0]
+    assert stored["bot_profile"]["api_token_hash"] is None
+    assert stored["bot_profile"]["api_token_digest"]
+
+    authenticated = await service.authenticate_bot_token(token)
+
+    assert authenticated is not None
+    assert authenticated.id == bot.id
+
+
+@pytest.mark.asyncio
+async def test_authenticate_bot_token_migrates_legacy_bcrypt_hash_to_digest() -> None:
+    users = FakeUsersCollection()
+    service = UserService(users)
+    UserService.clear_bot_token_cache()
+    token_id = "abc123"
+    token_secret = "legacy-secret"
+    users.docs.append(
+        {
+            "_id": ObjectId(),
+            "username": "legacybot",
+            "username_display": "Legacy Bot",
+            "email": "legacybot@bots.kriegspiel.local",
+            "email_verified": True,
+            "email_verification_sent_at": None,
+            "email_verified_at": datetime(2026, 4, 3, tzinfo=UTC),
+            "password_hash": service.hash_password("irrelevant123"),
+            "auth_providers": ["bot_token"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": {
+                "display_name": "Legacy Bot",
+                "owner_email": "legacy@example.com",
+                "description": "",
+                "listed": True,
+                "api_token_id": token_id,
+                "api_token_hash": service.hash_password(token_secret),
+                "registered_at": datetime(2026, 4, 3, tzinfo=UTC),
+                "supported_rule_variants": ["berkeley", "berkeley_any"],
+            },
+            "stats": {
+                "games_played": 0,
+                "games_won": 0,
+                "games_lost": 0,
+                "games_drawn": 0,
+                "elo": 1200,
+                "elo_peak": 1200,
+            },
+            "settings": {
+                "board_theme": "default",
+                "piece_set": "cburnett",
+                "sound_enabled": False,
+                "auto_ask_any": False,
+            },
+            "role": "bot",
+            "status": "active",
+            "last_active_at": datetime(2026, 4, 3, tzinfo=UTC),
+            "created_at": datetime(2026, 4, 3, tzinfo=UTC),
+            "updated_at": datetime(2026, 4, 3, tzinfo=UTC),
+        }
+    )
+
+    authenticated = await service.authenticate_bot_token(f"ksbot_{token_id}.{token_secret}")
+
+    assert authenticated is not None
+    assert users.docs[0]["bot_profile"].get("api_token_hash") is None
+    assert users.docs[0]["bot_profile"].get("api_token_digest") == service.bot_token_digest(token_secret)
 
 
 @pytest.mark.asyncio

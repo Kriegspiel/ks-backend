@@ -16,6 +16,7 @@ class BotProfile(BaseModel):
     listed: bool = True
     api_token_id: str | None = None
     api_token_hash: str | None = None
+    api_token_digest: str | None = None
     registered_at: datetime | None = None
     last_bot_game_joined_at: datetime | None = None
     supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: ["berkeley", "berkeley_any"])
