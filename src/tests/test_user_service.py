@@ -367,6 +367,33 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
 
 
 @pytest.mark.asyncio
+async def test_get_game_history_handles_null_result_documents() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    other_id = ObjectId()
+    archives.docs.append(
+        {
+            "_id": ObjectId(),
+            "white": {"user_id": str(user_id), "username": "playerone"},
+            "black": {"user_id": str(other_id), "username": "rival-a"},
+            "result": None,
+            "moves": [1, 2, 3],
+            "created_at": datetime(2026, 3, 10, tzinfo=UTC),
+            "updated_at": datetime(2026, 3, 10, tzinfo=UTC),
+        }
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    page, total = await service.get_game_history(db, str(user_id), page=1, per_page=10)
+
+    assert total == 1
+    assert page[0]["result"] == "draw"
+    assert page[0]["reason"] is None
+
+
+@pytest.mark.asyncio
 async def test_update_settings_persists_and_returns_payload() -> None:
     users = FakeUsersCollection()
     user_id = ObjectId()
