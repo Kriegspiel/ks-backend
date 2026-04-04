@@ -26,7 +26,7 @@ class UserConflictError(Exception):
 
 class UserService:
     _bot_token_cache: dict[str, tuple[float, UserModel]] = {}
-    _bot_token_cache_ttl_seconds = 300.0
+    _bot_token_cache_ttl_seconds = get_settings().BOT_TOKEN_CACHE_TTL_SECONDS
 
     def __init__(self, users_collection: Any):
         self._users = users_collection

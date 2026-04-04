@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -42,6 +44,9 @@ PlayerColor = Literal["white", "black"]
 logger = structlog.get_logger("app.game")
 ELO_K_FACTOR = 32
 WAITING_GAME_TTL = timedelta(hours=24)
+BOT_GAME_FLUSH_PLIES = 20
+BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
+FLUSH_LOOP_INTERVAL_SECONDS = 1.0
 
 
 class GameServiceError(Exception):
@@ -67,6 +72,17 @@ class GameValidationError(GameServiceError):
     pass
 
 
+@dataclass
+class CachedGameEntry:
+    game: dict[str, Any]
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    dirty: bool = False
+    version: int = 0
+    last_activity_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_persisted_ply: int = 0
+    flush_task: asyncio.Task[None] | None = None
+
+
 class GameService:
     def __init__(
         self,
@@ -83,6 +99,197 @@ class GameService:
         self._site_origin = site_origin.rstrip("/")
         self._rng = rng
         self._clock = ClockService()
+        self._cache: dict[ObjectId, CachedGameEntry] = {}
+        self._cache_lock = asyncio.Lock()
+        self._flush_loop_task: asyncio.Task[None] | None = None
+        self._shutdown = False
+
+    async def start(self) -> None:
+        self._shutdown = False
+        if self._flush_loop_task is None or self._flush_loop_task.done():
+            self._flush_loop_task = asyncio.create_task(self._flush_loop(), name="game-service-flush-loop")
+
+    async def shutdown(self) -> None:
+        self._shutdown = True
+        if self._flush_loop_task is not None:
+            self._flush_loop_task.cancel()
+            try:
+                await self._flush_loop_task
+            except asyncio.CancelledError:
+                pass
+            self._flush_loop_task = None
+        await self.flush_all()
+
+    async def flush_all(self) -> None:
+        async with self._cache_lock:
+            entries = list(self._cache.values())
+        for entry in entries:
+            await self._flush_entry(entry, reason="shutdown")
+
+    async def _flush_loop(self) -> None:
+        try:
+            while not self._shutdown:
+                await asyncio.sleep(FLUSH_LOOP_INTERVAL_SECONDS)
+                await self._flush_due_entries()
+        except asyncio.CancelledError:
+            raise
+
+    async def _flush_due_entries(self) -> None:
+        async with self._cache_lock:
+            entries = list(self._cache.values())
+        for entry in entries:
+            if await self._should_flush_entry(entry):
+                self._schedule_flush(entry, reason="background")
+
+    async def _should_flush_entry(self, entry: CachedGameEntry) -> bool:
+        async with entry.lock:
+            if not entry.dirty:
+                return False
+            game = entry.game
+            if game.get("state") == "completed":
+                return True
+            if self._is_human_involved_game(game):
+                return True
+            current_ply = self._ply_count(game)
+            if current_ply - entry.last_persisted_ply >= BOT_GAME_FLUSH_PLIES:
+                return True
+            return self.utcnow() - entry.last_activity_at >= BOT_GAME_IDLE_FLUSH
+
+    def _schedule_flush(self, entry: CachedGameEntry, *, reason: str) -> None:
+        if entry.flush_task is not None and not entry.flush_task.done():
+            return
+        entry.flush_task = asyncio.create_task(self._flush_entry(entry, reason=reason), name=f"game-flush-{reason}")
+
+    async def _flush_entry(self, entry: CachedGameEntry, *, reason: str) -> None:
+        persisted_snapshot: dict[str, Any] | None = None
+        should_evict = False
+        try:
+            async with entry.lock:
+                if not entry.dirty:
+                    return
+                snapshot = self._persistable_game(entry.game)
+                version = entry.version
+                persisted_ply = self._ply_count(snapshot)
+
+            await self._persist_game_document(snapshot)
+            persisted_snapshot = snapshot
+            if snapshot.get("state") == "completed":
+                persisted_snapshot = await self._finalize_completed_game(snapshot)
+
+            async with entry.lock:
+                if entry.version == version:
+                    entry.dirty = False
+                    entry.game = persisted_snapshot
+                entry.last_persisted_ply = max(entry.last_persisted_ply, persisted_ply)
+                should_evict = entry.game.get("state") != "active" and not entry.dirty
+        finally:
+            current_task = asyncio.current_task()
+            async with entry.lock:
+                if entry.flush_task is current_task:
+                    entry.flush_task = None
+
+        if should_evict and persisted_snapshot is not None:
+            await self._evict_cached_game(persisted_snapshot.get("_id"))
+        if persisted_snapshot is not None:
+            logger.debug("game_flushed", game_id=str(persisted_snapshot.get("_id")), reason=reason)
+
+    async def _persist_game_document(self, game: dict[str, Any]) -> None:
+        document = self._persistable_game(game)
+        if hasattr(self._games, "replace_one"):
+            await self._games.replace_one({"_id": document["_id"]}, document, upsert=True)
+            return
+
+        docs = getattr(self._games, "docs", None)
+        if isinstance(docs, list):
+            for index, existing in enumerate(docs):
+                if existing.get("_id") == document.get("_id"):
+                    docs[index] = document
+                    return
+            docs.append(document)
+            return
+
+        await self._games.find_one_and_update(
+            {"_id": document["_id"]},
+            {"$set": {key: value for key, value in document.items() if key != "_id"}},
+            return_document=ReturnDocument.AFTER,
+        )
+
+    @staticmethod
+    def _persistable_game(game: dict[str, Any]) -> dict[str, Any]:
+        document = deepcopy(game)
+        document.pop("white_scoresheet", None)
+        document.pop("black_scoresheet", None)
+        return document
+
+    @staticmethod
+    def _ply_count(game: dict[str, Any]) -> int:
+        return len(game.get("moves", []))
+
+    @staticmethod
+    def _is_human_involved_game(game: dict[str, Any]) -> bool:
+        players = [game.get("white"), game.get("black")]
+        return any(player and player.get("role") != "bot" for player in players)
+
+    async def _evict_cached_game(self, game_id: ObjectId | None) -> None:
+        if game_id is None:
+            return
+        async with self._cache_lock:
+            self._cache.pop(game_id, None)
+
+    async def _prime_cache(self, game: dict[str, Any], *, persisted: bool) -> CachedGameEntry:
+        entry = CachedGameEntry(
+            game=deepcopy(game),
+            dirty=not persisted,
+            version=0 if persisted else 1,
+            last_activity_at=self.utcnow(),
+            last_persisted_ply=self._ply_count(game) if persisted else 0,
+        )
+        async with self._cache_lock:
+            self._cache[game["_id"]] = entry
+        return entry
+
+    async def _get_cached_entry(self, oid: ObjectId) -> CachedGameEntry | None:
+        async with self._cache_lock:
+            return self._cache.get(oid)
+
+    async def _get_game_for_runtime(self, *, game_id: str) -> tuple[dict[str, Any], CachedGameEntry | None]:
+        oid = self._id_query(game_id)
+        cached = await self._get_cached_entry(oid)
+        if cached is not None:
+            return cached.game, cached
+
+        game = await self._games.find_one({"_id": oid})
+        if game is None:
+            raise GameNotFoundError()
+        if game.get("state") == "active":
+            cached = await self._prime_cache(game, persisted=True)
+            return cached.game, cached
+        return game, None
+
+    @staticmethod
+    def _mark_entry_dirty_locked(entry: CachedGameEntry, *, now: datetime) -> None:
+        entry.dirty = True
+        entry.version += 1
+        entry.last_activity_at = now
+
+    @staticmethod
+    def _apply_timeout_to_game(*, game: dict[str, Any], timeout: dict[str, Any], now: datetime) -> dict[str, Any]:
+        projected = timeout["clock"]
+        time_control = dict(game.get("time_control") or {})
+        time_control.update(
+            {
+                "white_remaining": projected["white_remaining"],
+                "black_remaining": projected["black_remaining"],
+                "active_color": None,
+                "last_updated_at": now,
+            }
+        )
+        game["state"] = "completed"
+        game["turn"] = None
+        game["result"] = {"winner": timeout["winner"], "reason": "timeout"}
+        game["time_control"] = time_control
+        game["updated_at"] = now
+        return game
 
     @staticmethod
     def _expected_score(rating: int, opponent_rating: int) -> float:
@@ -206,6 +413,9 @@ class GameService:
 
     async def get_game_or_archive(self, *, game_id: str) -> dict[str, Any] | None:
         oid = self._id_query(game_id)
+        cached = await self._get_cached_entry(oid)
+        if cached is not None:
+            return deepcopy(cached.game)
         game = await self._games.find_one({"_id": oid})
         if game is not None:
             return game
@@ -486,12 +696,16 @@ class GameService:
 
     @staticmethod
     def _stored_scoresheets(game: dict[str, Any], engine: Any | None = None) -> dict[str, dict[str, Any]]:
+        def _scoresheet_has_entries(sheet: dict[str, Any]) -> bool:
+            return bool(sheet.get("moves_own") or sheet.get("moves_opponent") or int(sheet.get("last_move_number", 0)) > 0)
+
         engine_state = game.get("engine_state")
         if isinstance(engine_state, dict):
             white = engine_state.get("white_scoresheet")
             black = engine_state.get("black_scoresheet")
             if isinstance(white, dict) and isinstance(black, dict):
-                return {"white": white, "black": black}
+                if not game.get("moves") or _scoresheet_has_entries(white) or _scoresheet_has_entries(black):
+                    return {"white": white, "black": black}
         white = game.get("white_scoresheet")
         black = game.get("black_scoresheet")
         if isinstance(white, dict) and isinstance(black, dict):
@@ -677,6 +891,9 @@ class GameService:
             bot_payload = {"bot_id": str(bot["_id"]), "username": bot["username"]}
 
         result = await self._games.insert_one(document)
+        document["_id"] = result.inserted_id
+        if state == "active":
+            await self._prime_cache(document, persisted=True)
         logger.info(
             "game_created",
             game_id=str(result.inserted_id),
@@ -756,6 +973,8 @@ class GameService:
         if role == "bot":
             await self._set_bot_join_cooldown(user_id=user_id, now=now)
 
+        await self._prime_cache(updated, persisted=True)
+
         logger.info("game_joined", game_id=str(updated["_id"]), user_id=user_id, side=joiner_color, game_code=normalized)
         return JoinGameResponse(
             game_id=str(updated["_id"]),
@@ -814,14 +1033,20 @@ class GameService:
         return GameMetadataResponse.model_validate(payload)
 
     async def get_game_state(self, *, game_id: str, user_id: str) -> GameStateResponse:
-        game = await self._games.find_one({"_id": self._id_query(game_id)})
-        if game is None:
-            raise GameNotFoundError()
-
+        game, entry = await self._get_game_for_runtime(game_id=game_id)
         now = self.utcnow()
-        game = await self._adjudicate_timeout_if_needed(game=game, now=now)
-        if game.get("state") == "completed":
-            game = await self._finalize_completed_game(game)
+        if entry is not None:
+            async with entry.lock:
+                time_control = self._active_time_control(game=game, now=now)
+                timeout = self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
+                if timeout is not None:
+                    self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
+                    self._mark_entry_dirty_locked(entry, now=now)
+                    self._schedule_flush(entry, reason="timeout")
+        else:
+            game = await self._adjudicate_timeout_if_needed(game=game, now=now)
+            if game.get("state") == "completed":
+                game = await self._finalize_completed_game(game)
 
         color = self._player_color_for_user(game, user_id)
         if color is None:
@@ -858,80 +1083,77 @@ class GameService:
         )
 
     async def execute_move(self, *, game_id: str, user_id: str, uci: str) -> dict[str, Any]:
-        oid = self._id_query(game_id)
-        game = await self._games.find_one({"_id": oid})
-        if game is None:
-            raise GameNotFoundError()
-
+        game, entry = await self._get_game_for_runtime(game_id=game_id)
+        if entry is None:
+            await self._prime_cache(game, persisted=True)
+            game, entry = await self._get_game_for_runtime(game_id=game_id)
+        assert entry is not None
         now = self.utcnow()
-        game = await self._adjudicate_timeout_if_needed(game=game, now=now)
+        async with entry.lock:
+            time_control = self._active_time_control(game=game, now=now)
+            timeout = self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
+            if timeout is not None:
+                self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
+                self._mark_entry_dirty_locked(entry, now=now)
+                self._schedule_flush(entry, reason="timeout")
+                raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game timed out")
 
-        color = self._player_color_for_user(game, user_id)
-        if color is None:
-            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can mutate this game")
+            color = self._player_color_for_user(game, user_id)
+            if color is None:
+                raise GameForbiddenError(code="FORBIDDEN", message="Only participants can mutate this game")
 
-        if game.get("state") != "active":
-            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+            if game.get("state") != "active":
+                raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
 
-        if game.get("turn") != color:
-            raise GameValidationError(code="NOT_YOUR_TURN", message="It is not your turn")
+            if game.get("turn") != color:
+                raise GameValidationError(code="NOT_YOUR_TURN", message="It is not your turn")
 
-        engine = self._load_or_bootstrap_engine(game)
-        outcome = attempt_move(engine, uci)
-        move_record = {
-            "ply": len(game.get("moves", [])) + 1,
-            "color": color,
-            "question_type": "COMMON",
-            "uci": uci,
-            "announcement": outcome["announcement"],
-            "special_announcement": outcome["special_announcement"],
-            "capture_square": outcome["capture_square"],
-            "move_done": outcome["move_done"],
-            "timestamp": now,
-            "replay_fen": self._outcome_replay_fen(outcome),
-        }
+            engine = self._load_or_bootstrap_engine(game)
+            outcome = attempt_move(engine, uci)
+            move_record = {
+                "ply": len(game.get("moves", [])) + 1,
+                "color": color,
+                "question_type": "COMMON",
+                "uci": uci,
+                "announcement": outcome["announcement"],
+                "special_announcement": outcome["special_announcement"],
+                "capture_square": outcome["capture_square"],
+                "move_done": outcome["move_done"],
+                "timestamp": now,
+                "replay_fen": self._outcome_replay_fen(outcome),
+            }
 
-        time_control = self._active_time_control(game=game, now=now)
-        advanced_time_control = self._clock.deduct_and_increment(
-            time_control=time_control,
-            mover_color=color,
-            now=now,
-            move_done=outcome["move_done"],
-            next_active_color=outcome["turn"],
-        )
-        timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
+            advanced_time_control = self._clock.deduct_and_increment(
+                time_control=time_control,
+                mover_color=color,
+                now=now,
+                move_done=outcome["move_done"],
+                next_active_color=outcome["turn"],
+            )
+            timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
 
-        set_payload: dict[str, Any] = {
-            "engine_state": serialize_game_state(engine),
-            "turn": outcome["turn"],
-            "time_control": advanced_time_control,
-            "updated_at": now,
-        }
-        if outcome["game_over"]:
-            set_payload["state"] = "completed"
-            set_payload["result"] = self._final_result_from_special(outcome["special_announcement"])
-            set_payload["time_control"]["active_color"] = None
-        elif timeout is not None:
-            set_payload["state"] = "completed"
-            set_payload["turn"] = None
-            set_payload["result"] = {"winner": timeout["winner"], "reason": "timeout"}
-            set_payload["time_control"]["white_remaining"] = timeout["clock"]["white_remaining"]
-            set_payload["time_control"]["black_remaining"] = timeout["clock"]["black_remaining"]
-            set_payload["time_control"]["active_color"] = None
+            game["engine_state"] = serialize_game_state(engine)
+            game["turn"] = outcome["turn"]
+            game["time_control"] = advanced_time_control
+            game["updated_at"] = now
+            game.setdefault("moves", []).append(move_record)
+            if outcome["move_done"]:
+                game["move_number"] = int(game.get("move_number", 1)) + 1
+            game.pop("white_scoresheet", None)
+            game.pop("black_scoresheet", None)
+            if outcome["game_over"]:
+                game["state"] = "completed"
+                game["result"] = self._final_result_from_special(outcome["special_announcement"])
+                game["time_control"]["active_color"] = None
+            elif timeout is not None:
+                self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
 
-        updated = await self._games.find_one_and_update(
-            {"_id": oid, "state": "active"},
-            {
-                "$set": set_payload,
-                "$unset": {"white_scoresheet": "", "black_scoresheet": ""},
-                "$push": {"moves": move_record},
-                "$inc": {"move_number": 1 if outcome["move_done"] else 0},
-            },
-            return_document=ReturnDocument.AFTER,
-        )
-        if updated is None:
-            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
-        updated = await self._finalize_completed_game(updated)
+            self._mark_entry_dirty_locked(entry, now=now)
+            clock_payload = self._clock.response_clock(time_control=game["time_control"], now=now)
+            game_over = game.get("state") == "completed"
+
+        if self._is_human_involved_game(game) or game_over:
+            self._schedule_flush(entry, reason="human" if self._is_human_involved_game(game) else "completion")
 
         logger.info(
             "move_submitted",
@@ -940,88 +1162,84 @@ class GameService:
             side=color,
             question_type="COMMON",
             move_done=outcome["move_done"],
-            game_over=bool(set_payload.get("state") == "completed"),
+            game_over=bool(game_over),
         )
         return {
             "move_done": outcome["move_done"],
             "announcement": outcome["announcement"],
             "special_announcement": outcome["special_announcement"],
             "capture_square": outcome["capture_square"],
-            "turn": set_payload.get("turn"),
-            "game_over": bool(set_payload.get("state") == "completed"),
-            "clock": self._clock.response_clock(time_control=set_payload["time_control"], now=now),
+            "turn": game.get("turn"),
+            "game_over": bool(game_over),
+            "clock": clock_payload,
         }
 
     async def execute_ask_any(self, *, game_id: str, user_id: str) -> dict[str, Any]:
-        oid = self._id_query(game_id)
-        game = await self._games.find_one({"_id": oid})
-        if game is None:
-            raise GameNotFoundError()
-
+        game, entry = await self._get_game_for_runtime(game_id=game_id)
+        if entry is None:
+            await self._prime_cache(game, persisted=True)
+            game, entry = await self._get_game_for_runtime(game_id=game_id)
+        assert entry is not None
         now = self.utcnow()
-        game = await self._adjudicate_timeout_if_needed(game=game, now=now)
+        async with entry.lock:
+            time_control = self._active_time_control(game=game, now=now)
+            timeout = self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
+            if timeout is not None:
+                self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
+                self._mark_entry_dirty_locked(entry, now=now)
+                self._schedule_flush(entry, reason="timeout")
+                raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game timed out")
 
-        color = self._player_color_for_user(game, user_id)
-        if color is None:
-            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can mutate this game")
+            color = self._player_color_for_user(game, user_id)
+            if color is None:
+                raise GameForbiddenError(code="FORBIDDEN", message="Only participants can mutate this game")
 
-        if game.get("state") != "active":
-            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+            if game.get("state") != "active":
+                raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
 
-        if game.get("turn") != color:
-            raise GameValidationError(code="NOT_YOUR_TURN", message="It is not your turn")
+            if game.get("turn") != color:
+                raise GameValidationError(code="NOT_YOUR_TURN", message="It is not your turn")
 
-        engine = self._load_or_bootstrap_engine(game)
-        outcome = ask_any(engine)
-        move_record = {
-            "ply": len(game.get("moves", [])) + 1,
-            "color": color,
-            "question_type": "ASK_ANY",
-            "uci": None,
-            "announcement": outcome["announcement"],
-            "special_announcement": outcome["special_announcement"],
-            "capture_square": outcome["capture_square"],
-            "move_done": outcome["move_done"],
-            "timestamp": now,
-            "replay_fen": self._outcome_replay_fen(outcome),
-        }
+            engine = self._load_or_bootstrap_engine(game)
+            outcome = ask_any(engine)
+            move_record = {
+                "ply": len(game.get("moves", [])) + 1,
+                "color": color,
+                "question_type": "ASK_ANY",
+                "uci": None,
+                "announcement": outcome["announcement"],
+                "special_announcement": outcome["special_announcement"],
+                "capture_square": outcome["capture_square"],
+                "move_done": outcome["move_done"],
+                "timestamp": now,
+                "replay_fen": self._outcome_replay_fen(outcome),
+            }
 
-        time_control = self._active_time_control(game=game, now=now)
-        advanced_time_control = self._clock.deduct_and_increment(
-            time_control=time_control,
-            mover_color=color,
-            now=now,
-            move_done=False,
-            next_active_color=outcome["turn"],
-        )
-        timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
+            advanced_time_control = self._clock.deduct_and_increment(
+                time_control=time_control,
+                mover_color=color,
+                now=now,
+                move_done=False,
+                next_active_color=outcome["turn"],
+            )
+            timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
 
-        set_payload: dict[str, Any] = {
-            "engine_state": serialize_game_state(engine),
-            "turn": outcome["turn"],
-            "time_control": advanced_time_control,
-            "updated_at": now,
-        }
-        if timeout is not None:
-            set_payload["state"] = "completed"
-            set_payload["turn"] = None
-            set_payload["result"] = {"winner": timeout["winner"], "reason": "timeout"}
-            set_payload["time_control"]["white_remaining"] = timeout["clock"]["white_remaining"]
-            set_payload["time_control"]["black_remaining"] = timeout["clock"]["black_remaining"]
-            set_payload["time_control"]["active_color"] = None
+            game["engine_state"] = serialize_game_state(engine)
+            game["turn"] = outcome["turn"]
+            game["time_control"] = advanced_time_control
+            game["updated_at"] = now
+            game.setdefault("moves", []).append(move_record)
+            game.pop("white_scoresheet", None)
+            game.pop("black_scoresheet", None)
+            if timeout is not None:
+                self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
 
-        updated = await self._games.find_one_and_update(
-            {"_id": oid, "state": "active"},
-            {
-                "$set": set_payload,
-                "$unset": {"white_scoresheet": "", "black_scoresheet": ""},
-                "$push": {"moves": move_record},
-            },
-            return_document=ReturnDocument.AFTER,
-        )
-        if updated is None:
-            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
-        updated = await self._finalize_completed_game(updated)
+            self._mark_entry_dirty_locked(entry, now=now)
+            clock_payload = self._clock.response_clock(time_control=game["time_control"], now=now)
+            game_over = game.get("state") == "completed" or outcome["game_over"]
+
+        if self._is_human_involved_game(game) or game_over:
+            self._schedule_flush(entry, reason="human" if self._is_human_involved_game(game) else "completion")
 
         logger.info(
             "move_submitted",
@@ -1030,53 +1248,49 @@ class GameService:
             side=color,
             question_type="COMMON",
             move_done=outcome["move_done"],
-            game_over=bool(set_payload.get("state") == "completed"),
+            game_over=bool(game_over),
         )
         return {
             "move_done": outcome["move_done"],
             "announcement": outcome["announcement"],
             "special_announcement": outcome["special_announcement"],
             "capture_square": outcome["capture_square"],
-            "turn": set_payload.get("turn"),
-            "game_over": bool(set_payload.get("state") == "completed") or outcome["game_over"],
+            "turn": game.get("turn"),
+            "game_over": bool(game_over),
             "has_any": outcome["has_any"],
-            "clock": self._clock.response_clock(time_control=set_payload["time_control"], now=now),
+            "clock": clock_payload,
         }
 
     async def resign_game(self, *, game_id: str, user_id: str) -> dict[str, Any]:
-        oid = self._id_query(game_id)
-        game = await self._games.find_one({"_id": oid})
-        if game is None:
-            raise GameNotFoundError()
+        game, entry = await self._get_game_for_runtime(game_id=game_id)
+        if entry is None:
+            await self._prime_cache(game, persisted=True)
+            game, entry = await self._get_game_for_runtime(game_id=game_id)
+        assert entry is not None
 
-        if game["state"] != "active":
-            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+        now = self.utcnow()
+        async with entry.lock:
+            if game["state"] != "active":
+                raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
 
-        white = game.get("white")
-        black = game.get("black")
-        is_white = bool(white and white.get("user_id") == user_id)
-        is_black = bool(black and black.get("user_id") == user_id)
-        if not (is_white or is_black):
-            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can resign")
+            white = game.get("white")
+            black = game.get("black")
+            is_white = bool(white and white.get("user_id") == user_id)
+            is_black = bool(black and black.get("user_id") == user_id)
+            if not (is_white or is_black):
+                raise GameForbiddenError(code="FORBIDDEN", message="Only participants can resign")
 
-        winner: PlayerColor = "black" if is_white else "white"
-        time_control = self._active_time_control(game=game, now=self.utcnow())
-        time_control["active_color"] = None
-        updated = await self._games.find_one_and_update(
-            {"_id": oid, "state": "active"},
-            {
-                "$set": {
-                    "state": "completed",
-                    "result": {"winner": winner, "reason": "resignation"},
-                    "time_control": time_control,
-                    "updated_at": self.utcnow(),
-                }
-            },
-            return_document=ReturnDocument.AFTER,
-        )
-        if updated is None:
-            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
-        await self._finalize_completed_game(updated)
+            winner: PlayerColor = "black" if is_white else "white"
+            time_control = self._active_time_control(game=game, now=now)
+            time_control["active_color"] = None
+            game["state"] = "completed"
+            game["turn"] = None
+            game["result"] = {"winner": winner, "reason": "resignation"}
+            game["time_control"] = time_control
+            game["updated_at"] = now
+            self._mark_entry_dirty_locked(entry, now=now)
+
+        self._schedule_flush(entry, reason="completion")
 
         logger.info("game_resigned", game_id=game_id, user_id=user_id, winner=winner)
         return {"result": {"winner": winner, "reason": "resignation"}}
@@ -1118,7 +1332,9 @@ class GameService:
             raise GameConflictError(code="GAME_NOT_WAITING", message="Game is no longer deletable")
 
     async def hydrate_document(self, *, game_id: str) -> GameDocument:
-        game = await self._games.find_one({"_id": self._id_query(game_id)})
+        oid = self._id_query(game_id)
+        cached = await self._get_cached_entry(oid)
+        game = deepcopy(cached.game) if cached is not None else await self._games.find_one({"_id": oid})
         if game is None:
             raise GameNotFoundError()
         return GameDocument.from_mongo(game)

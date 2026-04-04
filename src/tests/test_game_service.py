@@ -6,6 +6,7 @@ import pytest
 from bson import ObjectId
 
 from app.models.game import CreateGameRequest
+from app.services.engine_adapter import create_new_game, serialize_game_state
 from app.services.game_service import (
     GameConflictError,
     GameForbiddenError,
@@ -136,6 +137,33 @@ class FakeUsersCollection:
             if matches:
                 return doc
         return None
+
+
+def active_game_doc(*, white_role: str = "user", black_role: str = "user", turn: str = "white") -> dict:
+    now = datetime.now(UTC)
+    engine = create_new_game(any_rule=True)
+    return {
+        "_id": ObjectId(),
+        "game_code": "ACTIVE1",
+        "rule_variant": "berkeley_any",
+        "white": {"user_id": "u1", "username": "w", "connected": True, "role": white_role},
+        "black": {"user_id": "u2", "username": "b", "connected": True, "role": black_role},
+        "state": "active",
+        "turn": turn,
+        "move_number": 1,
+        "moves": [],
+        "engine_state": serialize_game_state(engine),
+        "time_control": {
+            "base": 900.0,
+            "increment": 10.0,
+            "white_remaining": 900.0,
+            "black_remaining": 900.0,
+            "active_color": turn,
+            "last_updated_at": now,
+        },
+        "created_at": now,
+        "updated_at": now,
+    }
 
 
 @pytest.mark.asyncio
@@ -430,64 +458,43 @@ async def test_get_game_and_resign_and_delete_not_found_paths() -> None:
 @pytest.mark.asyncio
 async def test_resign_requires_active_participant_and_completes_game_and_race() -> None:
     games = FakeGamesCollection()
-    gid = ObjectId()
-    now = datetime.now(UTC)
-    games.docs.append(
-        {
-            "_id": gid,
-            "game_code": "C4N7P2",
-            "rule_variant": "berkeley_any",
-            "white": {"user_id": "u1", "username": "w", "connected": True},
-            "black": {"user_id": "u2", "username": "b", "connected": True},
-            "state": "active",
-            "turn": "white",
-            "move_number": 7,
-            "created_at": now,
-            "updated_at": now,
-        }
-    )
+    game = active_game_doc()
+    game["_id"] = ObjectId()
+    game["game_code"] = "C4N7P2"
+    game["move_number"] = 7
+    games.docs.append(game)
     service = GameService(games)
 
-    result = await service.resign_game(game_id=str(gid), user_id="u1")
+    result = await service.resign_game(game_id=str(game["_id"]), user_id="u1")
     assert result["result"] == {"winner": "black", "reason": "resignation"}
+    assert games.docs[0]["state"] == "active"
+    await service.flush_all()
     assert games.docs[0]["state"] == "completed"
 
     with pytest.raises(GameValidationError):
-        await service.resign_game(game_id=str(gid), user_id="u2")
+        await service.resign_game(game_id=str(game["_id"]), user_id="u2")
 
     games.docs[0]["state"] = "active"
-
-    async def none_update(*args, **kwargs):  # noqa: ANN002, ANN003
-        return None
-
-    games.find_one_and_update = none_update  # type: ignore[method-assign]
-    with pytest.raises(GameValidationError):
-        await service.resign_game(game_id=str(gid), user_id="u2")
+    games.docs[0]["result"] = None
+    games.docs[0]["turn"] = "white"
+    games.docs[0]["time_control"]["active_color"] = "white"
+    service = GameService(games)
+    await service.resign_game(game_id=str(game["_id"]), user_id="u2")
+    await service.shutdown()
+    assert games.docs[0]["result"] == {"winner": "white", "reason": "resignation"}
 
 
 @pytest.mark.asyncio
 async def test_resign_rejects_non_participant() -> None:
     games = FakeGamesCollection()
-    gid = ObjectId()
-    now = datetime.now(UTC)
-    games.docs.append(
-        {
-            "_id": gid,
-            "game_code": "D4N7P2",
-            "rule_variant": "berkeley_any",
-            "white": {"user_id": "u1", "username": "w", "connected": True},
-            "black": {"user_id": "u2", "username": "b", "connected": True},
-            "state": "active",
-            "turn": "white",
-            "move_number": 7,
-            "created_at": now,
-            "updated_at": now,
-        }
-    )
+    game = active_game_doc()
+    game["_id"] = ObjectId()
+    game["game_code"] = "D4N7P2"
+    games.docs.append(game)
     service = GameService(games)
 
     with pytest.raises(GameForbiddenError):
-        await service.resign_game(game_id=str(gid), user_id="u3")
+        await service.resign_game(game_id=str(game["_id"]), user_id="u3")
 
 
 @pytest.mark.asyncio
@@ -571,3 +578,34 @@ async def test_hydrate_document_and_waiting_black_player_mapping() -> None:
 
     assert hydrated.game_code == "K7K2M9"
     assert mine[0].black and mine[0].black.username == "creator"
+
+
+@pytest.mark.asyncio
+async def test_human_visible_action_stays_in_cache_until_flushed() -> None:
+    games = FakeGamesCollection()
+    game = active_game_doc()
+    games.docs.append(game)
+    service = GameService(games)
+
+    response = await service.execute_ask_any(game_id=str(game["_id"]), user_id="u1")
+
+    assert response["announcement"] in {"HAS_ANY", "NO_ANY"}
+    assert games.docs[0]["moves"] == []
+    await service.flush_all()
+    assert len(games.docs[0]["moves"]) == 1
+    assert games.docs[0]["moves"][0]["question_type"] == "ASK_ANY"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flushes_dirty_cached_games() -> None:
+    games = FakeGamesCollection()
+    game = active_game_doc(white_role="bot", black_role="bot")
+    game["moves"] = [{"ply": index + 1, "question_type": "COMMON"} for index in range(19)]
+    games.docs.append(game)
+    service = GameService(games)
+
+    await service.execute_ask_any(game_id=str(game["_id"]), user_id="u1")
+
+    assert len(games.docs[0]["moves"]) == 19
+    await service.shutdown()
+    assert len(games.docs[0]["moves"]) == 20

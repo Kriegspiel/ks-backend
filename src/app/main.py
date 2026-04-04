@@ -13,6 +13,7 @@ from app.routers.auth import router as auth_router
 from app.routers.bot import router as bot_router
 from app.routers.game import router as game_router
 from app.routers.user import router as user_router
+from app.services.game_service import GameService
 
 logger = structlog.get_logger("app.main")
 
@@ -33,11 +34,19 @@ def build_cors_origins(settings: Settings) -> list[str]:
 async def lifespan(app: FastAPI):
     app.state.db = None
     app.state.db_ready = False
+    app.state.game_service = None
 
     try:
         db = await init_db(app.state.settings)
         app.state.db = db
         app.state.db_ready = True
+        app.state.game_service = GameService(
+            db.games,
+            users_collection=db.users,
+            archives_collection=db.game_archives,
+            site_origin=app.state.settings.SITE_ORIGIN,
+        )
+        await app.state.game_service.start()
         logger.info("db_init_success")
     except Exception as exc:
         logger.warning("db_init_failed", error_type=type(exc).__name__)
@@ -47,6 +56,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        game_service = getattr(app.state, "game_service", None)
+        if game_service is not None:
+            await game_service.shutdown()
         await close_db()
 
 
