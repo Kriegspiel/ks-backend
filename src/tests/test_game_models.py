@@ -149,8 +149,12 @@ def test_game_metadata_response_contract_shape() -> None:
             "turn": "white",
             "move_number": 12,
             "created_at": now,
+            "updated_at": now,
+            "result": {"winner": "white", "reason": "checkmate"},
+            "rating_snapshot": {"overall": {"white_before": 1200, "white_after": 1216}},
         }
     )
 
     assert response.white.username == "alexfil"
     assert response.black and response.black.username == "opponent1"
+    assert response.result == {"winner": "white", "reason": "checkmate"}

@@ -1119,6 +1119,9 @@ class GameService:
             "turn": game.get("turn"),
             "move_number": game.get("move_number", 1),
             "created_at": game["created_at"],
+            "updated_at": game.get("updated_at", game["created_at"]),
+            "result": game.get("result"),
+            "rating_snapshot": game.get("rating_snapshot"),
         }
         return GameMetadataResponse.model_validate(payload)
 
