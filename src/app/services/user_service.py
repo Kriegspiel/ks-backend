@@ -355,6 +355,7 @@ class UserService:
                 {
                     "game_id": str(game.get("_id")),
                     "game_code": game.get("game_code"),
+                    "rule_variant": game.get("rule_variant"),
                     "opponent": opponent.get("username") if isinstance(opponent, dict) else None,
                     "opponent_role": opponent.get("role") if isinstance(opponent, dict) else None,
                     "play_as": play_as,
