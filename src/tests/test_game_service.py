@@ -399,6 +399,47 @@ async def test_get_game_uses_live_user_elo_over_stale_embedded_elo() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_game_uses_archive_and_derives_missing_insufficient_reason() -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    now = datetime.now(UTC)
+    gid = ObjectId()
+    archives.docs.append(
+        {
+            "_id": gid,
+            "game_code": "H4N7P2",
+            "rule_variant": "berkeley_any",
+            "white": {"user_id": "u1", "username": "w", "connected": True, "role": "user"},
+            "black": {"user_id": "u2", "username": "b", "connected": True, "role": "bot"},
+            "state": "completed",
+            "turn": None,
+            "move_number": 9,
+            "moves": [
+                {
+                    "ply": 8,
+                    "color": "black",
+                    "question_type": "COMMON",
+                    "uci": "a1a2",
+                    "announcement": "REGULAR_MOVE",
+                    "special_announcement": "DRAW_INSUFFICIENT",
+                    "move_done": True,
+                    "timestamp": now,
+                }
+            ],
+            "result": {"winner": None, "reason": None},
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games, archives_collection=archives)
+
+    game = await service.get_game(game_id=str(gid))
+
+    assert game.game_code == "H4N7P2"
+    assert game.result == {"winner": None, "reason": "insufficient"}
+
+
+@pytest.mark.asyncio
 async def test_get_lobby_stats_counts_active_and_completed_windows() -> None:
     games = FakeGamesCollection()
     archives = FakeGamesCollection()

@@ -29,11 +29,14 @@ class StubService:
                 [
                     {
                         "game_id": "gid1",
+                        "game_code": "A7K2M9",
                         "opponent": "rival",
+                        "opponent_role": "bot",
                         "play_as": "white",
                         "result": "win",
                         "reason": "checkmate",
                         "move_count": 45,
+                        "turn_count": 20,
                         "played_at": datetime(2026, 1, 1, tzinfo=UTC),
                     }
                 ],

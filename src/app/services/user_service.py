@@ -111,6 +111,29 @@ class UserService:
             return "draw"
         return "win" if winner == play_as else "loss"
 
+    @staticmethod
+    def _normalized_result_reason(game: dict[str, Any]) -> str | None:
+        result = game.get("result") if isinstance(game.get("result"), dict) else {}
+        reason = result.get("reason")
+        if isinstance(reason, str) and reason:
+            return reason
+
+        for move in reversed(game.get("moves", [])):
+            special = move.get("special_announcement")
+            if special == "DRAW_INSUFFICIENT":
+                return "insufficient"
+            if special == "DRAW_STALEMATE":
+                return "stalemate"
+            if special == "DRAW_TOOMANYREVERSIBLEMOVES":
+                return "too_many_reversible_moves"
+            if special in {"CHECKMATE_WHITE_WINS", "CHECKMATE_BLACK_WINS"}:
+                return "checkmate"
+        return None
+
+    @staticmethod
+    def _completed_turn_count(game: dict[str, Any]) -> int:
+        return sum(1 for move in game.get("moves", []) if move.get("move_done"))
+
     async def create_user(self, registration: RegisterRequest) -> UserModel:
         username = self.canonical_username(registration.username)
         email = self.canonical_email(registration.email)
@@ -331,12 +354,14 @@ class UserService:
             games.append(
                 {
                     "game_id": str(game.get("_id")),
+                    "game_code": game.get("game_code"),
                     "opponent": opponent.get("username") if isinstance(opponent, dict) else None,
                     "opponent_role": opponent.get("role") if isinstance(opponent, dict) else None,
                     "play_as": play_as,
                     "result": self._winner_result(winner, play_as),
-                    "reason": result.get("reason"),
+                    "reason": self._normalized_result_reason(game),
                     "move_count": len(game.get("moves", [])),
+                    "turn_count": self._completed_turn_count(game),
                     "played_at": self._safe_datetime(game.get("updated_at") or game.get("created_at")),
                     "elo_before": overall_snapshot.get(f"{prefix}_before"),
                     "elo_after": overall_snapshot.get(f"{prefix}_after"),
