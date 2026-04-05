@@ -295,3 +295,6 @@ class GameMetadataResponse(BaseModel):
     turn: PlayerColor | None = None
     move_number: int = Field(ge=1)
     created_at: datetime
+    updated_at: datetime
+    result: dict[str, Any] | None = None
+    rating_snapshot: dict[str, Any] | None = None
