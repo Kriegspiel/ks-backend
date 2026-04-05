@@ -305,7 +305,7 @@ class GameService:
             return self._cache.get(oid)
 
     async def _get_game_for_runtime(self, *, game_id: str) -> tuple[dict[str, Any], CachedGameEntry | None]:
-        oid = self._id_query(game_id)
+        oid = await self._resolve_game_object_id(game_id)
         cached = await self._get_cached_entry(oid)
         if cached is not None:
             return cached.game, cached
@@ -497,7 +497,7 @@ class GameService:
         return finalized
 
     async def get_game_or_archive(self, *, game_id: str) -> dict[str, Any] | None:
-        oid = self._id_query(game_id)
+        oid = await self._resolve_game_object_id(game_id)
         cached = await self._get_cached_entry(oid)
         if cached is not None:
             return deepcopy(cached.game)
@@ -677,6 +677,20 @@ class GameService:
         except Exception as exc:  # noqa: BLE001
             raise GameNotFoundError() from exc
 
+    async def _resolve_game_object_id(self, game_ref: str) -> ObjectId:
+        try:
+            return self._id_query(game_ref)
+        except GameNotFoundError:
+            normalized = str(game_ref).strip().upper()
+            if not normalized:
+                raise
+            game = await self._games.find_one({"game_code": normalized}, {"_id": 1})
+            if game is None and self._archives is not None:
+                game = await self._archives.find_one({"game_code": normalized}, {"_id": 1})
+            if game is None:
+                raise GameNotFoundError()
+            return game["_id"]
+
     @staticmethod
     def _resolve_players(doc: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         creator_color: PlayerColor = doc.get("creator_color", "white")
@@ -726,6 +740,7 @@ class GameService:
                 "turn": doc.get("turn"),
                 "move_number": doc.get("move_number", 1),
                 "created_at": doc["created_at"],
+                "updated_at": doc.get("updated_at", doc["created_at"]),
             }
         )
 
@@ -993,7 +1008,7 @@ class GameService:
             opponent_type=request.opponent_type,
         )
         if state == "active":
-            game_url = f"{self._site_origin}/game/{result.inserted_id}"
+            game_url = f"{self._site_origin}/game/{game_code}"
         return CreateGameResponse(
             game_id=str(result.inserted_id),
             game_code=code,
@@ -1072,7 +1087,7 @@ class GameService:
             play_as=joiner_color,
             rule_variant=updated["rule_variant"],
             state="active",
-            game_url=f"{self._site_origin}/game/{updated['_id']}",
+            game_url=f"{self._site_origin}/game/{updated['game_code']}",
         )
 
     async def get_open_games(self, *, limit: int = 20) -> OpenGamesResponse:
@@ -1103,7 +1118,8 @@ class GameService:
         return out
 
     async def get_game(self, *, game_id: str) -> GameMetadataResponse:
-        game = await self._games.find_one({"_id": self._id_query(game_id)})
+        oid = await self._resolve_game_object_id(game_id)
+        game = await self._games.find_one({"_id": oid})
         if game is None:
             raise GameNotFoundError()
 
@@ -1409,7 +1425,7 @@ class GameService:
         )
 
     async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:
-        oid = self._id_query(game_id)
+        oid = await self._resolve_game_object_id(game_id)
         game = await self._games.find_one({"_id": oid})
         if game is None:
             raise GameNotFoundError()
@@ -1425,7 +1441,7 @@ class GameService:
             raise GameConflictError(code="GAME_NOT_WAITING", message="Game is no longer deletable")
 
     async def hydrate_document(self, *, game_id: str) -> GameDocument:
-        oid = self._id_query(game_id)
+        oid = await self._resolve_game_object_id(game_id)
         cached = await self._get_cached_entry(oid)
         game = deepcopy(cached.game) if cached is not None else await self._games.find_one({"_id": oid})
         if game is None:
