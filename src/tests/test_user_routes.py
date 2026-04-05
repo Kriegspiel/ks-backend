@@ -30,6 +30,7 @@ class StubService:
                     {
                         "game_id": "gid1",
                         "game_code": "A7K2M9",
+                        "rule_variant": "berkeley_any",
                         "opponent": "rival",
                         "opponent_role": "bot",
                         "play_as": "white",

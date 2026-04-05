@@ -367,6 +367,7 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
     assert total == 2
     assert total_2 == 2
     assert page_1[0]["game_code"] == "A7K2M9"
+    assert page_1[0]["rule_variant"] is None
     assert page_1[0]["opponent"] == "rival-a"
     assert page_1[0]["opponent_role"] == "bot"
     assert page_1[0]["turn_count"] == 2
