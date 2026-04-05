@@ -337,20 +337,22 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
         [
             {
                 "_id": ObjectId(),
+                "game_code": "A7K2M9",
                 "white": {"user_id": str(user_id), "username": "playerone"},
                 "black": {"user_id": str(other_id), "username": "rival-a", "role": "bot"},
                 "result": {"winner": "white", "reason": "checkmate"},
                 "rating_snapshot": {"white_before": 1200, "white_after": 1216, "white_delta": 16, "black_before": 1200, "black_after": 1184, "black_delta": -16},
-                "moves": [1, 2, 3],
+                "moves": [{"move_done": True}, {"move_done": False}, {"move_done": True}],
                 "created_at": datetime(2026, 3, 10, tzinfo=UTC),
                 "updated_at": datetime(2026, 3, 10, tzinfo=UTC),
             },
             {
                 "_id": ObjectId(),
+                "game_code": "B7K2M9",
                 "white": {"user_id": str(other_id), "username": "rival-b"},
                 "black": {"user_id": str(user_id), "username": "playerone"},
                 "result": {"winner": None, "reason": "stalemate"},
-                "moves": [1, 2],
+                "moves": [{"move_done": True}, {"move_done": True}],
                 "created_at": datetime(2026, 3, 9, tzinfo=UTC),
                 "updated_at": datetime(2026, 3, 9, tzinfo=UTC),
             },
@@ -364,8 +366,10 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
 
     assert total == 2
     assert total_2 == 2
+    assert page_1[0]["game_code"] == "A7K2M9"
     assert page_1[0]["opponent"] == "rival-a"
     assert page_1[0]["opponent_role"] == "bot"
+    assert page_1[0]["turn_count"] == 2
     assert page_1[0]["elo_before"] == 1200
     assert page_1[0]["elo_after"] == 1216
     assert page_1[0]["elo_delta"] == 16
@@ -381,10 +385,11 @@ async def test_get_game_history_handles_null_result_documents() -> None:
     archives.docs.append(
         {
             "_id": ObjectId(),
+            "game_code": "C7K2M9",
             "white": {"user_id": str(user_id), "username": "playerone"},
             "black": {"user_id": str(other_id), "username": "rival-a"},
             "result": None,
-            "moves": [1, 2, 3],
+            "moves": [{"move_done": True}, {"move_done": True}, {"move_done": False}],
             "created_at": datetime(2026, 3, 10, tzinfo=UTC),
             "updated_at": datetime(2026, 3, 10, tzinfo=UTC),
         }
@@ -397,6 +402,7 @@ async def test_get_game_history_handles_null_result_documents() -> None:
     assert total == 1
     assert page[0]["result"] == "draw"
     assert page[0]["reason"] is None
+    assert page[0]["turn_count"] == 2
 
 
 @pytest.mark.asyncio

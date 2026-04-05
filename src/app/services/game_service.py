@@ -741,6 +741,8 @@ class GameService:
                 "move_number": doc.get("move_number", 1),
                 "created_at": doc["created_at"],
                 "updated_at": doc.get("updated_at", doc["created_at"]),
+                "result": self._normalized_result(result=doc.get("result"), moves=doc.get("moves")),
+                "rating_snapshot": doc.get("rating_snapshot"),
             }
         )
 
@@ -760,7 +762,29 @@ class GameService:
             return {"winner": "black", "reason": "checkmate"}
         if special_announcement == "DRAW_STALEMATE":
             return {"winner": None, "reason": "stalemate"}
+        if special_announcement == "DRAW_INSUFFICIENT":
+            return {"winner": None, "reason": "insufficient"}
+        if special_announcement == "DRAW_TOOMANYREVERSIBLEMOVES":
+            return {"winner": None, "reason": "too_many_reversible_moves"}
         return None
+
+    @classmethod
+    def _normalized_result(cls, *, result: dict[str, Any] | None, moves: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+        if isinstance(result, dict) and result.get("reason"):
+            return result
+
+        for move in reversed(moves or []):
+            special = move.get("special_announcement")
+            if not isinstance(special, str):
+                continue
+            derived = cls._final_result_from_special(special)
+            if derived is None:
+                continue
+            if isinstance(result, dict) and "winner" in result:
+                derived["winner"] = result.get("winner")
+            return derived
+
+        return result if isinstance(result, dict) else None
 
     def _load_or_bootstrap_engine(self, game: dict[str, Any]) -> Any:
         state = game.get("engine_state")
@@ -1118,8 +1142,7 @@ class GameService:
         return out
 
     async def get_game(self, *, game_id: str) -> GameMetadataResponse:
-        oid = await self._resolve_game_object_id(game_id)
-        game = await self._games.find_one({"_id": oid})
+        game = await self.get_game_or_archive(game_id=game_id)
         if game is None:
             raise GameNotFoundError()
 
@@ -1136,7 +1159,7 @@ class GameService:
             "move_number": game.get("move_number", 1),
             "created_at": game["created_at"],
             "updated_at": game.get("updated_at", game["created_at"]),
-            "result": game.get("result"),
+            "result": self._normalized_result(result=game.get("result"), moves=game.get("moves")),
             "rating_snapshot": game.get("rating_snapshot"),
         }
         return GameMetadataResponse.model_validate(payload)
