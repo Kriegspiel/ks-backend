@@ -7,6 +7,7 @@ import pytest
 from bson import ObjectId
 
 from app.models.auth import BotRegisterRequest, RegisterRequest
+from app.models.user import default_user_stats_payload
 from app.services.user_service import UserConflictError, UserService
 
 
@@ -314,16 +315,33 @@ async def test_get_public_profile_and_missing_user() -> None:
             "created_at": datetime(2025, 1, 15, tzinfo=UTC),
         }
     )
+    users.docs.append(
+        {
+            "_id": ObjectId(),
+            "username": "randobotany",
+            "role": "bot",
+            "bot_profile": {
+                "display_name": "Random Any Bot",
+                "owner_email": "bot-random-any@kriegspiel.org",
+            },
+            "profile": {"bio": "Bot", "avatar_url": None, "country": None},
+            "stats": default_user_stats_payload(),
+            "created_at": datetime(2025, 1, 16, tzinfo=UTC),
+        }
+    )
     db = FakeDB(users=users, game_archives=FakeUsersCollection())
     service = UserService(users)
 
     profile = await service.get_public_profile(db, "PlayerOne")
+    bot_profile = await service.get_public_profile(db, "randobotany")
     missing = await service.get_public_profile(db, "missing")
 
     assert profile is not None
     assert profile["username"] == "playerone"
     assert profile["stats"]["elo"] == 1337
     assert profile["stats"]["ratings"]["overall"]["elo"] == 1337
+    assert bot_profile is not None
+    assert bot_profile["owner_email"] == "bot-random-any@kriegspiel.org"
     assert missing is None
 
 
