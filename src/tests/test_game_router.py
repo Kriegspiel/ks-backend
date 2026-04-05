@@ -76,7 +76,7 @@ def app_with_game_service() -> tuple:
                 "play_as": "black",
                 "rule_variant": "berkeley_any",
                 "state": "active",
-                "game_url": "https://kriegspiel.org/game/gid1",
+                "game_url": "https://kriegspiel.org/game/A7K2M9",
             }
         ),
         get_open_games=AsyncMock(
@@ -104,6 +104,7 @@ def app_with_game_service() -> tuple:
                     "turn": "white",
                     "move_number": 1,
                     "created_at": datetime.now(UTC),
+                    "updated_at": datetime.now(UTC),
                 }
             ]
         ),
@@ -118,6 +119,7 @@ def app_with_game_service() -> tuple:
                 "turn": "white",
                 "move_number": 1,
                 "created_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
             }
         ),
         resign_game=AsyncMock(return_value={"result": {"winner": "black", "reason": "resignation"}}),
