@@ -89,8 +89,11 @@ class FakeUsersCollection:
     async def count_documents(self, query: dict):
         return len([d for d in self.docs if self._matches(d, query)])
 
-    def find(self, query: dict):
-        return FakeCursor([d for d in self.docs if self._matches(d, query)])
+    def find(self, query: dict, projection: dict | None = None):
+        matches = [d for d in self.docs if self._matches(d, query)]
+        if projection:
+            matches = [self._project(doc, projection) for doc in matches]
+        return FakeCursor(matches)
 
     def _matches(self, doc: dict, query: dict) -> bool:
         for key, expected in query.items():
@@ -136,6 +139,17 @@ class FakeUsersCollection:
                 return
         if isinstance(cur, dict):
             cur.pop(parts[-1], None)
+
+    @classmethod
+    def _project(cls, doc: dict, projection: dict):
+        result = {}
+        for key, include in projection.items():
+            if not include:
+                continue
+            value = cls._resolve(doc, key)
+            if value is not None:
+                cls._set_nested(result, key, value)
+        return result
 
 
 class FakeDB:
@@ -343,6 +357,107 @@ async def test_get_public_profile_and_missing_user() -> None:
     assert bot_profile is not None
     assert bot_profile["owner_email"] == "bot-random-any@kriegspiel.org"
     assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_get_public_profile_backfills_track_results() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": user_id,
+            "username": "fil",
+            "username_display": "fil",
+            "email": "fil@example.com",
+            "email_verified": True,
+            "password_hash": "hash",
+            "auth_providers": ["local"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": None,
+            "stats": default_user_stats_payload(),
+            "settings": {},
+            "role": "user",
+            "status": "active",
+            "last_active_at": datetime(2026, 4, 6, tzinfo=UTC),
+            "created_at": datetime(2026, 4, 6, tzinfo=UTC),
+            "updated_at": datetime(2026, 4, 6, tzinfo=UTC),
+        }
+    )
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "white": {"user_id": str(user_id), "role": "user"},
+                "black": {"user_id": "bot-1", "role": "bot"},
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 4, 6, 1, tzinfo=UTC),
+            },
+            {
+                "_id": ObjectId(),
+                "white": {"user_id": "user-2", "role": "user"},
+                "black": {"user_id": str(user_id), "role": "user"},
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 4, 6, 2, tzinfo=UTC),
+            },
+        ]
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    profile = await service.get_public_profile(db, "fil")
+
+    assert profile is not None
+    assert profile["stats"]["results"]["overall"]["games_played"] == 2
+    assert profile["stats"]["results"]["vs_bots"]["games_won"] == 1
+    assert profile["stats"]["results"]["vs_humans"]["games_lost"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_rating_history_returns_series_for_selected_track() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = str(ObjectId())
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "white": {"user_id": user_id, "role": "bot"},
+                "black": {"user_id": "opponent-1", "role": "bot"},
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 4, 5, 12, tzinfo=UTC),
+                "updated_at": datetime(2026, 4, 5, 12, 10, tzinfo=UTC),
+                "rating_snapshot": {
+                    "overall": {"white_after": 1216, "white_delta": 16},
+                    "specific": {"white_after": 1216, "white_delta": 16},
+                    "white_track": "vs_bots",
+                    "black_track": "vs_bots",
+                },
+            },
+            {
+                "_id": ObjectId(),
+                "white": {"user_id": user_id, "role": "bot"},
+                "black": {"user_id": "opponent-2", "role": "bot"},
+                "result": {"winner": None},
+                "created_at": datetime(2026, 4, 6, 12, tzinfo=UTC),
+                "updated_at": datetime(2026, 4, 6, 12, 10, tzinfo=UTC),
+                "rating_snapshot": {
+                    "overall": {"white_after": 1220, "white_delta": 4},
+                    "specific": {"white_after": 1220, "white_delta": 4},
+                    "white_track": "vs_bots",
+                    "black_track": "vs_bots",
+                },
+            },
+        ]
+    )
+    service = UserService(users)
+
+    history = await service.get_rating_history(FakeDB(users, archives), user_id, track="vs_bots", limit=100)
+
+    assert history["track"] == "vs_bots"
+    assert len(history["series"]["game"]) == 2
+    assert history["series"]["game"][0]["label"] == "Game 1"
+    assert history["series"]["date"][1]["label"] == "2026-04-06"
 
 
 @pytest.mark.asyncio
