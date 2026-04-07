@@ -216,6 +216,11 @@ class UserService:
 
         computed_results = await self._compute_result_tracks(db, str(user["_id"]))
         stats["results"] = computed_results
+        overall_results = computed_results["overall"]
+        stats["games_played"] = int(overall_results.get("games_played", 0))
+        stats["games_won"] = int(overall_results.get("games_won", 0))
+        stats["games_lost"] = int(overall_results.get("games_lost", 0))
+        stats["games_drawn"] = int(overall_results.get("games_drawn", 0))
         updated = await db.users.find_one_and_update(
             {"_id": user["_id"]},
             {"$set": {"stats": {**stats, "results_synced_at": utcnow()}, "updated_at": utcnow()}},

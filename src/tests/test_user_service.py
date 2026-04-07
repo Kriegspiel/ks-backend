@@ -480,6 +480,10 @@ async def test_get_public_profile_recomputes_partial_unsynced_track_results() ->
     profile = await service.get_public_profile(db, "randobotany")
 
     assert profile is not None
+    assert profile["stats"]["games_played"] == 3
+    assert profile["stats"]["games_won"] == 1
+    assert profile["stats"]["games_lost"] == 1
+    assert profile["stats"]["games_drawn"] == 1
     assert profile["stats"]["results"]["overall"]["games_played"] == 3
     assert profile["stats"]["results"]["vs_bots"]["games_played"] == 3
     assert profile["stats"]["results"]["vs_bots"]["games_won"] == 1
