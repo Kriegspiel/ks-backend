@@ -650,7 +650,7 @@ async def test_user_service_authenticates_legacy_bot_without_owner_email() -> No
     assert authenticated is not None
     assert authenticated.username == "legacybot"
     assert authenticated.bot_profile is not None
-    assert authenticated.bot_profile.owner_email is None
+    assert authenticated.bot_profile.owner_email == "bots@kriegspiel.org"
 
 
 @pytest.mark.asyncio

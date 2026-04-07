@@ -11,7 +11,7 @@ class BotProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     display_name: str
-    owner_email: str | None = None
+    owner_email: str = "bots@kriegspiel.org"
     description: str = ""
     listed: bool = True
     api_token_id: str | None = None

@@ -17,6 +17,8 @@ from app.config import get_settings
 from app.models.auth import BotRegisterRequest, RegisterRequest
 from app.models.user import UserModel, default_user_stats_payload, normalize_user_stats_payload, utcnow
 
+DEFAULT_BOT_OWNER_EMAIL = "bots@kriegspiel.org"
+
 
 class UserConflictError(Exception):
     def __init__(self, *, field: str, code: str, message: str):
@@ -519,7 +521,7 @@ class UserService:
             "display_name": display_name,
             "role": user.get("role", "user"),
             "is_bot": user.get("role") == "bot",
-            "owner_email": bot_profile.get("owner_email"),
+            "owner_email": bot_profile.get("owner_email") or DEFAULT_BOT_OWNER_EMAIL if user.get("role") == "bot" else None,
             "profile": user.get("profile", {}),
             "stats": normalize_user_stats_payload(user.get("stats")),
             "member_since": self._safe_datetime(user.get("created_at")),
