@@ -210,12 +210,7 @@ class UserService:
         raw_results = raw_stats.get("results") if isinstance(raw_stats.get("results"), dict) else None
         result_keys = ("overall", "vs_humans", "vs_bots")
         has_results_shape = raw_results is not None and all(isinstance(raw_results.get(key), dict) for key in result_keys)
-        has_nonzero_results = has_results_shape and any(
-            int(raw_results[key].get(field, 0)) > 0
-            for key in result_keys
-            for field in ("games_played", "games_won", "games_lost", "games_drawn")
-        )
-        if has_results_shape and (raw_stats.get("results_synced_at") or has_nonzero_results):
+        if has_results_shape and raw_stats.get("results_synced_at"):
             user["stats"] = stats
             return user
 
