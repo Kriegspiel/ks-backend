@@ -470,14 +470,16 @@ async def test_get_lobby_stats_counts_active_and_completed_windows() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stored_scoresheets_falls_back_to_legacy_root_fields() -> None:
-    legacy = {
-        "white_scoresheet": {"color": "white", "last_move_number": 3, "moves_own": [], "moves_opponent": []},
-        "black_scoresheet": {"color": "black", "last_move_number": 3, "moves_own": [], "moves_opponent": []},
+async def test_stored_scoresheets_prefers_engine_state_only() -> None:
+    game = {
+        "engine_state": {
+            "white_scoresheet": {"color": "white", "last_move_number": 3, "moves_own": [], "moves_opponent": []},
+            "black_scoresheet": {"color": "black", "last_move_number": 3, "moves_own": [], "moves_opponent": []},
+        },
         "moves": [],
     }
 
-    scoresheets = GameService._stored_scoresheets(legacy)
+    scoresheets = GameService._stored_scoresheets(game)
 
     assert scoresheets["white"]["color"] == "white"
     assert scoresheets["black"]["color"] == "black"

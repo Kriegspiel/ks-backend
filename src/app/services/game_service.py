@@ -268,10 +268,7 @@ class GameService:
 
     @staticmethod
     def _persistable_game(game: dict[str, Any]) -> dict[str, Any]:
-        document = deepcopy(game)
-        document.pop("white_scoresheet", None)
-        document.pop("black_scoresheet", None)
-        return document
+        return deepcopy(game)
 
     @staticmethod
     def _ply_count(game: dict[str, Any]) -> int:
@@ -851,10 +848,6 @@ class GameService:
             if isinstance(white, dict) and isinstance(black, dict):
                 if not game.get("moves") or _scoresheet_has_entries(white) or _scoresheet_has_entries(black):
                     return {"white": white, "black": black}
-        white = game.get("white_scoresheet")
-        black = game.get("black_scoresheet")
-        if isinstance(white, dict) and isinstance(black, dict):
-            return {"white": white, "black": black}
         moves = game.get("moves", [])
         if moves:
             return reconstruct_scoresheets_from_moves(moves)
@@ -1108,7 +1101,6 @@ class GameService:
                     "updated_at": now,
                     "expires_at": None,
                 },
-                "$unset": {"white_scoresheet": "", "black_scoresheet": ""},
             },
             return_document=ReturnDocument.AFTER,
         )
@@ -1287,8 +1279,6 @@ class GameService:
             game.setdefault("moves", []).append(move_record)
             if outcome["move_done"]:
                 game["move_number"] = int(game.get("move_number", 1)) + 1
-            game.pop("white_scoresheet", None)
-            game.pop("black_scoresheet", None)
             if outcome["game_over"]:
                 game["state"] = "completed"
                 game["result"] = self._final_result_from_special(outcome["special_announcement"])
@@ -1377,8 +1367,6 @@ class GameService:
             game["time_control"] = advanced_time_control
             game["updated_at"] = now
             game.setdefault("moves", []).append(move_record)
-            game.pop("white_scoresheet", None)
-            game.pop("black_scoresheet", None)
             if timeout is not None:
                 self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
 
