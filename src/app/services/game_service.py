@@ -1041,7 +1041,7 @@ class GameService:
             opponent_type=request.opponent_type,
         )
         if state == "active":
-            game_url = f"{self._site_origin}/game/{game_code}"
+            game_url = f"{self._site_origin}/game/{code}"
         return CreateGameResponse(
             game_id=str(result.inserted_id),
             game_code=code,
