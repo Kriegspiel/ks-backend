@@ -61,6 +61,20 @@ async def get_user_games(
     }
 
 
+@router.get("/user/{username}/rating-history")
+async def get_user_rating_history(
+    username: str,
+    track: str = Query(default="overall", pattern="^(overall|vs_humans|vs_bots)$"),
+    limit: int = Query(default=100, ge=10, le=100),
+    user_service: UserService = Depends(get_user_service),
+) -> dict[str, Any]:
+    db = require_db()
+    user_doc = await db.users.find_one({"username": user_service.canonical_username(username)})
+    if user_doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return await user_service.get_rating_history(db, str(user_doc["_id"]), track=track, limit=limit)
+
+
 @router.patch("/user/settings")
 async def patch_user_settings(
     payload: dict[str, Any] = Body(default={}),

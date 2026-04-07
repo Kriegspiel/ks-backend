@@ -13,6 +13,13 @@ class EloRatingTrack(BaseModel):
     peak: int = 1200
 
 
+class ResultTrack(BaseModel):
+    games_played: int = 0
+    games_won: int = 0
+    games_lost: int = 0
+    games_drawn: int = 0
+
+
 class UserStats(BaseModel):
     games_played: int = 0
     games_won: int = 0
@@ -20,6 +27,13 @@ class UserStats(BaseModel):
     games_drawn: int = 0
     elo: int = 1200
     elo_peak: int = 1200
+    results: dict[str, ResultTrack] = Field(
+        default_factory=lambda: {
+            "overall": ResultTrack(),
+            "vs_humans": ResultTrack(),
+            "vs_bots": ResultTrack(),
+        }
+    )
     ratings: dict[str, EloRatingTrack] = Field(
         default_factory=lambda: {
             "overall": EloRatingTrack(),
@@ -84,6 +98,11 @@ def default_user_stats_payload() -> dict[str, Any]:
         "games_drawn": 0,
         "elo": 1200,
         "elo_peak": 1200,
+        "results": {
+            "overall": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0},
+            "vs_humans": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0},
+            "vs_bots": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0},
+        },
         "ratings": {
             "overall": {"elo": 1200, "peak": 1200},
             "vs_humans": {"elo": 1200, "peak": 1200},
@@ -97,6 +116,18 @@ def normalize_user_stats_payload(raw_stats: dict[str, Any] | None) -> dict[str, 
     current = dict(raw_stats or {})
     for key in ("games_played", "games_won", "games_lost", "games_drawn"):
         stats[key] = int(current.get(key, stats[key]))
+
+    current_results = current.get("results") if isinstance(current.get("results"), dict) else {}
+    for track_key in ("overall", "vs_humans", "vs_bots"):
+        result_track = current_results.get(track_key) if isinstance(current_results.get(track_key), dict) else {}
+        fallback = {
+            "games_played": stats["games_played"] if track_key == "overall" else 0,
+            "games_won": stats["games_won"] if track_key == "overall" else 0,
+            "games_lost": stats["games_lost"] if track_key == "overall" else 0,
+            "games_drawn": stats["games_drawn"] if track_key == "overall" else 0,
+        }
+        for field, default_value in fallback.items():
+            stats["results"][track_key][field] = int(result_track.get(field, default_value))
 
     ratings = current.get("ratings") if isinstance(current.get("ratings"), dict) else {}
     overall_elo = int(current.get("elo", ratings.get("overall", {}).get("elo", 1200)))

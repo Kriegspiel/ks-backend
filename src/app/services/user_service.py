@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import hashlib
 import hmac
+import math
 import secrets
 import time
 from typing import Any
@@ -135,6 +136,29 @@ class UserService:
         return sum(1 for move in game.get("moves", []) if move.get("move_done"))
 
     @staticmethod
+    def _result_track_template() -> dict[str, dict[str, int]]:
+        return {
+            "overall": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0},
+            "vs_humans": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0},
+            "vs_bots": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0},
+        }
+
+    @classmethod
+    def _increment_result_track(cls, results: dict[str, dict[str, int]], track: str, outcome: str) -> None:
+        bucket = results[track]
+        bucket["games_played"] += 1
+        if outcome == "win":
+            bucket["games_won"] += 1
+        elif outcome == "loss":
+            bucket["games_lost"] += 1
+        else:
+            bucket["games_drawn"] += 1
+
+    @staticmethod
+    def _track_for_opponent_role(opponent_role: str | None) -> str:
+        return "vs_bots" if str(opponent_role or "user").lower() == "bot" else "vs_humans"
+
+    @staticmethod
     def _history_rating_snapshot_for_player(game: dict[str, Any], *, play_as: str) -> tuple[dict[str, Any], dict[str, Any]]:
         rating_snapshot = game.get("rating_snapshot") if isinstance(game.get("rating_snapshot"), dict) else {}
         prefix = "white" if play_as == "white" else "black"
@@ -160,6 +184,150 @@ class UserService:
             }
 
         return normalized, overall_snapshot
+
+    async def _compute_result_tracks(self, db: Any, user_id: str) -> dict[str, dict[str, int]]:
+        query = {"$or": [{"white.user_id": user_id}, {"black.user_id": user_id}]}
+        cursor = db.game_archives.find(
+            query,
+            {
+                "white": 1,
+                "black": 1,
+                "result": 1,
+            },
+        )
+        results = self._result_track_template()
+        async for game in cursor:
+            play_as = "white" if game.get("white", {}).get("user_id") == user_id else "black"
+            opponent = game.get("black") if play_as == "white" else game.get("white")
+            outcome = self._winner_result((game.get("result") or {}).get("winner"), play_as)
+            self._increment_result_track(results, "overall", outcome)
+            self._increment_result_track(results, self._track_for_opponent_role((opponent or {}).get("role")), outcome)
+        return results
+
+    async def _ensure_result_tracks(self, db: Any, user: dict[str, Any]) -> dict[str, Any]:
+        stats = normalize_user_stats_payload(user.get("stats"))
+        raw_stats = user.get("stats") if isinstance(user.get("stats"), dict) else {}
+        raw_results = raw_stats.get("results") if isinstance(raw_stats.get("results"), dict) else None
+        result_keys = ("overall", "vs_humans", "vs_bots")
+        has_results_shape = raw_results is not None and all(isinstance(raw_results.get(key), dict) for key in result_keys)
+        has_nonzero_results = has_results_shape and any(
+            int(raw_results[key].get(field, 0)) > 0
+            for key in result_keys
+            for field in ("games_played", "games_won", "games_lost", "games_drawn")
+        )
+        if has_results_shape and (raw_stats.get("results_synced_at") or has_nonzero_results):
+            user["stats"] = stats
+            return user
+
+        computed_results = await self._compute_result_tracks(db, str(user["_id"]))
+        stats["results"] = computed_results
+        updated = await db.users.find_one_and_update(
+            {"_id": user["_id"]},
+            {"$set": {"stats": {**stats, "results_synced_at": utcnow()}, "updated_at": utcnow()}},
+            return_document=ReturnDocument.AFTER,
+        )
+        normalized_user = dict(updated or user)
+        normalized_user["stats"] = normalize_user_stats_payload(normalized_user.get("stats"))
+        return normalized_user
+
+    @staticmethod
+    def _aggregate_series(points: list[dict[str, Any]], *, limit: int, label_key: str) -> list[dict[str, Any]]:
+        if len(points) <= limit:
+            return points
+
+        bucket_size = math.ceil(len(points) / limit)
+        aggregated: list[dict[str, Any]] = []
+        previous_elo: int | None = None
+        for start in range(0, len(points), bucket_size):
+            bucket = points[start : start + bucket_size]
+            first = bucket[0]
+            last = bucket[-1]
+            label = last[label_key] if first[label_key] == last[label_key] else f"{first[label_key]} - {last[label_key]}"
+            elo = int(last["elo"])
+            delta = elo - previous_elo if previous_elo is not None else int(last.get("delta", 0))
+            aggregated.append(
+                {
+                    "label": label,
+                    "elo": elo,
+                    "delta": delta,
+                    "played_at": last.get("played_at"),
+                    "game_number": last.get("game_number"),
+                }
+            )
+            previous_elo = elo
+        return aggregated
+
+    async def get_rating_history(self, db: Any, user_id: str, *, track: str, limit: int = 100) -> dict[str, Any]:
+        bounded_limit = min(max(limit, 10), 100)
+        query = {"$or": [{"white.user_id": user_id}, {"black.user_id": user_id}]}
+        cursor = db.game_archives.find(
+            query,
+            {
+                "white": 1,
+                "black": 1,
+                "result": 1,
+                "updated_at": 1,
+                "created_at": 1,
+                "rating_snapshot": 1,
+            },
+        ).sort("created_at", 1)
+
+        base_points: list[dict[str, Any]] = []
+        async for game in cursor:
+            play_as = "white" if game.get("white", {}).get("user_id") == user_id else "black"
+            opponent = game.get("black") if play_as == "white" else game.get("white")
+            if track != "overall" and self._track_for_opponent_role((opponent or {}).get("role")) != track:
+                continue
+            snapshots, overall_snapshot = self._history_rating_snapshot_for_player(game, play_as=play_as)
+            selected_snapshot = snapshots.get(track) or {}
+            elo_after = selected_snapshot.get("elo_after") if track != "overall" else selected_snapshot.get("elo_after", overall_snapshot.get(f"{play_as}_after"))
+            elo_delta = selected_snapshot.get("elo_delta") if track != "overall" else selected_snapshot.get("elo_delta", overall_snapshot.get(f"{play_as}_delta"))
+            if not isinstance(elo_after, (int, float)):
+                continue
+            played_at = self._safe_datetime(game.get("updated_at") or game.get("created_at"))
+            base_points.append(
+                {
+                    "elo": int(elo_after),
+                    "delta": int(elo_delta or 0),
+                    "played_at": played_at.isoformat(),
+                    "date_label": played_at.date().isoformat(),
+                    "game_number": len(base_points) + 1,
+                    "game_label": f"Game {len(base_points) + 1}",
+                }
+            )
+
+        game_points = [
+            {
+                "label": point["game_label"],
+                "elo": point["elo"],
+                "delta": point["delta"],
+                "played_at": point["played_at"],
+                "game_number": point["game_number"],
+            }
+            for point in base_points
+        ]
+
+        by_date: dict[str, dict[str, Any]] = {}
+        for point in base_points:
+            by_date[point["date_label"]] = {
+                "label": point["date_label"],
+                "elo": point["elo"],
+                "delta": point["delta"],
+                "played_at": point["played_at"],
+                "game_number": point["game_number"],
+            }
+        date_points = list(by_date.values())
+        for index, point in enumerate(date_points):
+            if index > 0:
+                point["delta"] = point["elo"] - date_points[index - 1]["elo"]
+
+        return {
+            "track": track,
+            "series": {
+                "game": self._aggregate_series(game_points, limit=bounded_limit, label_key="label"),
+                "date": self._aggregate_series(date_points, limit=bounded_limit, label_key="label"),
+            },
+        }
 
     async def create_user(self, registration: RegisterRequest) -> UserModel:
         username = self.canonical_username(registration.username)
@@ -337,6 +505,7 @@ class UserService:
         user = await db.users.find_one({"username": canonical})
         if user is None:
             return None
+        user = await self._ensure_result_tracks(db, user)
 
         bot_profile = user.get("bot_profile") or {}
         display_name = (

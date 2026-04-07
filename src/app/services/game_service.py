@@ -459,15 +459,31 @@ class GameService:
 
             white_stats["games_played"] = int(white_stats.get("games_played", 0)) + 1
             black_stats["games_played"] = int(black_stats.get("games_played", 0)) + 1
+            white_stats["results"]["overall"]["games_played"] = int(white_stats["results"]["overall"].get("games_played", 0)) + 1
+            black_stats["results"]["overall"]["games_played"] = int(black_stats["results"]["overall"].get("games_played", 0)) + 1
+            white_stats["results"][white_track]["games_played"] = int(white_stats["results"][white_track].get("games_played", 0)) + 1
+            black_stats["results"][black_track]["games_played"] = int(black_stats["results"][black_track].get("games_played", 0)) + 1
             if winner == "white":
                 white_stats["games_won"] = int(white_stats.get("games_won", 0)) + 1
                 black_stats["games_lost"] = int(black_stats.get("games_lost", 0)) + 1
+                white_stats["results"]["overall"]["games_won"] = int(white_stats["results"]["overall"].get("games_won", 0)) + 1
+                black_stats["results"]["overall"]["games_lost"] = int(black_stats["results"]["overall"].get("games_lost", 0)) + 1
+                white_stats["results"][white_track]["games_won"] = int(white_stats["results"][white_track].get("games_won", 0)) + 1
+                black_stats["results"][black_track]["games_lost"] = int(black_stats["results"][black_track].get("games_lost", 0)) + 1
             elif winner == "black":
                 black_stats["games_won"] = int(black_stats.get("games_won", 0)) + 1
                 white_stats["games_lost"] = int(white_stats.get("games_lost", 0)) + 1
+                black_stats["results"]["overall"]["games_won"] = int(black_stats["results"]["overall"].get("games_won", 0)) + 1
+                white_stats["results"]["overall"]["games_lost"] = int(white_stats["results"]["overall"].get("games_lost", 0)) + 1
+                black_stats["results"][black_track]["games_won"] = int(black_stats["results"][black_track].get("games_won", 0)) + 1
+                white_stats["results"][white_track]["games_lost"] = int(white_stats["results"][white_track].get("games_lost", 0)) + 1
             else:
                 white_stats["games_drawn"] = int(white_stats.get("games_drawn", 0)) + 1
                 black_stats["games_drawn"] = int(black_stats.get("games_drawn", 0)) + 1
+                white_stats["results"]["overall"]["games_drawn"] = int(white_stats["results"]["overall"].get("games_drawn", 0)) + 1
+                black_stats["results"]["overall"]["games_drawn"] = int(black_stats["results"]["overall"].get("games_drawn", 0)) + 1
+                white_stats["results"][white_track]["games_drawn"] = int(white_stats["results"][white_track].get("games_drawn", 0)) + 1
+                black_stats["results"][black_track]["games_drawn"] = int(black_stats["results"][black_track].get("games_drawn", 0)) + 1
 
             white_stats["ratings"]["overall"]["elo"] = overall_snapshot["white_after"]
             black_stats["ratings"]["overall"]["elo"] = overall_snapshot["black_after"]
