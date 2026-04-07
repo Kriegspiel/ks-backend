@@ -248,7 +248,7 @@ async def test_create_bot_stores_hmac_digest_and_authenticates_without_bcrypt_ha
 
 
 @pytest.mark.asyncio
-async def test_authenticate_bot_token_migrates_legacy_bcrypt_hash_to_digest() -> None:
+async def test_authenticate_bot_token_rejects_legacy_bcrypt_hash_only_bot() -> None:
     users = FakeUsersCollection()
     service = UserService(users)
     UserService.clear_bot_token_cache()
@@ -270,7 +270,7 @@ async def test_authenticate_bot_token_migrates_legacy_bcrypt_hash_to_digest() ->
                 "display_name": "Legacy Bot",
                 "owner_email": "legacy@example.com",
                 "description": "",
-                "listed": True,
+                "listed": False,
                 "api_token_id": token_id,
                 "api_token_hash": service.hash_password(token_secret),
                 "registered_at": datetime(2026, 4, 3, tzinfo=UTC),
@@ -300,9 +300,7 @@ async def test_authenticate_bot_token_migrates_legacy_bcrypt_hash_to_digest() ->
 
     authenticated = await service.authenticate_bot_token(f"ksbot_{token_id}.{token_secret}")
 
-    assert authenticated is not None
-    assert users.docs[0]["bot_profile"].get("api_token_hash") is None
-    assert users.docs[0]["bot_profile"].get("api_token_digest") == service.bot_token_digest(token_secret)
+    assert authenticated is None
 
 
 def test_bot_token_cache_ttl_uses_one_hour_default() -> None:
@@ -554,7 +552,12 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
                 "white": {"user_id": str(user_id), "username": "playerone"},
                 "black": {"user_id": str(other_id), "username": "rival-a", "role": "bot"},
                 "result": {"winner": "white", "reason": "checkmate"},
-                "rating_snapshot": {"white_before": 1200, "white_after": 1216, "white_delta": 16, "black_before": 1200, "black_after": 1184, "black_delta": -16},
+                "rating_snapshot": {
+                    "overall": {"white_before": 1200, "white_after": 1216, "white_delta": 16, "black_before": 1200, "black_after": 1184, "black_delta": -16},
+                    "specific": {"white_before": 1200, "white_after": 1216, "white_delta": 16, "black_before": 1200, "black_after": 1184, "black_delta": -16},
+                    "white_track": "vs_bots",
+                    "black_track": "vs_humans",
+                },
                 "moves": [{"move_done": True}, {"move_done": False}, {"move_done": True}],
                 "created_at": datetime(2026, 3, 10, tzinfo=UTC),
                 "updated_at": datetime(2026, 3, 10, tzinfo=UTC),

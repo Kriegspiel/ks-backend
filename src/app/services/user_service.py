@@ -164,7 +164,7 @@ class UserService:
     def _history_rating_snapshot_for_player(game: dict[str, Any], *, play_as: str) -> tuple[dict[str, Any], dict[str, Any]]:
         rating_snapshot = game.get("rating_snapshot") if isinstance(game.get("rating_snapshot"), dict) else {}
         prefix = "white" if play_as == "white" else "black"
-        overall_snapshot = rating_snapshot.get("overall") if isinstance(rating_snapshot.get("overall"), dict) else rating_snapshot
+        overall_snapshot = rating_snapshot.get("overall") if isinstance(rating_snapshot.get("overall"), dict) else {}
         specific_snapshot = rating_snapshot.get("specific") if isinstance(rating_snapshot.get("specific"), dict) else {}
         specific_track = rating_snapshot.get(f"{prefix}_track")
 
@@ -475,30 +475,10 @@ class UserService:
         bot_profile = user.get("bot_profile", {})
         token_digest = bot_profile.get("api_token_digest")
         computed_digest = self.bot_token_digest(token_secret)
-        if token_digest:
-            if not hmac.compare_digest(computed_digest, token_digest):
-                return None
-            authenticated = UserModel.from_mongo(user)
-            self._cache_bot_user(token, authenticated)
-            return authenticated
-
-        token_hash = bot_profile.get("api_token_hash")
-        if not token_hash or not self.verify_password(token_secret, token_hash):
+        if not token_digest or not hmac.compare_digest(computed_digest, token_digest):
             return None
 
-        now = utcnow()
-        updated_user = await self._users.find_one_and_update(
-            {"_id": user["_id"]},
-            {
-                "$set": {
-                    "bot_profile.api_token_digest": computed_digest,
-                    "updated_at": now,
-                },
-                "$unset": {"bot_profile.api_token_hash": ""},
-            },
-            return_document=ReturnDocument.AFTER,
-        )
-        authenticated = UserModel.from_mongo(updated_user or user)
+        authenticated = UserModel.from_mongo(user)
         self._cache_bot_user(token, authenticated)
         return authenticated
 
