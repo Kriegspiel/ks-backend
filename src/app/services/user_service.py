@@ -134,6 +134,33 @@ class UserService:
     def _completed_turn_count(game: dict[str, Any]) -> int:
         return sum(1 for move in game.get("moves", []) if move.get("move_done"))
 
+    @staticmethod
+    def _history_rating_snapshot_for_player(game: dict[str, Any], *, play_as: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        rating_snapshot = game.get("rating_snapshot") if isinstance(game.get("rating_snapshot"), dict) else {}
+        prefix = "white" if play_as == "white" else "black"
+        overall_snapshot = rating_snapshot.get("overall") if isinstance(rating_snapshot.get("overall"), dict) else rating_snapshot
+        specific_snapshot = rating_snapshot.get("specific") if isinstance(rating_snapshot.get("specific"), dict) else {}
+        specific_track = rating_snapshot.get(f"{prefix}_track")
+
+        normalized = {
+            "overall": {
+                "elo_before": overall_snapshot.get(f"{prefix}_before"),
+                "elo_after": overall_snapshot.get(f"{prefix}_after"),
+                "elo_delta": overall_snapshot.get(f"{prefix}_delta"),
+            },
+            "vs_humans": {"elo_before": None, "elo_after": None, "elo_delta": None},
+            "vs_bots": {"elo_before": None, "elo_after": None, "elo_delta": None},
+        }
+
+        if specific_track in {"vs_humans", "vs_bots"}:
+            normalized[specific_track] = {
+                "elo_before": specific_snapshot.get(f"{prefix}_before"),
+                "elo_after": specific_snapshot.get(f"{prefix}_after"),
+                "elo_delta": specific_snapshot.get(f"{prefix}_delta"),
+            }
+
+        return normalized, overall_snapshot
+
     async def create_user(self, registration: RegisterRequest) -> UserModel:
         username = self.canonical_username(registration.username)
         email = self.canonical_email(registration.email)
@@ -349,9 +376,8 @@ class UserService:
             opponent = game.get("black") if play_as == "white" else game.get("white")
             result = game.get("result") if isinstance(game.get("result"), dict) else {}
             winner = result.get("winner")
-            rating_snapshot = game.get("rating_snapshot") if isinstance(game.get("rating_snapshot"), dict) else {}
+            rating_snapshot, overall_snapshot = self._history_rating_snapshot_for_player(game, play_as=play_as)
             prefix = "white" if play_as == "white" else "black"
-            overall_snapshot = rating_snapshot.get("overall") if isinstance(rating_snapshot.get("overall"), dict) else rating_snapshot
             games.append(
                 {
                     "game_id": str(game.get("_id")),

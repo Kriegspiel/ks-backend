@@ -425,6 +425,57 @@ async def test_get_game_history_handles_null_result_documents() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_game_history_exposes_named_track_snapshots_for_selected_track() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    other_id = ObjectId()
+    archives.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "D7K2M9",
+            "white": {"user_id": str(user_id), "username": "gptnano", "role": "bot"},
+            "black": {"user_id": str(other_id), "username": "randobot", "role": "bot"},
+            "result": {"winner": "black", "reason": "checkmate"},
+            "rating_snapshot": {
+                "overall": {
+                    "white_before": 1333,
+                    "white_after": 1312,
+                    "white_delta": -21,
+                    "black_before": 1226,
+                    "black_after": 1247,
+                    "black_delta": 21,
+                },
+                "specific": {
+                    "white_before": 1294,
+                    "white_after": 1273,
+                    "white_delta": -21,
+                    "black_before": 1190,
+                    "black_after": 1211,
+                    "black_delta": 21,
+                },
+                "white_track": "vs_bots",
+                "black_track": "vs_bots",
+            },
+            "moves": [{"move_done": True}],
+            "created_at": datetime(2026, 4, 6, tzinfo=UTC),
+            "updated_at": datetime(2026, 4, 6, tzinfo=UTC),
+        }
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    page, total = await service.get_game_history(db, str(user_id), page=1, per_page=10)
+
+    assert total == 1
+    assert page[0]["elo_after"] == 1312
+    assert page[0]["rating_snapshot"]["overall"]["elo_after"] == 1312
+    assert page[0]["rating_snapshot"]["vs_bots"]["elo_after"] == 1273
+    assert page[0]["rating_snapshot"]["vs_bots"]["elo_delta"] == -21
+    assert page[0]["rating_snapshot"]["vs_humans"]["elo_after"] is None
+
+
+@pytest.mark.asyncio
 async def test_update_settings_persists_and_returns_payload() -> None:
     users = FakeUsersCollection()
     user_id = ObjectId()
