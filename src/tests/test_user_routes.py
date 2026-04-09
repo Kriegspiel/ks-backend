@@ -50,6 +50,16 @@ class StubService:
                 1,
             )
         )
+        self.get_listed_bot_daily_report = AsyncMock(
+            return_value={
+                "timezone": "America/New_York",
+                "bots": ["gptnano", "haiku"],
+                "rows": [
+                    {"date": "2026-04-08", "counts": {"gptnano": 2, "haiku": 1}},
+                    {"date": "2026-04-09", "counts": {"gptnano": 0, "haiku": 0}},
+                ],
+            }
+        )
         self.update_settings = AsyncMock(
             return_value={
                 "board_theme": "dark",
@@ -64,7 +74,7 @@ class StubService:
         return username.lower()
 
 
-def test_user_routes_profile_games_leaderboard_and_settings_auth_gate() -> None:
+def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gate() -> None:
     app = create_app(Settings(ENVIRONMENT="testing"))
     app.dependency_overrides[get_user_service] = lambda: StubService()
 
@@ -82,6 +92,7 @@ def test_user_routes_profile_games_leaderboard_and_settings_auth_gate() -> None:
         profile = client.get("/api/user/playerone")
         history = client.get("/api/user/playerone/games?page=1&per_page=20")
         leaderboard = client.get("/api/leaderboard?page=1&per_page=20")
+        bots_report = client.get("/api/tech/bots-report?days=10")
         unauth = client.patch("/api/user/settings", json={"board_theme": "dark"})
 
     assert profile.status_code == 200
@@ -92,5 +103,8 @@ def test_user_routes_profile_games_leaderboard_and_settings_auth_gate() -> None:
 
     assert leaderboard.status_code == 200
     assert leaderboard.json()["players"][0]["rank"] == 1
+
+    assert bots_report.status_code == 200
+    assert bots_report.json()["bots"] == ["gptnano", "haiku"]
 
     assert unauth.status_code == 401

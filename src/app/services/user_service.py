@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
 import math
 import secrets
 import time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import bcrypt
 from bson import ObjectId
@@ -604,3 +605,82 @@ class UserService:
             rank += 1
 
         return players, total
+
+    async def get_listed_bot_daily_report(self, db: Any, *, days: int = 10, timezone_name: str = "America/New_York") -> dict[str, Any]:
+        bounded_days = max(1, min(days, 31))
+        tz = ZoneInfo(timezone_name)
+        now_local = datetime.now(tz)
+        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=bounded_days - 1)
+        end_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        start_utc = start_local.astimezone(UTC)
+        end_utc = end_local.astimezone(UTC)
+
+        listed_bots = sorted(
+            user.get("username")
+            async for user in db.users.find(
+                {"role": "bot", "bot_profile.listed": True},
+                {"username": 1, "_id": 0},
+            )
+            if isinstance(user.get("username"), str) and user["username"].strip()
+        )
+
+        rows: list[dict[str, Any]] = []
+        counts_by_day: dict[str, dict[str, int]] = {}
+        for day_index in range(bounded_days):
+            day = (start_local + timedelta(days=day_index)).date().isoformat()
+            row = {"date": day, "counts": {bot: 0 for bot in listed_bots}}
+            rows.append(row)
+            counts_by_day[day] = row["counts"]
+
+        if not listed_bots:
+            return {"timezone": timezone_name, "bots": [], "rows": rows}
+
+        pipeline = [
+            {
+                "$match": {
+                    "created_at": {"$gte": start_utc, "$lt": end_utc},
+                    "$or": [
+                        {"white.username": {"$in": listed_bots}},
+                        {"black.username": {"$in": listed_bots}},
+                    ],
+                }
+            },
+            {
+                "$project": {
+                    "created_at": 1,
+                    "participants": ["$white.username", "$black.username"],
+                }
+            },
+            {"$unwind": "$participants"},
+            {"$match": {"participants": {"$in": listed_bots}}},
+            {
+                "$group": {
+                    "_id": {
+                        "date": {
+                            "$dateToString": {
+                                "format": "%Y-%m-%d",
+                                "date": "$created_at",
+                                "timezone": timezone_name,
+                            }
+                        },
+                        "bot": "$participants",
+                    },
+                    "games": {"$sum": 1},
+                }
+            },
+        ]
+
+        for collection_name in ("games", "game_archives"):
+            cursor = db[collection_name].aggregate(pipeline)
+            async for item in cursor:
+                key = item.get("_id", {})
+                day = key.get("date")
+                bot = key.get("bot")
+                if day in counts_by_day and bot in counts_by_day[day]:
+                    counts_by_day[day][bot] += int(item.get("games", 0))
+
+        return {
+            "timezone": timezone_name,
+            "bots": listed_bots,
+            "rows": rows,
+        }
