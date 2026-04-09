@@ -615,14 +615,14 @@ class UserService:
         start_utc = start_local.astimezone(UTC)
         end_utc = end_local.astimezone(UTC)
 
-        listed_bots = sorted(
+        listed_bots = sorted([
             user.get("username")
             async for user in db.users.find(
                 {"role": "bot", "bot_profile.listed": True},
                 {"username": 1, "_id": 0},
             )
             if isinstance(user.get("username"), str) and user["username"].strip()
-        )
+        ])
 
         rows: list[dict[str, Any]] = []
         counts_by_day: dict[str, dict[str, int]] = {}
