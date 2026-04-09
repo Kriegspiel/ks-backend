@@ -53,10 +53,20 @@ class StubService:
         self.get_listed_bot_daily_report = AsyncMock(
             return_value={
                 "timezone": "America/New_York",
-                "bots": ["gptnano", "haiku"],
-                "rows": [
-                    {"date": "2026-04-08", "counts": {"gptnano": 2, "haiku": 1}},
-                    {"date": "2026-04-09", "counts": {"gptnano": 0, "haiku": 0}},
+                "bots": [
+                    {
+                        "username": "gptnano",
+                        "rows": [
+                            {
+                                "date": "2026-04-08",
+                                "stats": {
+                                    "overall": {"total_games": 2, "wins": 1, "win_rate": 0.5},
+                                    "vs_humans": {"total_games": 0, "wins": 0, "win_rate": 0.0},
+                                    "vs_bots": {"total_games": 2, "wins": 1, "win_rate": 0.5},
+                                },
+                            },
+                        ],
+                    },
                 ],
             }
         )
@@ -105,6 +115,6 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
     assert leaderboard.json()["players"][0]["rank"] == 1
 
     assert bots_report.status_code == 200
-    assert bots_report.json()["bots"] == ["gptnano", "haiku"]
+    assert bots_report.json()["bots"][0]["username"] == "gptnano"
 
     assert unauth.status_code == 401

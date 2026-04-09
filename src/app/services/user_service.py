@@ -624,63 +624,78 @@ class UserService:
             if isinstance(user.get("username"), str) and user["username"].strip()
         ])
 
-        rows: list[dict[str, Any]] = []
-        counts_by_day: dict[str, dict[str, int]] = {}
-        for day_index in range(bounded_days):
-            day = (start_local + timedelta(days=day_index)).date().isoformat()
-            row = {"date": day, "counts": {bot: 0 for bot in listed_bots}}
-            rows.append(row)
-            counts_by_day[day] = row["counts"]
+        def empty_bucket() -> dict[str, dict[str, int | float]]:
+            return {
+                "overall": {"total_games": 0, "wins": 0, "win_rate": 0.0},
+                "vs_humans": {"total_games": 0, "wins": 0, "win_rate": 0.0},
+                "vs_bots": {"total_games": 0, "wins": 0, "win_rate": 0.0},
+            }
+
+        bot_rows = {
+            bot: [
+                {"date": (start_local + timedelta(days=day_index)).date().isoformat(), "stats": empty_bucket()}
+                for day_index in range(bounded_days)
+            ]
+            for bot in listed_bots
+        }
+        bot_days = {
+            bot: {row["date"]: row["stats"] for row in rows}
+            for bot, rows in bot_rows.items()
+        }
 
         if not listed_bots:
-            return {"timezone": timezone_name, "bots": [], "rows": rows}
+            return {"timezone": timezone_name, "bots": []}
 
-        pipeline = [
+        cursor = db.game_archives.find(
             {
-                "$match": {
-                    "created_at": {"$gte": start_utc, "$lt": end_utc},
-                    "$or": [
-                        {"white.username": {"$in": listed_bots}},
-                        {"black.username": {"$in": listed_bots}},
-                    ],
-                }
+                "state": "completed",
+                "updated_at": {"$gte": start_utc, "$lt": end_utc},
+                "$or": [
+                    {"white.username": {"$in": listed_bots}},
+                    {"black.username": {"$in": listed_bots}},
+                ],
             },
             {
-                "$project": {
-                    "created_at": 1,
-                    "participants": ["$white.username", "$black.username"],
-                }
+                "updated_at": 1,
+                "white": 1,
+                "black": 1,
+                "result": 1,
             },
-            {"$unwind": "$participants"},
-            {"$match": {"participants": {"$in": listed_bots}}},
-            {
-                "$group": {
-                    "_id": {
-                        "date": {
-                            "$dateToString": {
-                                "format": "%Y-%m-%d",
-                                "date": "$created_at",
-                                "timezone": timezone_name,
-                            }
-                        },
-                        "bot": "$participants",
-                    },
-                    "games": {"$sum": 1},
-                }
-            },
-        ]
+        )
+        async for game in cursor:
+            updated_at = game.get("updated_at")
+            if not isinstance(updated_at, datetime):
+                continue
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=UTC)
+            day = updated_at.astimezone(tz).date().isoformat()
+            winner = (game.get("result") or {}).get("winner")
 
-        for collection_name in ("games", "game_archives"):
-            cursor = db[collection_name].aggregate(pipeline)
-            async for item in cursor:
-                key = item.get("_id", {})
-                day = key.get("date")
-                bot = key.get("bot")
-                if day in counts_by_day and bot in counts_by_day[day]:
-                    counts_by_day[day][bot] += int(item.get("games", 0))
+            for color, opponent_color in (("white", "black"), ("black", "white")):
+                player = game.get(color) or {}
+                username = player.get("username")
+                if username not in bot_days:
+                    continue
+                day_stats = bot_days[username].get(day)
+                if day_stats is None:
+                    continue
+                opponent = game.get(opponent_color) or {}
+                outcome = self._winner_result(winner, color)
+                tracks = ("overall", self._track_for_opponent_role(opponent.get("role")))
+                for track in tracks:
+                    bucket = day_stats[track]
+                    bucket["total_games"] += 1
+                    if outcome == "win":
+                        bucket["wins"] += 1
+
+        for rows in bot_rows.values():
+            for row in rows:
+                for bucket in row["stats"].values():
+                    total_games = int(bucket["total_games"])
+                    wins = int(bucket["wins"])
+                    bucket["win_rate"] = round((wins / total_games) if total_games else 0.0, 4)
 
         return {
             "timezone": timezone_name,
-            "bots": listed_bots,
-            "rows": rows,
+            "bots": [{"username": bot, "rows": bot_rows[bot]} for bot in listed_bots],
         }
