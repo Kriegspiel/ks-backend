@@ -99,3 +99,12 @@ async def get_leaderboard(
         "players": players,
         "pagination": _pagination(page=page, per_page=per_page, total=total),
     }
+
+
+@router.get("/tech/bots-report")
+async def get_bots_report(
+    days: int = Query(default=10, ge=1, le=31),
+    user_service: UserService = Depends(get_user_service),
+) -> dict[str, Any]:
+    db = require_db()
+    return await user_service.get_listed_bot_daily_report(db, days=days)
