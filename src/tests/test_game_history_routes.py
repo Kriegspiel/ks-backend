@@ -151,6 +151,64 @@ async def test_get_game_transcript_access_matrix_and_archive_fallback(game_docs)
 
 
 @pytest.mark.asyncio
+async def test_get_game_transcript_filters_nonsense_attempts_and_renumbers_ply() -> None:
+    archived_id = ObjectId()
+    archived = {
+        "_id": archived_id,
+        "game_code": "CLEAN42",
+        "rule_variant": "berkeley_any",
+        "state": "completed",
+        "white": {"user_id": "u1", "username": "white", "connected": True},
+        "black": {"user_id": "u2", "username": "black", "connected": True},
+        "moves": [
+            {
+                "ply": 1,
+                "color": "white",
+                "question_type": "COMMON",
+                "uci": "e2e4",
+                "announcement": "REGULAR_MOVE",
+                "special_announcement": None,
+                "capture_square": None,
+                "move_done": True,
+                "timestamp": datetime(2025, 1, 1, tzinfo=UTC),
+            },
+            {
+                "ply": 2,
+                "color": "white",
+                "question_type": "COMMON",
+                "uci": "f2a8q",
+                "announcement": "IMPOSSIBLE_TO_ASK",
+                "special_announcement": None,
+                "capture_square": None,
+                "move_done": False,
+                "timestamp": datetime(2025, 1, 1, tzinfo=UTC),
+            },
+            {
+                "ply": 3,
+                "color": "black",
+                "question_type": "COMMON",
+                "uci": "a7a5",
+                "announcement": "REGULAR_MOVE",
+                "special_announcement": None,
+                "capture_square": None,
+                "move_done": True,
+                "timestamp": datetime(2025, 1, 1, tzinfo=UTC),
+            },
+        ],
+        "result": {"winner": None, "reason": "stalemate"},
+        "created_at": datetime(2025, 1, 1, tzinfo=UTC),
+        "updated_at": datetime(2025, 1, 1, tzinfo=UTC),
+    }
+    service = GameService(FakeCollection([]), FakeCollection([archived]))
+
+    transcript = await service.get_game_transcript(game_id=str(archived_id), user_id="u9")
+
+    assert [move.answer.main for move in transcript.moves] == ["REGULAR_MOVE", "REGULAR_MOVE"]
+    assert [move.ply for move in transcript.moves] == [1, 2]
+    assert transcript.moves[-1].replay_fen is not None
+
+
+@pytest.mark.asyncio
 async def test_get_recent_completed_games_uses_archive_order_and_limit_clamp(game_docs) -> None:
     _active, archived, older = game_docs
     service = GameService(FakeCollection([]), FakeCollection([older, archived]))

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from bson import ObjectId
@@ -137,6 +137,7 @@ async def test_execute_move_persists_and_flips_turn(active_game_doc: dict) -> No
     service = GameService(games)
 
     response = await service.execute_move(game_id=str(active_game_doc["_id"]), user_id="u1", uci="e2e4")
+    await service.flush_all()
 
     assert response["move_done"] is True
     assert response["turn"] == "black"
@@ -165,6 +166,35 @@ async def test_execute_move_illegal_is_deterministic_and_non_terminal(active_gam
 
 
 @pytest.mark.asyncio
+async def test_execute_move_does_not_persist_impossible_attempts(active_game_doc: dict) -> None:
+    games = FakeGamesCollection()
+    games.docs.append(active_game_doc)
+    service = GameService(games)
+
+    with patch(
+        "app.services.game_service.attempt_move",
+        return_value={
+            "move_done": False,
+            "announcement": "IMPOSSIBLE_TO_ASK",
+            "special_announcement": None,
+            "capture_square": None,
+            "full_fen": active_game_doc["engine_state"]["board_fen"],
+            "white_fen": "4K3/PPPPPPPP/8/8/8/8/8/8 w - - 0 1",
+            "black_fen": "8/8/8/8/8/8/pppppppp/4k3 w - - 0 1",
+            "turn": "white",
+            "game_over": False,
+        },
+    ):
+        response = await service.execute_move(game_id=str(active_game_doc["_id"]), user_id="u1", uci="f2a8q")
+    await service.flush_all()
+
+    assert response["announcement"] == "IMPOSSIBLE_TO_ASK"
+    assert games.docs[0]["moves"] == []
+    assert games.docs[0]["move_number"] == 1
+    assert games.docs[0]["turn"] == "white"
+
+
+@pytest.mark.asyncio
 async def test_execute_move_rejects_non_participant_and_out_of_turn(active_game_doc: dict) -> None:
     games = FakeGamesCollection()
     games.docs.append(active_game_doc)
@@ -186,10 +216,41 @@ async def test_execute_ask_any_records_result_without_uci_leak(active_game_doc: 
     service = GameService(games)
 
     response = await service.execute_ask_any(game_id=str(active_game_doc["_id"]), user_id="u1")
+    await service.flush_all()
 
     assert "has_any" in response
     assert games.docs[0]["moves"][0]["question_type"] == "ASK_ANY"
     assert games.docs[0]["moves"][0]["uci"] is None
+
+
+@pytest.mark.asyncio
+async def test_execute_ask_any_does_not_persist_impossible_attempts(active_game_doc: dict) -> None:
+    games = FakeGamesCollection()
+    games.docs.append(active_game_doc)
+    service = GameService(games)
+
+    with patch(
+        "app.services.game_service.ask_any",
+        return_value={
+            "move_done": False,
+            "announcement": "IMPOSSIBLE_TO_ASK",
+            "special_announcement": None,
+            "capture_square": None,
+            "full_fen": active_game_doc["engine_state"]["board_fen"],
+            "white_fen": "4K3/PPPPPPPP/8/8/8/8/8/8 w - - 0 1",
+            "black_fen": "8/8/8/8/8/8/pppppppp/4k3 w - - 0 1",
+            "turn": "white",
+            "game_over": False,
+            "has_any": False,
+        },
+    ):
+        response = await service.execute_ask_any(game_id=str(active_game_doc["_id"]), user_id="u1")
+    await service.flush_all()
+
+    assert response["announcement"] == "IMPOSSIBLE_TO_ASK"
+    assert response["has_any"] is False
+    assert games.docs[0]["moves"] == []
+    assert games.docs[0]["turn"] == "white"
 
 
 @pytest.fixture
@@ -411,11 +472,13 @@ def test_router_more_paths_and_error_mapping() -> None:
                 "game_code": "A7K2M9",
                 "rule_variant": "berkeley_any",
                 "state": "active",
+                "opponent_type": "human",
                 "white": {"username": "w", "connected": True},
                 "black": {"username": "b", "connected": True},
                 "turn": "white",
                 "move_number": 1,
                 "created_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
             }
         ),
         resign_game=AsyncMock(return_value={"result": {"winner": "black", "reason": "resignation"}}),
@@ -476,37 +539,47 @@ async def test_service_not_found_and_id_validation_paths() -> None:
 
 @pytest.mark.asyncio
 async def test_service_race_conditions_on_updates() -> None:
-    games = FakeGamesCollection()
-    gid = ObjectId()
-    now = datetime.now(UTC)
-    games.docs.append(
-        {
-            "_id": gid,
-            "game_code": "R4C3ZZ",
-            "rule_variant": "berkeley_any",
-            "white": {"user_id": "u1", "username": "w", "connected": True},
-            "black": {"user_id": "u2", "username": "b", "connected": True},
-            "state": "active",
-            "turn": "white",
-            "move_number": 1,
-            "moves": [],
-            "engine_state": serialize_game_state(create_new_game(any_rule=True)),
-            "created_at": now,
-            "updated_at": now,
-        }
-    )
-    service = GameService(games)
+    async def failing_persist(*args, **kwargs):
+        raise GameValidationError(code="RACE_CONDITION", message="Concurrent update failed")
 
-    async def none_update(*args, **kwargs):
-        return None
+    async def fresh_service() -> tuple[GameService, ObjectId]:
+        games = FakeGamesCollection()
+        gid = ObjectId()
+        now = datetime.now(UTC)
+        games.docs.append(
+            {
+                "_id": gid,
+                "game_code": "R4C3ZZ",
+                "rule_variant": "berkeley_any",
+                "white": {"user_id": "u1", "username": "w", "connected": True, "role": "bot"},
+                "black": {"user_id": "u2", "username": "b", "connected": True, "role": "bot"},
+                "state": "active",
+                "turn": "white",
+                "move_number": 1,
+                "moves": [],
+                "engine_state": serialize_game_state(create_new_game(any_rule=True)),
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        service = GameService(games)
+        service._persist_game_document = AsyncMock(side_effect=failing_persist)  # type: ignore[method-assign]
+        return service, gid
 
-    games.find_one_and_update = none_update  # type: ignore[method-assign]
+    service, gid = await fresh_service()
+    await service.execute_move(game_id=str(gid), user_id="u1", uci="e2e4")
     with pytest.raises(GameValidationError):
-        await service.execute_move(game_id=str(gid), user_id="u1", uci="e2e4")
+        await service.flush_all()
+
+    service, gid = await fresh_service()
+    await service.execute_ask_any(game_id=str(gid), user_id="u1")
     with pytest.raises(GameValidationError):
-        await service.execute_ask_any(game_id=str(gid), user_id="u1")
+        await service.flush_all()
+
+    service, gid = await fresh_service()
+    await service.resign_game(game_id=str(gid), user_id="u1")
     with pytest.raises(GameValidationError):
-        await service.resign_game(game_id=str(gid), user_id="u1")
+        await service.flush_all()
 
 
 def test_router_maps_more_error_classes() -> None:

@@ -49,6 +49,7 @@ BOT_GAME_FLUSH_PLIES = 20
 BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
 FLUSH_LOOP_INTERVAL_SECONDS = 1.0
 TIMEOUT_SWEEP_INTERVAL = timedelta(minutes=25)
+NONSENSE_HISTORY_ANNOUNCEMENTS = frozenset({"IMPOSSIBLE_TO_ASK", "INVALID_UCI"})
 
 
 class GameServiceError(Exception):
@@ -273,6 +274,15 @@ class GameService:
     @staticmethod
     def _ply_count(game: dict[str, Any]) -> int:
         return len(game.get("moves", []))
+
+    @staticmethod
+    def _is_nonsense_history_entry(source: dict[str, Any]) -> bool:
+        announcement = source.get("announcement")
+        return isinstance(announcement, str) and announcement in NONSENSE_HISTORY_ANNOUNCEMENTS
+
+    @classmethod
+    def _history_moves(cls, moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [move for move in moves if not cls._is_nonsense_history_entry(move)]
 
     @staticmethod
     def _is_human_involved_game(game: dict[str, Any]) -> bool:
@@ -600,11 +610,17 @@ class GameService:
         return {"full": full, "white": white, "black": black}
 
     @classmethod
-    def _to_transcript_move(cls, move: dict[str, Any], *, replay_fen: dict[str, str] | None = None) -> dict[str, Any]:
+    def _to_transcript_move(
+        cls,
+        move: dict[str, Any],
+        *,
+        ply: int,
+        replay_fen: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         stored_replay = move.get("replay_fen")
         replay_payload = stored_replay or replay_fen
         return {
-            "ply": move.get("ply", 1),
+            "ply": ply,
             "color": move.get("color", "white"),
             "question_type": move.get("question_type", "COMMON"),
             "uci": move.get("uci"),
@@ -1276,7 +1292,8 @@ class GameService:
             game["turn"] = outcome["turn"]
             game["time_control"] = advanced_time_control
             game["updated_at"] = now
-            game.setdefault("moves", []).append(move_record)
+            if not self._is_nonsense_history_entry(outcome):
+                game.setdefault("moves", []).append(move_record)
             if outcome["move_done"]:
                 game["move_number"] = int(game.get("move_number", 1)) + 1
             if outcome["game_over"]:
@@ -1366,7 +1383,8 @@ class GameService:
             game["turn"] = outcome["turn"]
             game["time_control"] = advanced_time_control
             game["updated_at"] = now
-            game.setdefault("moves", []).append(move_record)
+            if not self._is_nonsense_history_entry(outcome):
+                game.setdefault("moves", []).append(move_record)
             if timeout is not None:
                 self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
 
@@ -1439,10 +1457,14 @@ class GameService:
         if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
             raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access an active game transcript")
 
-        moves = game.get("moves", [])
+        moves = self._history_moves(game.get("moves", []))
         replay_fens = self._build_replay_fens(moves)
         transcript_moves = [
-            self._to_transcript_move(move, replay_fen=replay_fens[index] if index < len(replay_fens) else None)
+            self._to_transcript_move(
+                move,
+                ply=index + 1,
+                replay_fen=replay_fens[index] if index < len(replay_fens) else None,
+            )
             for index, move in enumerate(moves)
         ]
         return GameTranscriptResponse(
