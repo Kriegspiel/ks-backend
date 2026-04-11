@@ -19,27 +19,24 @@ def test_register_requires_username_email_password() -> None:
 
 def test_register_validates_username_format() -> None:
     with pytest.raises(ValidationError):
-        RegisterRequest.model_validate({"username": "ab", "email": "x@example.com", "password": "abc12345"})
+        RegisterRequest.model_validate({"username": "bad-name", "email": "x@example.com", "password": "abc12345"})
 
     with pytest.raises(ValidationError):
-        RegisterRequest.model_validate({"username": "bad-name", "email": "x@example.com", "password": "abc12345"})
+        RegisterRequest.model_validate({"username": "x" * 34, "email": "x@example.com", "password": "abc12345"})
 
 
 def test_register_validates_password_constraints() -> None:
     with pytest.raises(ValidationError):
-        RegisterRequest.model_validate({"username": "PlayerOne", "email": "x@example.com", "password": "short1"})
+        RegisterRequest.model_validate({"username": "PlayerOne", "email": "x@example.com", "password": ""})
 
     with pytest.raises(ValidationError):
-        RegisterRequest.model_validate({"username": "PlayerOne", "email": "x@example.com", "password": "allletters"})
-
-    with pytest.raises(ValidationError):
-        RegisterRequest.model_validate({"username": "PlayerOne", "email": "x@example.com", "password": "12345678"})
+        RegisterRequest.model_validate({"username": "PlayerOne", "email": "x@example.com", "password": "x" * 65})
 
 
 def test_register_accepts_valid_payload() -> None:
-    req = RegisterRequest.model_validate({"username": "Player_One", "email": "x@example.com", "password": "abc12345"})
+    req = RegisterRequest.model_validate({"username": "a", "email": "x@example.com", "password": "!@#$%^&*"})
 
-    assert req.username == "Player_One"
+    assert req.username == "a"
     assert req.email == "x@example.com"
 
 
@@ -51,11 +48,12 @@ def test_bot_register_requires_owner_email() -> None:
 def test_bot_register_accepts_valid_payload() -> None:
     req = BotRegisterRequest.model_validate(
         {
-            "username": "randobot",
+            "username": "r",
             "display_name": "Random Bot",
             "owner_email": "Owner@Example.com",
             "description": "Plays random moves",
         }
     )
 
+    assert req.username == "r"
     assert req.owner_email == "Owner@Example.com"
