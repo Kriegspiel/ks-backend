@@ -10,7 +10,7 @@ class RegisterRequest(BaseModel):
 
     username: str = Field(min_length=1, max_length=33, pattern=_USERNAME_PATTERN)
     email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=512)
 
     @field_validator("email")
     @classmethod
