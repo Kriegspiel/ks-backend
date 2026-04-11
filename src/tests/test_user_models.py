@@ -30,7 +30,11 @@ def test_register_validates_password_constraints() -> None:
         RegisterRequest.model_validate({"username": "PlayerOne", "email": "x@example.com", "password": ""})
 
     with pytest.raises(ValidationError):
-        RegisterRequest.model_validate({"username": "PlayerOne", "email": "x@example.com", "password": "x" * 65})
+        RegisterRequest.model_validate({"username": "PlayerOne", "email": "x@example.com", "password": "x" * 513})
+
+    req = RegisterRequest.model_validate({"username": "PlayerOne", "email": "x@example.com", "password": "x" * 512})
+
+    assert req.password == "x" * 512
 
 
 def test_register_accepts_valid_payload() -> None:

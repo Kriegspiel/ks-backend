@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import bcrypt
 import pytest
 
-from app.services.user_service import UserService
+from app.services.user_service import PASSWORD_HASH_SCHEME_BCRYPT_SHA256, UserService
 
 
 @pytest.mark.parametrize("password", ["abc12345", "correct-horse-battery-staple", "P@ssw0rd123!"])
@@ -17,6 +18,12 @@ def test_hash_password_uses_random_salt() -> None:
     second = UserService.hash_password("abc12345")
 
     assert first != second
+
+
+def test_hash_password_marks_bcrypt_sha256_scheme() -> None:
+    password_hash = UserService.hash_password("abc12345")
+
+    assert password_hash.startswith(PASSWORD_HASH_SCHEME_BCRYPT_SHA256)
 
 
 @pytest.mark.parametrize(
@@ -40,3 +47,19 @@ def test_password_path_continuity_hash_then_verify() -> None:
 
     assert UserService.verify_password(original, password_hash)
     assert not UserService.verify_password("definitely-not-the-same", password_hash)
+
+
+def test_long_passwords_over_bcrypt_limit_verify_correctly() -> None:
+    original = "x" * 200 + "tail"
+    password_hash = UserService.hash_password(original)
+
+    assert UserService.verify_password(original, password_hash)
+    assert not UserService.verify_password(("x" * 200) + "different-tail", password_hash)
+
+
+def test_verify_password_accepts_legacy_bcrypt_hashes() -> None:
+    original = "legacy-password-" + ("x" * 40)
+    legacy_hash = bcrypt.hashpw(original.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    assert UserService.verify_password(original, legacy_hash)
+    assert not UserService.verify_password("wrong-password", legacy_hash)

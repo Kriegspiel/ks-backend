@@ -19,6 +19,7 @@ from app.models.auth import BotRegisterRequest, RegisterRequest
 from app.models.user import UserModel, default_user_stats_payload, normalize_user_stats_payload, utcnow
 
 DEFAULT_BOT_OWNER_EMAIL = "bots@kriegspiel.org"
+PASSWORD_HASH_SCHEME_BCRYPT_SHA256 = "bcrypt_sha256$"
 
 
 class UserConflictError(Exception):
@@ -44,12 +45,34 @@ class UserService:
         return email.strip().lower()
 
     @staticmethod
-    def hash_password(plain_password: str) -> str:
-        return bcrypt.hashpw(plain_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    def _password_material(plain_password: str) -> bytes:
+        # Pre-hash so longer passwords behave predictably before bcrypt.
+        return hashlib.sha256(plain_password.encode("utf-8")).hexdigest().encode("ascii")
 
-    @staticmethod
-    def verify_password(plain_password: str, password_hash: str) -> bool:
-        return bcrypt.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
+    @classmethod
+    def _uses_password_prehash(cls, password_hash: str) -> bool:
+        return password_hash.startswith(PASSWORD_HASH_SCHEME_BCRYPT_SHA256)
+
+    @classmethod
+    def hash_password(cls, plain_password: str) -> str:
+        bcrypt_hash = bcrypt.hashpw(cls._password_material(plain_password), bcrypt.gensalt()).decode("utf-8")
+        return f"{PASSWORD_HASH_SCHEME_BCRYPT_SHA256}{bcrypt_hash}"
+
+    @classmethod
+    def verify_password(cls, plain_password: str, password_hash: str) -> bool:
+        candidate = plain_password.encode("utf-8")
+        bcrypt_hash = password_hash
+        if cls._uses_password_prehash(password_hash):
+            candidate = cls._password_material(plain_password)
+            bcrypt_hash = password_hash[len(PASSWORD_HASH_SCHEME_BCRYPT_SHA256) :]
+        try:
+            return bcrypt.checkpw(candidate, bcrypt_hash.encode("utf-8"))
+        except ValueError:
+            return False
+
+    @classmethod
+    def needs_password_rehash(cls, password_hash: str) -> bool:
+        return not cls._uses_password_prehash(password_hash)
 
     @staticmethod
     def bot_token_digest(token_secret: str) -> str:
@@ -457,8 +480,18 @@ class UserService:
         if user is None:
             return None
 
-        if not self.verify_password(password, user["password_hash"]):
+        stored_hash = user["password_hash"]
+        if not self.verify_password(password, stored_hash):
             return None
+
+        if self.needs_password_rehash(stored_hash):
+            updated = await self._users.find_one_and_update(
+                {"_id": user["_id"]},
+                {"$set": {"password_hash": self.hash_password(password), "updated_at": utcnow()}},
+                return_document=ReturnDocument.AFTER,
+            )
+            if updated is not None:
+                user = updated
 
         return UserModel.from_mongo(user)
 

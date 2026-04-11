@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import bcrypt
 import pytest
 from bson import ObjectId
 
@@ -219,6 +220,44 @@ async def test_authenticate_returns_user_for_valid_credentials_else_none() -> No
     assert valid.id == created.id
     assert invalid_password is None
     assert missing_user is None
+
+
+@pytest.mark.asyncio
+async def test_authenticate_rehashes_legacy_bcrypt_password_hash() -> None:
+    users = FakeUsersCollection()
+    legacy_hash = bcrypt.hashpw("abc12345".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    users.docs.append(
+        {
+            "_id": ObjectId(),
+            "username": "playerone",
+            "username_display": "PlayerOne",
+            "email": "one@example.com",
+            "password_hash": legacy_hash,
+            "auth_providers": ["local"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": None,
+            "stats": default_user_stats_payload(),
+            "settings": {
+                "board_theme": "default",
+                "piece_set": "cburnett",
+                "sound_enabled": True,
+                "auto_ask_any": False,
+            },
+            "role": "user",
+            "status": "active",
+            "last_active_at": datetime.now(UTC),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    service = UserService(users)
+
+    authenticated = await service.authenticate("PLAYERONE", "abc12345")
+
+    assert authenticated is not None
+    assert users.docs[0]["password_hash"] != legacy_hash
+    assert UserService.needs_password_rehash(users.docs[0]["password_hash"]) is False
+    assert service.verify_password("abc12345", users.docs[0]["password_hash"]) is True
 
 
 @pytest.mark.asyncio
