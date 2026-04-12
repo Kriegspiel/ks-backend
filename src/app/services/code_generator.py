@@ -37,8 +37,16 @@ async def generate_game_code(
         if any(ch not in SAFE_GAME_CODE_ALPHABET for ch in candidate):
             continue
 
-        existing = await db.games.find_one({"game_code": candidate}, {"_id": 1})
-        if existing is None:
-            return candidate
+        existing_live = await db.games.find_one({"game_code": candidate}, {"_id": 1})
+        if existing_live is not None:
+            continue
+
+        archives = getattr(db, "game_archives", None)
+        if archives is not None:
+            existing_archived = await archives.find_one({"game_code": candidate}, {"_id": 1})
+            if existing_archived is not None:
+                continue
+
+        return candidate
 
     raise GameCodeGenerationError("Unable to generate a unique game code")
