@@ -1075,7 +1075,7 @@ class GameService:
     ) -> CreateGameResponse:
         color = self._creator_color(request.play_as, self._rng)
         now = self.utcnow()
-        code = await generate_game_code(SimpleNamespace(games=self._games))
+        code = await generate_game_code(SimpleNamespace(games=self._games, game_archives=self._archives))
 
         if role == "bot":
             if request.opponent_type != "human":
