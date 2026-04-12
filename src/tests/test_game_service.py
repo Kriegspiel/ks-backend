@@ -181,6 +181,7 @@ async def test_create_game_assigns_black_when_requested() -> None:
     saved = games.docs[0]
     assert saved["state"] == "waiting"
     assert saved["creator_color"] == "black"
+    assert saved["expires_at"] - saved["created_at"] == timedelta(minutes=10)
 
 
 @pytest.mark.asyncio
@@ -252,6 +253,7 @@ async def test_join_game_rejects_creator_missing_non_waiting_and_race() -> None:
             "move_number": 1,
             "created_at": now,
             "updated_at": now,
+            "expires_at": now + timedelta(minutes=10),
         }
     )
     service = GameService(games)
@@ -278,6 +280,40 @@ async def test_join_game_rejects_creator_missing_non_waiting_and_race() -> None:
 
 
 @pytest.mark.asyncio
+async def test_join_game_rejects_and_deletes_expired_waiting_game() -> None:
+    now = datetime.now(UTC)
+
+    class FrozenGameService(GameService):
+        @staticmethod
+        def utcnow() -> datetime:
+            return now
+
+    games = FakeGamesCollection()
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "Z7K2M9",
+            "rule_variant": "berkeley_any",
+            "creator_color": "white",
+            "white": {"user_id": "u1", "username": "creator", "connected": True},
+            "black": None,
+            "state": "waiting",
+            "turn": None,
+            "move_number": 1,
+            "created_at": now - timedelta(minutes=11),
+            "updated_at": now - timedelta(minutes=11),
+            "expires_at": now - timedelta(seconds=1),
+        }
+    )
+    service = FrozenGameService(games)
+
+    with pytest.raises(GameNotFoundError):
+        await service.join_game(user_id="u2", username="joiner", game_code="Z7K2M9")
+
+    assert games.docs == []
+
+
+@pytest.mark.asyncio
 async def test_get_open_games_returns_waiting_newest_first_and_bounded() -> None:
     games = FakeGamesCollection()
     now = datetime.now(UTC)
@@ -295,6 +331,7 @@ async def test_get_open_games_returns_waiting_newest_first_and_bounded() -> None
                 "move_number": 1,
                 "created_at": now + timedelta(minutes=i),
                 "updated_at": now,
+                "expires_at": now + timedelta(minutes=10 + i),
             }
         )
 
@@ -318,6 +355,49 @@ async def test_get_open_games_returns_waiting_newest_first_and_bounded() -> None
 
     assert len(response.games) == 2
     assert [item.game_code for item in response.games] == ["C7K2M7", "B7K2M8"]
+
+
+@pytest.mark.asyncio
+async def test_expire_waiting_games_removes_expired_entries() -> None:
+    now = datetime.now(UTC)
+    games = FakeGamesCollection()
+    expired_id = ObjectId()
+    fresh_id = ObjectId()
+    games.docs.extend(
+        [
+            {
+                "_id": expired_id,
+                "game_code": "E7K2M9",
+                "rule_variant": "berkeley_any",
+                "creator_color": "white",
+                "white": {"user_id": "u1", "username": "creator", "connected": True},
+                "black": None,
+                "state": "waiting",
+                "created_at": now - timedelta(minutes=11),
+                "updated_at": now - timedelta(minutes=11),
+                "expires_at": now - timedelta(seconds=1),
+            },
+            {
+                "_id": fresh_id,
+                "game_code": "F7K2M9",
+                "rule_variant": "berkeley_any",
+                "creator_color": "white",
+                "white": {"user_id": "u2", "username": "fresh", "connected": True},
+                "black": None,
+                "state": "waiting",
+                "created_at": now,
+                "updated_at": now,
+                "expires_at": now + timedelta(minutes=10),
+            },
+        ]
+    )
+    service = GameService(games)
+
+    await service._expire_waiting_games(now=now)
+
+    remaining_ids = {doc["_id"] for doc in games.docs}
+    assert expired_id not in remaining_ids
+    assert fresh_id in remaining_ids
 
 
 @pytest.mark.asyncio
