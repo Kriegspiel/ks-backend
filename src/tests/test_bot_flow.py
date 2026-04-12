@@ -172,7 +172,7 @@ async def test_bot_can_create_one_open_lobby_game_only() -> None:
 
     assert response.state == "waiting"
     assert games.docs[0]["white"]["role"] == "bot"
-    assert games.docs[0]["expires_at"] - games.docs[0]["created_at"] == timedelta(hours=24)
+    assert games.docs[0]["expires_at"] - games.docs[0]["created_at"] == timedelta(minutes=10)
 
     with pytest.raises(GameConflictError) as exc:
         await service.create_game(

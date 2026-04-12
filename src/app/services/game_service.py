@@ -44,11 +44,12 @@ from app.models.user import normalize_user_stats_payload
 PlayerColor = Literal["white", "black"]
 logger = structlog.get_logger("app.game")
 ELO_K_FACTOR = 32
-WAITING_GAME_TTL = timedelta(hours=24)
+WAITING_GAME_TTL = timedelta(minutes=10)
 BOT_GAME_FLUSH_PLIES = 20
 BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
 FLUSH_LOOP_INTERVAL_SECONDS = 1.0
 TIMEOUT_SWEEP_INTERVAL = timedelta(minutes=25)
+WAITING_GAME_SWEEP_INTERVAL = timedelta(seconds=5)
 NONSENSE_HISTORY_ANNOUNCEMENTS = frozenset({"IMPOSSIBLE_TO_ASK", "INVALID_UCI"})
 
 
@@ -107,9 +108,11 @@ class GameService:
         self._flush_loop_task: asyncio.Task[None] | None = None
         self._shutdown = False
         self._last_timeout_sweep_at: datetime | None = None
+        self._last_waiting_game_sweep_at: datetime | None = None
 
     async def start(self) -> None:
         self._shutdown = False
+        await self._maybe_expire_waiting_games()
         await self._maybe_sweep_timeouts()
         if self._flush_loop_task is None or self._flush_loop_task.done():
             self._flush_loop_task = asyncio.create_task(self._flush_loop(), name="game-service-flush-loop")
@@ -136,9 +139,56 @@ class GameService:
             while not self._shutdown:
                 await asyncio.sleep(FLUSH_LOOP_INTERVAL_SECONDS)
                 await self._flush_due_entries()
+                await self._maybe_expire_waiting_games()
                 await self._maybe_sweep_timeouts()
         except asyncio.CancelledError:
             raise
+
+    async def _maybe_expire_waiting_games(self) -> None:
+        now = self.utcnow()
+        if self._last_waiting_game_sweep_at is not None and now - self._last_waiting_game_sweep_at < WAITING_GAME_SWEEP_INTERVAL:
+            return
+        self._last_waiting_game_sweep_at = now
+        await self._expire_waiting_games(now=now)
+
+    async def _expire_waiting_games(self, *, now: datetime) -> None:
+        async with self._cache_lock:
+            cached_entries = list(self._cache.items())
+
+        expired_cached_ids: list[ObjectId] = []
+        for game_id, entry in cached_entries:
+            async with entry.lock:
+                game = entry.game
+                if not self._is_waiting_game_expired(game=game, now=now):
+                    continue
+                expired_cached_ids.append(game_id)
+
+        for game_id in expired_cached_ids:
+            await self._delete_waiting_game_document(game_id=game_id)
+            await self._evict_cached_game(game_id)
+            logger.info("waiting_game_expired", game_id=str(game_id), source="cache")
+
+        expired_uncached_ids: list[ObjectId] = []
+        if hasattr(self._games, "find"):
+            cursor = self._games.find({"state": "waiting", "expires_at": {"$lte": now}})
+            async for doc in cursor:
+                game_id = doc.get("_id")
+                if isinstance(game_id, ObjectId):
+                    expired_uncached_ids.append(game_id)
+        else:
+            docs = getattr(self._games, "docs", None)
+            if isinstance(docs, list):
+                expired_uncached_ids = [
+                    doc["_id"]
+                    for doc in docs
+                    if self._is_waiting_game_expired(game=doc, now=now) and isinstance(doc.get("_id"), ObjectId)
+                ]
+
+        for game_id in expired_uncached_ids:
+            if game_id in expired_cached_ids:
+                continue
+            await self._delete_waiting_game_document(game_id=game_id)
+            logger.info("waiting_game_expired", game_id=str(game_id), source="db")
 
     async def _maybe_sweep_timeouts(self) -> None:
         now = self.utcnow()
@@ -523,9 +573,17 @@ class GameService:
         oid = await self._resolve_game_object_id(game_id)
         cached = await self._get_cached_entry(oid)
         if cached is not None:
-            return deepcopy(cached.game)
+            snapshot = deepcopy(cached.game)
+            if self._is_waiting_game_expired(game=snapshot, now=self.utcnow()):
+                await self._delete_waiting_game_document(game_id=oid)
+                await self._evict_cached_game(oid)
+                return None
+            return snapshot
         game = await self._games.find_one({"_id": oid})
         if game is not None:
+            if self._is_waiting_game_expired(game=game, now=self.utcnow()):
+                await self._delete_waiting_game_document(game_id=oid)
+                return None
             return game
         if self._archives is None:
             return None
@@ -944,8 +1002,37 @@ class GameService:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
+    @classmethod
+    def _is_waiting_game_expired(cls, *, game: dict[str, Any], now: datetime) -> bool:
+        if game.get("state") != "waiting":
+            return False
+        expires_at = cls._normalize_utc_datetime(game.get("expires_at"))
+        return isinstance(expires_at, datetime) and expires_at <= now
+
+    async def _delete_waiting_game_document(self, *, game_id: ObjectId) -> None:
+        if hasattr(self._games, "delete_one"):
+            await self._games.delete_one({"_id": game_id, "state": "waiting"})
+            return
+
+        docs = getattr(self._games, "docs", None)
+        if isinstance(docs, list):
+            for index, doc in enumerate(docs):
+                if doc.get("_id") == game_id and doc.get("state") == "waiting":
+                    docs.pop(index)
+                    return
+
     async def _find_waiting_game_for_creator(self, *, user_id: str) -> dict[str, Any] | None:
-        return await self._games.find_one({"state": "waiting", "white.user_id": user_id})
+        waiting = await self._games.find_one({"state": "waiting", "white.user_id": user_id})
+        if waiting is None:
+            return None
+        now = self.utcnow()
+        if self._is_waiting_game_expired(game=waiting, now=now):
+            game_id = waiting.get("_id")
+            if isinstance(game_id, ObjectId):
+                await self._delete_waiting_game_document(game_id=game_id)
+                await self._evict_cached_game(game_id)
+            return None
+        return waiting
 
     async def _set_bot_join_cooldown(self, *, user_id: str, now: datetime) -> None:
         if self._users is None:
@@ -1076,6 +1163,14 @@ class GameService:
         if game is None:
             raise GameNotFoundError(f"No game with code {normalized} exists.")
 
+        now = self.utcnow()
+        if self._is_waiting_game_expired(game=game, now=now):
+            game_id = game.get("_id")
+            if isinstance(game_id, ObjectId):
+                await self._delete_waiting_game_document(game_id=game_id)
+                await self._evict_cached_game(game_id)
+            raise GameNotFoundError(f"No game with code {normalized} exists.")
+
         creator = game["white"]
         if creator["user_id"] == user_id:
             raise GameConflictError(code="CANNOT_JOIN_OWN_GAME", message="Cannot join your own game")
@@ -1085,8 +1180,6 @@ class GameService:
 
         if game["state"] != "waiting":
             raise GameConflictError(code="GAME_FULL", message="Game is not joinable")
-
-        now = self.utcnow()
 
         if role == "bot":
             await self._enforce_bot_join_rules(user_id=user_id, game=game, now=now)
@@ -1140,7 +1233,7 @@ class GameService:
 
     async def get_open_games(self, *, limit: int = 20) -> OpenGamesResponse:
         bounded = max(1, min(limit, 100))
-        cursor = self._games.find({"state": "waiting"}).sort("created_at", -1).limit(bounded)
+        cursor = self._games.find({"state": "waiting", "expires_at": {"$gt": self.utcnow()}}).sort("created_at", -1).limit(bounded)
         items: list[OpenGameItem] = []
         async for doc in cursor:
             creator_color: PlayerColor = doc.get("creator_color", "white")
