@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+from app.services import state_projection as projection
+
+
+def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_paths() -> None:
+    assert projection._format_public_announcement("UNKNOWN", None) == ""
+    assert projection._format_public_announcement("CAPTURE_DONE", "d4") == "Capture done at D4"
+    assert projection._scoresheet_answer_texts(
+        {
+            "main_announcement": "REGULAR_MOVE",
+            "special_announcement": "CHECK_DOUBLE",
+            "capture_square": None,
+        }
+    ) == ["Move complete", "Double check"]
+
+
+def test_state_projection_turn_and_referee_helpers_skip_unrecognized_entries(monkeypatch) -> None:
+    assert projection._build_turn_announcement({"announcement": "SECRET_MOVE"}, perspective="own") is None
+
+    turns = projection.build_referee_turns(
+        [
+            {"ply": 1, "color": "mystery", "question_type": "COMMON", "announcement": "REGULAR_MOVE"},
+            {"ply": 2, "color": "black", "question_type": "COMMON", "announcement": "SECRET_MOVE"},
+        ]
+    )
+    assert turns == [
+        {
+            "turn": 1,
+            "white": [
+                {
+                    "kind": "move",
+                    "actor": "self",
+                    "prompt": "Move attempt",
+                    "message": "Move attempt — Move complete",
+                    "messages": ["Move complete"],
+                    "move_uci": None,
+                    "question_type": "COMMON",
+                }
+            ],
+            "black": [],
+        }
+    ]
+
+    monkeypatch.setattr(
+        projection,
+        "build_viewer_referee_turns",
+        lambda **kwargs: [{"turn": 1, "white": "bad", "black": [None, {"message": "ok"}]}],  # noqa: ARG005
+    )
+    assert projection.build_viewer_referee_log(viewer_color="white", stored_scoresheet=None) == [
+        {
+            "ply": 2,
+            "announcement": "ok",
+            "special_announcement": None,
+            "capture_square": None,
+            "timestamp": None,
+        }
+    ]
+
+
+def test_state_projection_scoresheet_reconstruction_and_normalization_cover_fallbacks() -> None:
+    reconstructed = projection.reconstruct_scoresheets_from_moves(
+        [
+            {
+                "question_type": "COMMON",
+                "announcement": "REGULAR_MOVE",
+                "move_done": True,
+                "uci": "e2e4",
+            }
+        ]
+    )
+    assert reconstructed["white"]["last_move_number"] == 1
+    assert reconstructed["black"]["moves_opponent"][0][0]["question"]["question_type"] == "COMMON"
+
+    assert projection._normalize_scoresheet_entry(None, perspective="own") is None
+    assert (
+        projection._normalize_scoresheet_entry(
+            {
+                "question": {"question_type": "COMMON", "move_uci": "e2e4"},
+                "answer": {"main_announcement": "SECRET"},
+            },
+            perspective="own",
+        )
+        is None
+    )

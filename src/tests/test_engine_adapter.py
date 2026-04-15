@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import pytest
+from kriegspiel.move import KriegspielAnswer, KriegspielMove, MainAnnouncement, QuestionAnnouncement, SpecialCaseAnnouncement
+
 from app.services.engine_adapter import (
+    _deserialize_answer,
+    _deserialize_color,
+    _deserialize_question,
+    _deserialize_scoresheet_turn,
+    _repair_possible_to_ask,
+    _serialize_answer,
+    _serialize_color,
+    _serialize_scoresheet_turn,
     ask_any,
     attempt_move,
     create_new_game,
     deserialize_game_state,
     project_visible_board,
+    serialize_scoresheet,
     serialize_game_state,
 )
 
@@ -99,3 +111,77 @@ def test_deserialize_repairs_empty_possible_to_ask_when_pawn_captures_required()
         "g7h6",
         "h7g6",
     ]
+
+
+def test_invalid_uci_and_default_scoresheet_serialization_are_stable() -> None:
+    game = create_new_game(any_rule=True)
+
+    result = attempt_move(game, "bad-uci")
+
+    assert result == {
+        "move_done": False,
+        "announcement": "INVALID_UCI",
+        "special_announcement": None,
+        "capture_square": None,
+    }
+    assert serialize_scoresheet(None) == {"color": None, "last_move_number": 0, "moves_own": [], "moves_opponent": []}
+
+
+def test_deserialize_game_state_validates_board_and_repairs_missing_move_lists() -> None:
+    payload = serialize_game_state(create_new_game(any_rule=True))
+    payload["board_fen"] = "invalid-fen"
+
+    with pytest.raises(ValueError, match="move_stack"):
+        deserialize_game_state(payload)
+
+    class RepairStub:
+        def __init__(self, *, must_use_pawns: bool) -> None:
+            self._possible_to_ask = []
+            self._game_over = False
+            self._must_use_pawns = must_use_pawns
+            self.generated = False
+
+        def _generate_possible_to_ask_list(self) -> None:
+            self.generated = True
+
+    repair_stub = RepairStub(must_use_pawns=False)
+    _repair_possible_to_ask(repair_stub)
+    assert repair_stub.generated is True
+
+    with pytest.raises(AttributeError, match="pawn-capture generator"):
+        _repair_possible_to_ask(RepairStub(must_use_pawns=True))
+
+
+def test_engine_adapter_private_serializers_cover_fallback_shapes() -> None:
+    assert _serialize_color("white") == "white"
+    assert _serialize_color("black") == "black"
+    assert _serialize_color("unknown") is None
+    assert _deserialize_color(None, fallback="black") == "black"
+
+    assert _serialize_scoresheet_turn([("bad",)], own=True) == []
+    assert _deserialize_scoresheet_turn([None], own=True) == []
+    question = _deserialize_question({}, own=True)
+    assert isinstance(question, KriegspielMove)
+    assert question.question_type == QuestionAnnouncement.NONE
+    assert _serialize_answer(object())["main_announcement"] == "ILLEGAL_MOVE"
+
+
+def test_deserialize_answer_handles_capture_and_special_cases() -> None:
+    capture_answer = _deserialize_answer(
+        {
+            "main_announcement": "CAPTURE_DONE",
+            "capture_square": "d4",
+        }
+    )
+    assert isinstance(capture_answer, KriegspielAnswer)
+    assert capture_answer.main_announcement == MainAnnouncement.CAPTURE_DONE
+    assert capture_answer.capture_at_square is not None
+
+    special_answer = _deserialize_answer(
+        {
+            "main_announcement": "REGULAR_MOVE",
+            "special_announcement": "CHECK_DOUBLE",
+            "checks": ["CHECK_FILE", "CHECK_RANK"],
+        }
+    )
+    assert special_answer.special_announcement == SpecialCaseAnnouncement.CHECK_DOUBLE
