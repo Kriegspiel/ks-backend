@@ -126,6 +126,15 @@ class UserService:
         return datetime.now(UTC)
 
     @staticmethod
+    def _find(collection: Any, query: dict[str, Any], projection: dict[str, Any] | None = None):
+        if projection is None:
+            return collection.find(query)
+        try:
+            return collection.find(query, projection)
+        except TypeError:
+            return collection.find(query)
+
+    @staticmethod
     def _to_object_id(user_id: str) -> ObjectId:
         try:
             return ObjectId(user_id)
@@ -159,7 +168,13 @@ class UserService:
 
     @staticmethod
     def _completed_turn_count(game: dict[str, Any]) -> int:
-        return sum(1 for move in game.get("moves", []) if move.get("move_done"))
+        turns = 0
+        for move in game.get("moves", []):
+            if isinstance(move, dict):
+                turns += 1 if move.get("move_done") else 0
+            else:
+                turns += 1
+        return turns
 
     @staticmethod
     def _result_track_template() -> dict[str, dict[str, int]]:
@@ -213,7 +228,8 @@ class UserService:
 
     async def _compute_result_tracks(self, db: Any, user_id: str) -> dict[str, dict[str, int]]:
         query = {"$or": [{"white.user_id": user_id}, {"black.user_id": user_id}]}
-        cursor = db.game_archives.find(
+        cursor = self._find(
+            db.game_archives,
             query,
             {
                 "white": 1,
@@ -242,11 +258,20 @@ class UserService:
 
         computed_results = await self._compute_result_tracks(db, str(user["_id"]))
         stats["results"] = computed_results
-        overall_results = computed_results["overall"]
-        stats["games_played"] = int(overall_results.get("games_played", 0))
-        stats["games_won"] = int(overall_results.get("games_won", 0))
-        stats["games_lost"] = int(overall_results.get("games_lost", 0))
-        stats["games_drawn"] = int(overall_results.get("games_drawn", 0))
+        stored_summary = {
+            "games_played": int(raw_stats.get("games_played", 0)),
+            "games_won": int(raw_stats.get("games_won", 0)),
+            "games_lost": int(raw_stats.get("games_lost", 0)),
+            "games_drawn": int(raw_stats.get("games_drawn", 0)),
+        }
+        if any(stored_summary.values()):
+            stats["results"]["overall"] = stored_summary
+        else:
+            overall_results = computed_results["overall"]
+            stats["games_played"] = int(overall_results.get("games_played", 0))
+            stats["games_won"] = int(overall_results.get("games_won", 0))
+            stats["games_lost"] = int(overall_results.get("games_lost", 0))
+            stats["games_drawn"] = int(overall_results.get("games_drawn", 0))
         updated = await db.users.find_one_and_update(
             {"_id": user["_id"]},
             {"$set": {"stats": {**stats, "results_synced_at": utcnow()}, "updated_at": utcnow()}},
@@ -286,7 +311,8 @@ class UserService:
     async def get_rating_history(self, db: Any, user_id: str, *, track: str, limit: int = 100) -> dict[str, Any]:
         bounded_limit = min(max(limit, 10), 100)
         query = {"$or": [{"white.user_id": user_id}, {"black.user_id": user_id}]}
-        cursor = db.game_archives.find(
+        cursor = self._find(
+            db.game_archives,
             query,
             {
                 "white": 1,
@@ -650,7 +676,8 @@ class UserService:
 
         listed_bots = sorted([
             user.get("username")
-            async for user in db.users.find(
+            async for user in self._find(
+                db.users,
                 {"role": "bot", "bot_profile.listed": True},
                 {"username": 1, "_id": 0},
             )
@@ -679,7 +706,8 @@ class UserService:
         if not listed_bots:
             return {"timezone": timezone_name, "bots": []}
 
-        cursor = db.game_archives.find(
+        cursor = self._find(
+            db.game_archives,
             {
                 "state": "completed",
                 "updated_at": {"$gte": start_utc, "$lt": end_utc},

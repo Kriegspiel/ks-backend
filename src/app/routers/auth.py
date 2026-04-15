@@ -51,7 +51,9 @@ async def register_bot(payload: BotRegisterRequest, request: Request, x_bot_regi
 @router.post('/login', response_model=LoginResponse)
 async def login(payload: LoginRequest, request: Request, response: Response, session_service: SessionService = Depends(get_session_service)) -> LoginResponse:
     db = require_db(); user_service = UserService(db.users); user = await user_service.authenticate(payload.username, payload.password)
-    if user is None: raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid username or password')
+    if user is None:
+        logger.warning('auth_login_failed', username=payload.username.strip(), source_ip=_client_ip(request))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid username or password')
     session_id = await session_service.create_session(user=user, ip=_client_ip(request), user_agent=request.headers.get('user-agent'))
     _set_session_cookie(request, response, session_id)
     return LoginResponse(user_id=user.id, username=user.username)
