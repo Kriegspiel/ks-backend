@@ -378,6 +378,29 @@ class GameService:
             await self._evict_cached_game(persisted.get("_id"))
         return persisted
 
+    async def _assert_active_game_still_current(self, *, game_id: ObjectId, now: datetime) -> None:
+        if hasattr(self._games, "find_one_and_update"):
+            updated = await self._games.find_one_and_update(
+                {"_id": game_id, "state": "active"},
+                {"$set": {"updated_at": now}},
+                return_document=ReturnDocument.AFTER,
+            )
+            if updated is None:
+                raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+            return
+
+        docs = getattr(self._games, "docs", None)
+        if isinstance(docs, list):
+            for doc in docs:
+                if doc.get("_id") == game_id and doc.get("state") == "active":
+                    doc["updated_at"] = now
+                    return
+            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+
+        current = await self._games.find_one({"_id": game_id})
+        if current is None or current.get("state") != "active":
+            raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
+
     @staticmethod
     def _persistable_game(game: dict[str, Any]) -> dict[str, Any]:
         return deepcopy(game)
@@ -1604,6 +1627,7 @@ class GameService:
                 raise GameForbiddenError(code="FORBIDDEN", message="Only participants can resign")
 
             winner: PlayerColor = "black" if is_white else "white"
+            await self._assert_active_game_still_current(game_id=game["_id"], now=now)
             time_control = self._active_time_control(game=game, now=now)
             time_control["active_color"] = None
             game["state"] = "completed"
@@ -1613,10 +1637,7 @@ class GameService:
             game["updated_at"] = now
             self._mark_entry_dirty_locked(entry, now=now)
 
-        if self._is_human_involved_game(game):
-            await self._persist_terminal_entry(entry, expected_previous_state="active")
-        else:
-            self._schedule_flush(entry, reason="completion")
+        self._schedule_flush(entry, reason="completion")
 
         logger.info("game_resigned", game_id=game_id, user_id=user_id, winner=winner)
         return {"result": {"winner": winner, "reason": "resignation"}}
