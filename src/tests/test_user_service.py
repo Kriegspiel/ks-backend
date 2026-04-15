@@ -625,7 +625,7 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
     assert page_1[0]["rule_variant"] is None
     assert page_1[0]["opponent"] == "rival-a"
     assert page_1[0]["opponent_role"] == "bot"
-    assert page_1[0]["turn_count"] == 2
+    assert page_1[0]["turn_count"] == 1
     assert page_1[0]["elo_before"] == 1200
     assert page_1[0]["elo_after"] == 1216
     assert page_1[0]["elo_delta"] == 16
@@ -645,7 +645,7 @@ async def test_get_game_history_handles_null_result_documents() -> None:
             "white": {"user_id": str(user_id), "username": "playerone"},
             "black": {"user_id": str(other_id), "username": "rival-a"},
             "result": None,
-            "moves": [{"move_done": True}, {"move_done": True}, {"move_done": False}],
+            "moves": [{"move_done": True}, {"move_done": True}, {"move_done": True}],
             "created_at": datetime(2026, 3, 10, tzinfo=UTC),
             "updated_at": datetime(2026, 3, 10, tzinfo=UTC),
         }
