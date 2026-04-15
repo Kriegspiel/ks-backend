@@ -81,7 +81,11 @@ async def get_recent_games(limit: int = 10, _: UserModel = Depends(get_current_u
 
 @router.get('/{game_id}', response_model=GameMetadataResponse)
 async def get_game(game_id: str, _: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:
-    try: return await game_service.get_game(game_id=game_id)
+    try:
+        game = await game_service.get_game(game_id=game_id)
+        if isinstance(game, dict) and "updated_at" not in game and "created_at" in game:
+            return {**game, "updated_at": game["created_at"]}
+        return game
     except GameServiceError as exc: return _map_game_error(exc)
 
 @router.post('/{game_id}/resign')
