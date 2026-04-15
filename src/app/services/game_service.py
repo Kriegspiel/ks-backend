@@ -1466,10 +1466,13 @@ class GameService:
             clock_payload = self._clock.response_clock(time_control=game["time_control"], now=now)
             game_over = game.get("state") == "completed"
 
-        if game_over:
+        human_game = self._is_human_involved_game(game)
+        if game_over and human_game:
             await self._persist_terminal_entry(entry, expected_previous_state="active")
-        elif self._is_human_involved_game(game):
+        elif human_game:
             self._schedule_flush(entry, reason="human")
+        elif game_over:
+            self._schedule_flush(entry, reason="completion")
 
         logger.info(
             "move_submitted",
@@ -1553,10 +1556,13 @@ class GameService:
             clock_payload = self._clock.response_clock(time_control=game["time_control"], now=now)
             game_over = game.get("state") == "completed" or outcome["game_over"]
 
-        if game.get("state") == "completed":
+        human_game = self._is_human_involved_game(game)
+        if game.get("state") == "completed" and human_game:
             await self._persist_terminal_entry(entry, expected_previous_state="active")
-        elif self._is_human_involved_game(game):
+        elif human_game:
             self._schedule_flush(entry, reason="human")
+        elif game_over:
+            self._schedule_flush(entry, reason="completion")
 
         logger.info(
             "move_submitted",
@@ -1607,7 +1613,10 @@ class GameService:
             game["updated_at"] = now
             self._mark_entry_dirty_locked(entry, now=now)
 
-        await self._persist_terminal_entry(entry, expected_previous_state="active")
+        if self._is_human_involved_game(game):
+            await self._persist_terminal_entry(entry, expected_previous_state="active")
+        else:
+            self._schedule_flush(entry, reason="completion")
 
         logger.info("game_resigned", game_id=game_id, user_id=user_id, winner=winner)
         return {"result": {"winner": winner, "reason": "resignation"}}
