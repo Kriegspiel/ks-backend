@@ -698,3 +698,73 @@ async def test_random_any_defaults_to_berkeley_any_only() -> None:
 
     assert user.bot_profile is not None
     assert user.bot_profile.supported_rule_variants == ["berkeley_any"]
+
+
+@pytest.mark.asyncio
+async def test_bot_service_get_bot_by_id_rejects_invalid_and_filters_inactive() -> None:
+    users = FakeUsersCollection()
+    active_id = ObjectId()
+    inactive_id = ObjectId()
+    users.docs.extend(
+        [
+            {
+                "_id": active_id,
+                "username": "randobot",
+                "username_display": "Random Bot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Random Bot", "description": "ready"},
+            },
+            {
+                "_id": inactive_id,
+                "username": "sleepybot",
+                "username_display": "Sleepy Bot",
+                "role": "bot",
+                "status": "inactive",
+                "bot_profile": {"display_name": "Sleepy Bot", "description": "offline"},
+            },
+        ]
+    )
+    service = BotService(users)
+
+    assert await service.get_bot_by_id("not-an-object-id") is None
+    assert await service.get_bot_by_id(str(inactive_id)) is None
+    assert (await service.get_bot_by_id(str(active_id)))["username"] == "randobot"
+
+
+def test_bot_service_supported_rule_variants_fallbacks_cover_randobotany() -> None:
+    assert BotService._supported_rule_variants({"username": "randobotany", "bot_profile": {}}) == ["berkeley_any"]
+    assert BotService._supported_rule_variants({"username": "randobot", "bot_profile": {}}) == ["berkeley", "berkeley_any"]
+
+
+def test_bot_router_uses_db_users_and_lists_bots() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    users = FakeUsersCollection()
+    users.docs.append(
+        {
+            "_id": ObjectId(),
+            "username": "randobot",
+            "username_display": "Random Bot",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "Random Bot",
+                "description": "ready",
+                "listed": True,
+                "supported_rule_variants": ["berkeley", "berkeley_any"],
+            },
+        }
+    )
+
+    from app.routers import bot as bot_router_module
+
+    bot_router_module.get_db = lambda: type("Db", (), {"users": users})()
+    service = bot_router_module.get_bot_service()
+    assert service._users is users  # noqa: SLF001
+
+    app.dependency_overrides[bot_router_module.get_current_user] = lambda: type("User", (), {"id": "u1"})()
+    with TestClient(app) as client:
+        response = client.get("/api/bots")
+
+    assert response.status_code == 200
+    assert response.json()["bots"][0]["username"] == "randobot"

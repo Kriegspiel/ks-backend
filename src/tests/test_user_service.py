@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import bcrypt
 import pytest
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 
 from app.models.auth import BotRegisterRequest, RegisterRequest
-from app.models.user import default_user_stats_payload
+from app.models.user import UserModel, default_user_stats_payload
 from app.services.user_service import UserConflictError, UserService
 
 
@@ -103,13 +105,21 @@ class FakeUsersCollection:
                     continue
                 return False
             value = self._resolve(doc, key)
-            if isinstance(expected, dict) and "$gte" in expected:
-                if value is None or value < expected["$gte"]:
+            if isinstance(expected, dict):
+                if "$gte" in expected and (value is None or value < expected["$gte"]):
                     return False
-            elif isinstance(expected, dict) and "$ne" in expected:
-                if value == expected["$ne"]:
+                if "$gt" in expected and (value is None or value <= expected["$gt"]):
                     return False
-            elif value != expected:
+                if "$lt" in expected and (value is None or value >= expected["$lt"]):
+                    return False
+                if "$lte" in expected and (value is None or value > expected["$lte"]):
+                    return False
+                if "$in" in expected and value not in expected["$in"]:
+                    return False
+                if "$ne" in expected and value == expected["$ne"]:
+                    return False
+                continue
+            if value != expected:
                 return False
         return True
 
@@ -778,3 +788,409 @@ async def test_get_leaderboard_filters_ranks_and_tiebreaks_by_username() -> None
     assert players[0]["rank"] == 1
     assert players[1]["rank"] == 2
     assert players[0]["ratings"]["overall"]["elo"] == 1500
+
+
+def test_helper_edges_cover_password_parsing_datetime_and_result_reasoning() -> None:
+    assert UserService.verify_password("secret", "not-a-bcrypt-hash") is False
+    assert UserService.parse_bot_token("not-a-token") is None
+    assert UserService.parse_bot_token("ksbot_onlyprefix") is None
+    assert UserService.parse_bot_token("ksbot_.secret") is None
+    assert UserService.parse_bot_token("ksbot_token.") is None
+    assert isinstance(UserService._safe_datetime("bad-value"), datetime)
+    with pytest.raises(ValueError, match="Invalid user id"):
+        UserService._to_object_id("bad-id")
+
+    assert UserService._normalized_result_reason({"moves": [{"special_announcement": "DRAW_INSUFFICIENT"}]}) == "insufficient"
+    assert UserService._normalized_result_reason({"moves": [{"special_announcement": "DRAW_STALEMATE"}]}) == "stalemate"
+    assert (
+        UserService._normalized_result_reason({"moves": [{"special_announcement": "DRAW_TOOMANYREVERSIBLEMOVES"}]})
+        == "too_many_reversible_moves"
+    )
+    assert UserService._normalized_result_reason({"moves": [{"special_announcement": "CHECKMATE_BLACK_WINS"}]}) == "checkmate"
+
+
+def test_find_and_aggregate_series_cover_projection_fallbacks() -> None:
+    class ProjectionlessCollection:
+        def find(self, query: dict):  # noqa: ANN001
+            return [query]
+
+    result = UserService._find(ProjectionlessCollection(), {"role": "bot"}, {"username": 1})
+    aggregated = UserService._aggregate_series(
+        [
+            {"label": "Game 1", "elo": 1200, "delta": 5, "played_at": "2026-04-01T00:00:00+00:00", "game_number": 1},
+            {"label": "Game 2", "elo": 1210, "delta": 10, "played_at": "2026-04-02T00:00:00+00:00", "game_number": 2},
+            {"label": "Game 3", "elo": 1225, "delta": 15, "played_at": "2026-04-03T00:00:00+00:00", "game_number": 3},
+            {"label": "Game 4", "elo": 1230, "delta": 5, "played_at": "2026-04-04T00:00:00+00:00", "game_number": 4},
+            {"label": "Game 5", "elo": 1240, "delta": 10, "played_at": "2026-04-05T00:00:00+00:00", "game_number": 5},
+        ],
+        limit=2,
+        label_key="label",
+    )
+
+    assert result == [{"role": "bot"}]
+    assert aggregated == [
+        {
+            "label": "Game 1 - Game 3",
+            "elo": 1225,
+            "delta": 15,
+            "played_at": "2026-04-03T00:00:00+00:00",
+            "game_number": 3,
+        },
+        {
+            "label": "Game 4 - Game 5",
+            "elo": 1240,
+            "delta": 15,
+            "played_at": "2026-04-05T00:00:00+00:00",
+            "game_number": 5,
+        },
+    ]
+
+
+def test_bot_token_cache_expires_stale_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = UserModel.from_mongo(
+        {
+            "_id": ObjectId(),
+            "username": "cachebot",
+            "username_display": "Cache Bot",
+            "email": "cachebot@bots.kriegspiel.local",
+            "password_hash": "hash",
+            "auth_providers": ["bot_token"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": {"display_name": "Cache Bot", "owner_email": "bots@kriegspiel.org"},
+            "stats": default_user_stats_payload(),
+            "settings": {"board_theme": "default", "piece_set": "cburnett", "sound_enabled": False, "auto_ask_any": False},
+            "role": "bot",
+            "status": "active",
+            "last_active_at": datetime.now(UTC),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    UserService.clear_bot_token_cache()
+    monkeypatch.setattr("app.services.user_service.time.monotonic", lambda: 100.0)
+    UserService._bot_token_cache["expired"] = (99.0, user)
+    UserService._bot_token_cache["fresh"] = (101.0, user)
+
+    assert UserService._get_cached_bot_user("expired") is None
+    assert UserService._get_cached_bot_user("fresh") is user
+    assert "expired" not in UserService._bot_token_cache
+    UserService.clear_bot_token_cache()
+
+
+@pytest.mark.asyncio
+async def test_authenticate_bot_token_uses_cache_and_rejects_invalid_or_missing_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    users = FakeUsersCollection()
+    service = UserService(users)
+    cached_user = UserModel.from_mongo(
+        {
+            "_id": ObjectId(),
+            "username": "cachedbot",
+            "username_display": "Cached Bot",
+            "email": "cachedbot@bots.kriegspiel.local",
+            "password_hash": "hash",
+            "auth_providers": ["bot_token"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": {"display_name": "Cached Bot", "owner_email": "bots@kriegspiel.org"},
+            "stats": default_user_stats_payload(),
+            "settings": {"board_theme": "default", "piece_set": "cburnett", "sound_enabled": False, "auto_ask_any": False},
+            "role": "bot",
+            "status": "active",
+            "last_active_at": datetime.now(UTC),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    UserService.clear_bot_token_cache()
+    monkeypatch.setattr("app.services.user_service.time.monotonic", lambda: 100.0)
+    UserService._bot_token_cache["ksbot_cached.secret"] = (101.0, cached_user)
+
+    assert await service.authenticate_bot_token("ksbot_cached.secret") is cached_user
+    assert await service.authenticate_bot_token("bad-token") is None
+    assert await service.authenticate_bot_token("ksbot_missing.secret") is None
+
+    token_id = "digestbot"
+    users.docs.append(
+        {
+            "_id": ObjectId(),
+            "username": "digestbot",
+            "username_display": "Digest Bot",
+            "email": "digestbot@bots.kriegspiel.local",
+            "email_verified": True,
+            "password_hash": "hash",
+            "auth_providers": ["bot_token"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": {
+                "display_name": "Digest Bot",
+                "owner_email": "owner@example.com",
+                "description": "",
+                "listed": True,
+                "api_token_id": token_id,
+                "api_token_digest": UserService.bot_token_digest("actual-secret"),
+                "supported_rule_variants": ["berkeley", "berkeley_any"],
+            },
+            "stats": default_user_stats_payload(),
+            "settings": {"board_theme": "default", "piece_set": "cburnett", "sound_enabled": False, "auto_ask_any": False},
+            "role": "bot",
+            "status": "active",
+            "last_active_at": datetime.now(UTC),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+
+    assert await service.authenticate_bot_token(f"ksbot_{token_id}.wrong-secret") is None
+    UserService.clear_bot_token_cache()
+
+
+@pytest.mark.asyncio
+async def test_create_user_and_bot_surface_duplicate_key_errors() -> None:
+    class DuplicateUsersCollection(FakeUsersCollection):
+        def __init__(self, message: str) -> None:
+            super().__init__()
+            self.message = message
+
+        async def insert_one(self, payload: dict):  # noqa: ARG002
+            raise DuplicateKeyError(self.message)
+
+    with pytest.raises(UserConflictError) as username_exc:
+        await UserService(DuplicateUsersCollection("duplicate username index")).create_user(
+            RegisterRequest(username="PlayerOne", email="one@example.com", password="abc12345")
+        )
+    assert username_exc.value.field == "username"
+
+    with pytest.raises(UserConflictError) as email_exc:
+        await UserService(DuplicateUsersCollection("duplicate email index")).create_user(
+            RegisterRequest(username="PlayerTwo", email="two@example.com", password="abc12345")
+        )
+    assert email_exc.value.field == "email"
+
+    existing_bot_users = FakeUsersCollection()
+    existing_bot_users.docs.append({"_id": ObjectId(), "username": "takenbot"})
+    with pytest.raises(UserConflictError) as existing_bot_exc:
+        await UserService(existing_bot_users).create_bot(
+            BotRegisterRequest(
+                username="takenbot",
+                display_name="Taken Bot",
+                owner_email="owner@example.com",
+                description="duplicate",
+            )
+        )
+    assert existing_bot_exc.value.field == "username"
+
+    with pytest.raises(UserConflictError) as duplicate_insert_exc:
+        await UserService(DuplicateUsersCollection("duplicate key")).create_bot(
+            BotRegisterRequest(
+                username="newbot",
+                display_name="New Bot",
+                owner_email="owner@example.com",
+                description="duplicate insert",
+            )
+        )
+    assert duplicate_insert_exc.value.field == "username"
+
+
+@pytest.mark.asyncio
+async def test_get_public_profile_avoids_recomputing_synced_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    users = FakeUsersCollection()
+    user_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": user_id,
+            "username": "fil",
+            "username_display": "fil",
+            "email": "fil@example.com",
+            "email_verified": True,
+            "password_hash": "hash",
+            "auth_providers": ["local"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": None,
+            "stats": {
+                **default_user_stats_payload(),
+                "games_played": 3,
+                "games_won": 2,
+                "games_lost": 1,
+                "results": {
+                    "overall": {"games_played": 3, "games_won": 2, "games_lost": 1, "games_drawn": 0},
+                    "vs_humans": {"games_played": 1, "games_won": 0, "games_lost": 1, "games_drawn": 0},
+                    "vs_bots": {"games_played": 2, "games_won": 2, "games_lost": 0, "games_drawn": 0},
+                },
+                "results_synced_at": datetime(2026, 4, 6, tzinfo=UTC),
+            },
+            "settings": {},
+            "role": "user",
+            "status": "active",
+            "last_active_at": datetime(2026, 4, 6, tzinfo=UTC),
+            "created_at": datetime(2026, 4, 6, tzinfo=UTC),
+            "updated_at": datetime(2026, 4, 6, tzinfo=UTC),
+        }
+    )
+    service = UserService(users)
+
+    async def should_not_recompute(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("should not recompute")
+
+    monkeypatch.setattr(service, "_compute_result_tracks", should_not_recompute)
+
+    profile = await service.get_public_profile(FakeDB(users=users, game_archives=FakeUsersCollection()), "fil")
+
+    assert profile is not None
+    assert profile["stats"]["results"]["overall"]["games_played"] == 3
+
+
+@pytest.mark.asyncio
+async def test_get_rating_history_skips_other_tracks_and_missing_snapshots() -> None:
+    archives = FakeUsersCollection()
+    user_id = str(ObjectId())
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "white": {"user_id": user_id, "role": "user"},
+                "black": {"user_id": "bot-1", "role": "bot"},
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 4, 5, 12, tzinfo=UTC),
+                "updated_at": datetime(2026, 4, 5, 12, 10, tzinfo=UTC),
+                "rating_snapshot": {
+                    "overall": {"white_after": 1216, "white_delta": 16},
+                    "specific": {"white_after": 1216, "white_delta": 16},
+                    "white_track": "vs_bots",
+                    "black_track": "vs_humans",
+                },
+            },
+            {
+                "_id": ObjectId(),
+                "white": {"user_id": user_id, "role": "user"},
+                "black": {"user_id": "human-1", "role": "user"},
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 4, 6, 12, tzinfo=UTC),
+                "updated_at": datetime(2026, 4, 6, 12, 10, tzinfo=UTC),
+                "rating_snapshot": {
+                    "overall": {"white_after": 1220, "white_delta": 4},
+                    "specific": {"white_after": 1188, "white_delta": -12},
+                    "white_track": "vs_humans",
+                    "black_track": "vs_humans",
+                },
+            },
+            {
+                "_id": ObjectId(),
+                "white": {"user_id": user_id, "role": "user"},
+                "black": {"user_id": "human-2", "role": "user"},
+                "result": {"winner": None},
+                "created_at": datetime(2026, 4, 7, 12, tzinfo=UTC),
+                "updated_at": datetime(2026, 4, 7, 12, 10, tzinfo=UTC),
+                "rating_snapshot": {
+                    "overall": {"white_after": 1220, "white_delta": 0},
+                    "specific": {"white_delta": 0},
+                    "white_track": "vs_humans",
+                    "black_track": "vs_humans",
+                },
+            },
+        ]
+    )
+
+    history = await UserService(FakeUsersCollection()).get_rating_history(
+        FakeDB(FakeUsersCollection(), archives),
+        user_id,
+        track="vs_humans",
+        limit=100,
+    )
+
+    assert history["track"] == "vs_humans"
+    assert [point["elo"] for point in history["series"]["game"]] == [1188]
+    assert [point["label"] for point in history["series"]["date"]] == ["2026-04-06"]
+
+
+@pytest.mark.asyncio
+async def test_update_settings_raises_for_missing_user() -> None:
+    with pytest.raises(ValueError, match="User not found"):
+        await UserService(FakeUsersCollection()).update_settings(
+            FakeDB(users=FakeUsersCollection(), game_archives=FakeUsersCollection()),
+            str(ObjectId()),
+            {"board_theme": "dark"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_listed_bot_daily_report_returns_empty_when_no_bots_are_listed() -> None:
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {"_id": ObjectId(), "username": "hiddenbot", "role": "bot", "bot_profile": {"listed": False}},
+            {"_id": ObjectId(), "username": "human", "role": "user"},
+        ]
+    )
+
+    report = await UserService(users).get_listed_bot_daily_report(FakeDB(users=users, game_archives=FakeUsersCollection()), days=5)
+
+    assert report == {"timezone": "America/New_York", "bots": []}
+
+
+@pytest.mark.asyncio
+async def test_get_listed_bot_daily_report_aggregates_daily_win_rates(monkeypatch: pytest.MonkeyPatch) -> None:
+    users = object()
+    archives = object()
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(FakeUsersCollection())
+    local_tz = ZoneInfo("America/New_York")
+    now_local = datetime.now(local_tz)
+    midday_local = now_local.replace(hour=12, minute=0, second=0, microsecond=0)
+    if midday_local > now_local:
+        midday_local -= timedelta(days=1)
+    previous_midday_local = midday_local - timedelta(days=1)
+
+    listed_bot_docs = [
+        {"username": "haiku"},
+        {"username": "gptnano"},
+        {"username": "   "},
+    ]
+    archive_docs = [
+        {
+            "updated_at": previous_midday_local.astimezone(UTC),
+            "white": {"username": "gptnano", "role": "bot"},
+            "black": {"username": "humanone", "role": "user"},
+            "result": {"winner": "white"},
+        },
+        {
+            "updated_at": midday_local.astimezone(UTC).replace(tzinfo=None),
+            "white": {"username": "gptnano", "role": "bot"},
+            "black": {"username": "haiku", "role": "bot"},
+            "result": {"winner": "black"},
+        },
+        {
+            "updated_at": "bad-timestamp",
+            "white": {"username": "gptnano", "role": "bot"},
+            "black": {"username": "haiku", "role": "bot"},
+            "result": {"winner": "white"},
+        },
+        {
+            "updated_at": (previous_midday_local - timedelta(days=30)).astimezone(UTC),
+            "white": {"username": "outsider", "role": "user"},
+            "black": {"username": "human", "role": "user"},
+            "result": {"winner": "white"},
+        },
+    ]
+
+    def fake_find(collection, query, projection=None):  # noqa: ANN001
+        if collection is users:
+            assert query == {"role": "bot", "bot_profile.listed": True}
+            return FakeCursor(listed_bot_docs)
+        assert collection is archives
+        return FakeCursor(archive_docs)
+
+    monkeypatch.setattr(service, "_find", fake_find)
+
+    report = await service.get_listed_bot_daily_report(db, days=3, timezone_name="America/New_York")
+
+    assert report["timezone"] == "America/New_York"
+    assert [bot["username"] for bot in report["bots"]] == ["gptnano", "haiku"]
+    assert len(report["bots"][0]["rows"]) == 3
+
+    gpt_rows = report["bots"][0]["rows"]
+    haiku_rows = report["bots"][1]["rows"]
+    assert sum(row["stats"]["overall"]["total_games"] for row in gpt_rows) == 2
+    assert sum(row["stats"]["overall"]["wins"] for row in gpt_rows) == 1
+    assert any(row["stats"]["vs_humans"] == {"total_games": 1, "wins": 1, "win_rate": 1.0} for row in gpt_rows)
+    assert sum(row["stats"]["vs_bots"]["total_games"] for row in haiku_rows) == 1
+    assert sum(row["stats"]["vs_bots"]["wins"] for row in haiku_rows) == 1

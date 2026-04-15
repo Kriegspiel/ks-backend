@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from bson import ObjectId
 
 from app.models.game import CreateGameRequest
+from app.models.user import default_user_stats_payload
 from app.services.engine_adapter import create_new_game, serialize_game_state
 from app.services.game_service import (
+    BOT_GAME_FLUSH_PLIES,
+    BOT_GAME_IDLE_FLUSH,
+    CachedGameEntry,
     GameConflictError,
     GameForbiddenError,
     GameNotFoundError,
@@ -136,6 +141,30 @@ class FakeUsersCollection:
                     break
             if matches:
                 return doc
+        return None
+
+    async def find_one_and_update(self, query: dict, update: dict, return_document=None):  # noqa: ANN001
+        for doc in self.docs:
+            matches = True
+            for key, expected in query.items():
+                current = doc
+                for part in key.split("."):
+                    if not isinstance(current, dict):
+                        matches = False
+                        break
+                    current = current.get(part)
+                if not matches or current != expected:
+                    matches = False
+                    break
+            if not matches:
+                continue
+            for key, value in update.get("$set", {}).items():
+                current = doc
+                parts = key.split(".")
+                for part in parts[:-1]:
+                    current = current.setdefault(part, {})
+                current[parts[-1]] = value
+            return doc
         return None
 
 
@@ -732,3 +761,682 @@ async def test_shutdown_flushes_dirty_cached_games() -> None:
     assert len(games.docs[0]["moves"]) == 19
     await service.shutdown()
     assert len(games.docs[0]["moves"]) == 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("winner", "white_bucket", "black_bucket"),
+    [
+        ("white", "games_won", "games_lost"),
+        ("black", "games_lost", "games_won"),
+        (None, "games_drawn", "games_drawn"),
+    ],
+)
+async def test_finalize_completed_game_updates_stats_and_archive_for_all_outcomes(
+    winner: str | None,
+    white_bucket: str,
+    black_bucket: str,
+) -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    users = FakeUsersCollection(
+        docs=[
+            {
+                "_id": "white-user",
+                "username": "white",
+                "role": "user",
+                "stats": default_user_stats_payload(),
+                "bot_profile": None,
+            },
+            {
+                "_id": "black-bot",
+                "username": "blackbot",
+                "role": "bot",
+                "stats": default_user_stats_payload(),
+                "bot_profile": {"display_name": "Black Bot"},
+            },
+        ]
+    )
+    now = datetime(2026, 4, 7, tzinfo=UTC)
+    game = {
+        "_id": ObjectId(),
+        "game_code": "DONE42",
+        "rule_variant": "berkeley_any",
+        "white": {"user_id": "white-user", "username": "white", "role": "user"},
+        "black": {"user_id": "black-bot", "username": "blackbot", "role": "bot"},
+        "state": "completed",
+        "result": {"winner": winner, "reason": "stalemate" if winner is None else "checkmate"},
+        "moves": [],
+        "created_at": now,
+        "updated_at": now,
+    }
+    games.docs.append(game)
+    service = GameService(games, archives_collection=archives, users_collection=users)
+
+    finalized = await service._finalize_completed_game(game)
+
+    assert finalized["stats_recorded_at"] is not None
+    assert finalized["rating_snapshot"]["white_track"] == "vs_bots"
+    assert finalized["rating_snapshot"]["black_track"] == "vs_humans"
+    assert archives.docs[0]["_id"] == game["_id"]
+
+    white_stats = users.docs[0]["stats"]
+    black_stats = users.docs[1]["stats"]
+    assert white_stats["games_played"] == 1
+    assert black_stats["games_played"] == 1
+    assert white_stats[white_bucket] == 1
+    assert black_stats[black_bucket] == 1
+    assert white_stats["results"]["overall"][white_bucket] == 1
+    assert black_stats["results"]["overall"][black_bucket] == 1
+    assert white_stats["results"]["vs_bots"][white_bucket] == 1
+    assert black_stats["results"]["vs_humans"][black_bucket] == 1
+
+
+@pytest.mark.asyncio
+async def test_finalize_completed_game_short_circuits_when_not_completed_or_already_recorded() -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    service = GameService(games, archives_collection=archives)
+    waiting_game = {"_id": ObjectId(), "state": "waiting"}
+    recorded_game = {
+        "_id": ObjectId(),
+        "state": "completed",
+        "stats_recorded_at": datetime(2026, 4, 8, tzinfo=UTC),
+        "white": {"user_id": "u1", "username": "white"},
+        "black": {"user_id": "u2", "username": "black"},
+        "result": {"winner": "white", "reason": "checkmate"},
+    }
+
+    assert await service._finalize_completed_game(waiting_game) is waiting_game
+    await service._finalize_completed_game(recorded_game)
+
+    assert archives.docs[0]["_id"] == recorded_game["_id"]
+
+
+@pytest.mark.asyncio
+async def test_game_service_user_lookup_update_and_join_cooldown_support_object_id_strings() -> None:
+    oid = ObjectId()
+    users = FakeUsersCollection(
+        docs=[
+            {
+                "_id": oid,
+                "username": "joinerbot",
+                "role": "bot",
+                "stats": default_user_stats_payload(),
+                "bot_profile": {"display_name": "Joiner Bot"},
+            }
+        ]
+    )
+    service = GameService(FakeGamesCollection(), users_collection=users)
+
+    assert (await service._find_user_doc(str(oid)))["username"] == "joinerbot"
+    assert await service._find_user_doc("not-an-object-id") is None
+
+    updated_stats = default_user_stats_payload()
+    updated_stats["elo"] = 1300
+    updated_stats["ratings"]["overall"]["elo"] = 1300
+    await service._update_user_stats(user_id=str(oid), stats=updated_stats)
+    now = datetime(2026, 4, 8, 12, tzinfo=UTC)
+    await service._set_bot_join_cooldown(user_id=str(oid), now=now)
+
+    assert users.docs[0]["stats"]["elo"] == 1300
+    assert users.docs[0]["bot_profile"]["last_bot_game_joined_at"] == now
+
+
+@pytest.mark.asyncio
+async def test_count_documents_and_game_id_resolution_cover_fallback_paths() -> None:
+    class ListOnlyCollection:
+        def __init__(self, docs: list[dict]):
+            self.docs = docs
+
+    class CursorOnlyCollection:
+        def __init__(self, docs: list[dict]):
+            self._docs = docs
+
+        def find(self, query: dict):
+            matched = []
+            for doc in self._docs:
+                if doc.get("state") == query.get("state"):
+                    matched.append(doc)
+            return FakeCursor(matched)
+
+    now = datetime(2026, 4, 9, tzinfo=UTC)
+    service = GameService(FakeGamesCollection())
+    list_only = ListOnlyCollection(
+        [
+            {"_id": 1, "state": "completed", "updated_at": now},
+            {"_id": 2, "state": "completed", "updated_at": now - timedelta(days=2)},
+            {"_id": 3, "state": "active", "updated_at": now},
+        ]
+    )
+    cursor_only = CursorOnlyCollection(
+        [
+            {"_id": 4, "state": "completed"},
+            {"_id": 5, "state": "completed"},
+            {"_id": 6, "state": "waiting"},
+        ]
+    )
+
+    assert await service._count_documents(None, {"state": "completed"}) == 0
+    assert await service._count_documents(list_only, {"state": "completed", "updated_at": {"$gte": now - timedelta(hours=1)}}) == 1
+    assert await service._count_documents(cursor_only, {"state": "completed"}) == 2
+
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    local_id = ObjectId()
+    archive_id = ObjectId()
+    games.docs.append({"_id": local_id, "game_code": "LOCAL1"})
+    archives.docs.append({"_id": archive_id, "game_code": "ARCH1"})
+    resolving_service = GameService(games, archives_collection=archives)
+
+    assert await resolving_service._resolve_game_object_id("local1") == local_id
+    assert await resolving_service._resolve_game_object_id("arch1") == archive_id
+    with pytest.raises(GameNotFoundError):
+        await resolving_service._resolve_game_object_id("   ")
+
+
+def test_result_scoresheet_and_bot_variant_helpers_cover_uncommon_branches() -> None:
+    assert GameService._final_result_from_special("CHECKMATE_BLACK_WINS") == {"winner": "black", "reason": "checkmate"}
+    assert GameService._final_result_from_special("DRAW_STALEMATE") == {"winner": None, "reason": "stalemate"}
+    assert GameService._final_result_from_special("DRAW_TOOMANYREVERSIBLEMOVES") == {
+        "winner": None,
+        "reason": "too_many_reversible_moves",
+    }
+    assert GameService._final_result_from_special("UNKNOWN") is None
+    assert GameService._normalized_result(
+        result={"winner": "white", "reason": "timeout"},
+        moves=[{"special_announcement": "DRAW_STALEMATE"}],
+    ) == {"winner": "white", "reason": "timeout"}
+    assert GameService._normalized_result(
+        result={"winner": "black"},
+        moves=[
+            {"special_announcement": None},
+            {"special_announcement": "UNKNOWN"},
+            {"special_announcement": "DRAW_STALEMATE"},
+        ],
+    ) == {"winner": "black", "reason": "stalemate"}
+
+    engine = create_new_game(any_rule=True)
+    engine_scoresheets = GameService._stored_scoresheets({"moves": []}, engine)
+    empty_scoresheets = GameService._stored_scoresheets({"moves": []})
+    assert engine_scoresheets["white"]["color"] == "white"
+    assert set(empty_scoresheets) == {"white", "black"}
+
+    bootstrap = GameService(FakeGamesCollection())._load_or_bootstrap_engine({"state": "waiting", "rule_variant": "berkeley_any"})
+    assert bootstrap is not None
+
+    class PawnStub:
+        must_use_pawns = True
+
+    GameService._repair_forced_pawn_capture_state(game={"state": "active", "moves": []}, engine=PawnStub())
+    GameService._repair_forced_pawn_capture_state(
+        game={"state": "active", "moves": [{"question_type": "COMMON", "announcement": "REGULAR_MOVE", "move_done": True}]},
+        engine=PawnStub(),
+    )
+    GameService._repair_forced_pawn_capture_state(
+        game={"state": "active", "moves": [{"question_type": "ASK_ANY", "announcement": "HAS_ANY", "move_done": False}]},
+        engine=PawnStub(),
+    )
+
+    assert GameService._bot_supported_rule_variants({"username": "randobotany", "bot_profile": {}}) == ["berkeley_any"]
+    assert GameService._bot_supported_rule_variants({"username": "randobot", "bot_profile": {}}) == [
+        "berkeley",
+        "berkeley_any",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_waiting_game_and_bot_join_helpers_cover_list_and_missing_user_branches() -> None:
+    class ListOnlyGames:
+        def __init__(self, docs: list[dict]):
+            self.docs = docs
+
+        async def find_one(self, query: dict):
+            for doc in self.docs:
+                if doc.get("state") == query.get("state") and doc.get("white", {}).get("user_id") == query.get("white.user_id"):
+                    return doc
+            return None
+
+    now = datetime(2026, 4, 9, 15, tzinfo=UTC)
+    gid = ObjectId()
+    games = ListOnlyGames(
+        [
+            {
+                "_id": gid,
+                "state": "waiting",
+                "expires_at": now - timedelta(seconds=1),
+                "white": {"user_id": "creator", "username": "creatorbot", "role": "bot"},
+            }
+        ]
+    )
+    service = GameService(games, users_collection=FakeUsersCollection())
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    assert await service._find_waiting_game_for_creator(user_id="creator") is None
+    assert games.docs == []
+
+    with pytest.raises(GameForbiddenError) as exc:
+        await service._enforce_bot_join_rules(
+            user_id="missing-bot",
+            game={"white": {"user_id": "creator", "role": "bot"}},
+            now=now,
+        )
+    assert exc.value.code == "FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_load_bot_validation_errors_cover_unavailable_invalid_and_missing_paths() -> None:
+    with pytest.raises(GameValidationError) as unavailable_exc:
+        await GameService(FakeGamesCollection(), users_collection=None)._load_bot(str(ObjectId()))
+    assert unavailable_exc.value.code == "BOT_UNAVAILABLE"
+
+    service = GameService(FakeGamesCollection(), users_collection=FakeUsersCollection())
+    with pytest.raises(GameValidationError) as invalid_exc:
+        await service._load_bot("bad-id")
+    assert invalid_exc.value.code == "BOT_NOT_FOUND"
+
+    with pytest.raises(GameValidationError) as missing_exc:
+        await service._load_bot(str(ObjectId()))
+    assert missing_exc.value.code == "BOT_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_create_game_with_bot_as_black_places_bot_on_white_side() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection(
+        docs=[
+            {
+                "_id": ObjectId("507f1f77bcf86cd799439011"),
+                "username": "randobot",
+                "username_display": "Random Bot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Random Bot", "supported_rule_variants": ["berkeley", "berkeley_any"]},
+                "stats": {"elo": 1315},
+            }
+        ]
+    )
+    service = GameService(games, users_collection=users)
+
+    response = await service.create_game(
+        user_id="u1",
+        username="creator",
+        request=CreateGameRequest(
+            opponent_type="bot",
+            bot_id="507f1f77bcf86cd799439011",
+            play_as="black",
+            time_control="rapid",
+        ),
+    )
+
+    assert response.play_as == "black"
+    assert games.docs[0]["white"]["username"] == "randobot"
+    assert games.docs[0]["black"]["username"] == "creator"
+
+
+@pytest.mark.asyncio
+async def test_get_game_or_archive_removes_expired_waiting_games_from_cache_and_db() -> None:
+    now = datetime(2026, 4, 10, tzinfo=UTC)
+
+    class FrozenGameService(GameService):
+        @staticmethod
+        def utcnow() -> datetime:
+            return now
+
+    games = FakeGamesCollection()
+    cached_id = ObjectId()
+    uncached_id = ObjectId()
+    games.docs.extend(
+        [
+            {
+                "_id": cached_id,
+                "game_code": "CACHE1",
+                "state": "waiting",
+                "white": {"user_id": "u1", "username": "creator"},
+                "expires_at": now - timedelta(seconds=1),
+            },
+            {
+                "_id": uncached_id,
+                "game_code": "DBONLY1",
+                "state": "waiting",
+                "white": {"user_id": "u1", "username": "creator"},
+                "expires_at": now - timedelta(seconds=1),
+            },
+        ]
+    )
+    service = FrozenGameService(games)
+    await service._prime_cache(games.docs[0], persisted=True)
+
+    assert await service.get_game_or_archive(game_id=str(cached_id)) is None
+    assert await service.get_game_or_archive(game_id=str(uncached_id)) is None
+    assert games.docs == []
+
+
+@pytest.mark.asyncio
+async def test_get_recent_completed_games_skips_missing_black_and_handles_absent_archive() -> None:
+    no_archive_service = GameService(FakeGamesCollection(), archives_collection=None)
+    assert (await no_archive_service.get_recent_completed_games(limit=5)).games == []
+
+    archives = FakeGamesCollection()
+    now = datetime(2026, 4, 10, tzinfo=UTC)
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "MSSBK2",
+                "state": "completed",
+                "white": {"username": "white", "connected": True},
+                "black": None,
+                "updated_at": now,
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "R4DY22",
+                "rule_variant": "berkeley_any",
+                "state": "completed",
+                "white": {"username": "white", "connected": True, "role": "user"},
+                "black": {"username": "black", "connected": True, "role": "bot"},
+                "result": {"winner": "black", "reason": "checkmate"},
+                "updated_at": now - timedelta(minutes=1),
+                "created_at": now - timedelta(minutes=2),
+            },
+        ]
+    )
+    service = GameService(FakeGamesCollection(), archives_collection=archives)
+
+    recent = await service.get_recent_completed_games(limit=5)
+
+    assert [item.game_code for item in recent.games] == ["R4DY22"]
+
+
+@pytest.mark.asyncio
+async def test_background_flush_helpers_and_sweep_guards_cover_due_entry_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 4, 11, tzinfo=UTC)
+    service = GameService(FakeGamesCollection())
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+    entry = CachedGameEntry(
+        game={
+            "_id": ObjectId(),
+            "state": "active",
+            "moves": [],
+            "white": {"role": "bot"},
+            "black": {"role": "bot"},
+        },
+        dirty=False,
+        last_activity_at=now,
+        last_persisted_ply=0,
+    )
+
+    assert await service._should_flush_entry(entry) is False
+    entry.dirty = True
+    entry.game["state"] = "completed"
+    assert await service._should_flush_entry(entry) is True
+    entry.game["state"] = "active"
+    entry.game["white"]["role"] = "user"
+    assert await service._should_flush_entry(entry) is True
+    entry.game["white"]["role"] = "bot"
+    entry.game["moves"] = [{"ply": index + 1} for index in range(BOT_GAME_FLUSH_PLIES)]
+    assert await service._should_flush_entry(entry) is True
+    entry.game["moves"] = []
+    entry.last_activity_at = now - BOT_GAME_IDLE_FLUSH
+    assert await service._should_flush_entry(entry) is True
+
+    flushed: list[str] = []
+    service._cache[entry.game["_id"]] = entry
+
+    async def always_due(item: CachedGameEntry) -> bool:  # noqa: ARG001
+        return True
+
+    monkeypatch.setattr(service, "_should_flush_entry", always_due)
+    monkeypatch.setattr(service, "_schedule_flush", lambda item, reason: flushed.append(reason))  # noqa: ARG005
+    await service._flush_due_entries()
+    assert flushed == ["background"]
+
+    sweep_calls: list[tuple[str, datetime]] = []
+
+    async def expire(*, now: datetime) -> None:
+        sweep_calls.append(("expire", now))
+
+    async def sweep(*, now: datetime) -> None:
+        sweep_calls.append(("timeout", now))
+
+    monkeypatch.setattr(service, "_expire_waiting_games", expire)
+    monkeypatch.setattr(service, "_sweep_timeouts", sweep)
+    service._last_waiting_game_sweep_at = None
+    service._last_timeout_sweep_at = None
+    await service._maybe_expire_waiting_games()
+    await service._maybe_expire_waiting_games()
+    await service._maybe_sweep_timeouts()
+    await service._maybe_sweep_timeouts()
+
+    assert sweep_calls == [("expire", now), ("timeout", now)]
+
+
+@pytest.mark.asyncio
+async def test_flush_loop_and_assert_active_fallbacks_cover_nonstandard_collections(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = GameService(FakeGamesCollection())
+    loop_calls: list[str] = []
+
+    async def one_tick(_seconds: float) -> None:
+        service._shutdown = True
+
+    monkeypatch.setattr("app.services.game_service.asyncio.sleep", one_tick)
+    monkeypatch.setattr(service, "_flush_due_entries", lambda: loop_calls.append("flush_due"))
+    monkeypatch.setattr(service, "_maybe_expire_waiting_games", lambda: loop_calls.append("expire"))
+    monkeypatch.setattr(service, "_maybe_sweep_timeouts", lambda: loop_calls.append("timeouts"))
+
+    async def call_recorder(name: str):
+        async def _inner() -> None:
+            loop_calls.append(name)
+        return _inner
+
+    monkeypatch.setattr(service, "_flush_due_entries", await call_recorder("flush_due"))
+    monkeypatch.setattr(service, "_maybe_expire_waiting_games", await call_recorder("expire"))
+    monkeypatch.setattr(service, "_maybe_sweep_timeouts", await call_recorder("timeouts"))
+    await service._flush_loop()
+    assert loop_calls == ["flush_due", "expire", "timeouts"]
+
+    cancel_service = GameService(FakeGamesCollection())
+
+    async def cancel_sleep(_seconds: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("app.services.game_service.asyncio.sleep", cancel_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_service._flush_loop()
+
+    gid = ObjectId()
+    list_games = type("ListGames", (), {"docs": [{"_id": gid, "state": "active"}]})()
+    list_service = GameService(list_games)
+    now = datetime(2026, 4, 11, 12, tzinfo=UTC)
+    await list_service._assert_active_game_still_current(game_id=gid, now=now)
+    assert list_games.docs[0]["updated_at"] == now
+
+    class PlainGames:
+        async def find_one(self, query: dict):  # noqa: ARG002
+            return {"_id": gid, "state": "waiting"}
+
+    with pytest.raises(GameValidationError):
+        await GameService(PlainGames())._assert_active_game_still_current(game_id=gid, now=now)
+
+
+@pytest.mark.asyncio
+async def test_persist_game_document_and_terminal_entry_cover_fallback_collections() -> None:
+    class ListFallbackGames:
+        def __init__(self) -> None:
+            self.docs: list[dict] = []
+
+    games = ListFallbackGames()
+    service = GameService(games)
+    gid = ObjectId()
+    await service._persist_game_document({"_id": gid, "state": "active", "moves": []})
+    assert games.docs[0]["_id"] == gid
+
+    entry = CachedGameEntry(
+        game={"_id": gid, "state": "active", "moves": [], "white": {"role": "bot"}, "black": {"role": "bot"}},
+        dirty=True,
+        version=1,
+    )
+    persisted = await service._persist_terminal_entry(entry, expected_previous_state="active")
+    assert persisted["state"] == "active"
+
+    waiting_id = ObjectId()
+    games.docs.append({"_id": waiting_id, "state": "waiting", "moves": []})
+    bad_entry = CachedGameEntry(game={"_id": waiting_id, "state": "active", "moves": []}, dirty=True, version=1)
+    with pytest.raises(GameValidationError):
+        await service._persist_terminal_entry(bad_entry, expected_previous_state="active")
+
+
+def test_matches_query_comparison_operators_cover_all_supported_ranges() -> None:
+    doc = {"score": 5, "nested": {"value": 7}}
+
+    assert GameService._matches_query(doc, {"score": {"$gt": 4, "$lt": 6, "$lte": 5}})
+    assert GameService._matches_query(doc, {"nested.value": {"$gte": 7}})
+    assert GameService._matches_query(doc, {"nested.value": {"$lt": 8}})
+    assert not GameService._matches_query(doc, {"score": {"$gt": 5}})
+    assert not GameService._matches_query(doc, {"nested.value": {"$lte": 6}})
+
+
+@pytest.mark.asyncio
+async def test_get_open_games_and_not_found_paths_cover_expired_and_missing_cases(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 4, 12, tzinfo=UTC)
+
+    class FrozenGameService(GameService):
+        @staticmethod
+        def utcnow() -> datetime:
+            return now
+
+    games = FakeGamesCollection()
+    games.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "EXP222",
+                "rule_variant": "berkeley_any",
+                "creator_color": "white",
+                "white": {"user_id": "u1", "username": "expired", "connected": True},
+                "black": None,
+                "state": "waiting",
+                "created_at": now - timedelta(minutes=1),
+                "updated_at": now - timedelta(minutes=1),
+                "expires_at": now - timedelta(seconds=1),
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "HVR222",
+                "rule_variant": "berkeley_any",
+                "creator_color": "white",
+                "white": {"user_id": "u2", "username": "live", "connected": True},
+                "black": None,
+                "state": "waiting",
+                "created_at": now,
+                "updated_at": now,
+                "expires_at": now + timedelta(minutes=10),
+            },
+        ]
+    )
+    service = FrozenGameService(games)
+
+    open_games = await service.get_open_games(limit=10)
+    assert [item.game_code for item in open_games.games] == ["HVR222"]
+
+    with pytest.raises(GameNotFoundError):
+        await service.get_game_transcript(game_id=str(ObjectId()), user_id="u1")
+    with pytest.raises(GameNotFoundError):
+        await service.hydrate_document(game_id=str(ObjectId()))
+
+
+@pytest.mark.asyncio
+async def test_execute_move_and_ask_any_cover_timeout_and_validation_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 4, 12, 12, tzinfo=UTC)
+
+    def timeout_payload(winner: str = "black") -> dict:
+        return {
+            "winner": winner,
+            "clock": {
+                "white_remaining": 0.0,
+                "black_remaining": 1.0,
+                "active_color": None,
+            },
+        }
+
+    move_games = FakeGamesCollection()
+    move_game = active_game_doc(white_role="bot", black_role="bot")
+    move_games.docs.append(move_game)
+    move_service = GameService(move_games)
+    move_service.utcnow = lambda: now  # type: ignore[method-assign]
+    move_reasons: list[str] = []
+    timeout_checks = iter([None, timeout_payload("black")])
+    monkeypatch.setattr(
+        "app.services.game_service.attempt_move",
+        lambda engine, uci: {  # noqa: ARG005
+            "move_done": True,
+            "announcement": "REGULAR_MOVE",
+            "special_announcement": None,
+            "capture_square": None,
+            "full_fen": "full",
+            "white_fen": "white",
+            "black_fen": "black",
+            "turn": "black",
+            "game_over": False,
+        },
+    )
+    monkeypatch.setattr(move_service._clock, "check_timeout", lambda **kwargs: next(timeout_checks))
+    monkeypatch.setattr(move_service, "_schedule_flush", lambda entry, reason: move_reasons.append(reason))  # noqa: ARG005
+
+    move_response = await move_service.execute_move(game_id=str(move_game["_id"]), user_id="u1", uci="e2e4")
+    assert move_response["game_over"] is True
+    assert move_reasons == ["completion"]
+
+    ask_games = FakeGamesCollection()
+    completed = active_game_doc()
+    completed["state"] = "completed"
+    ask_games.docs.append(completed)
+    ask_service = GameService(ask_games)
+    ask_service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    with pytest.raises(GameValidationError) as inactive_exc:
+        await ask_service.execute_ask_any(game_id=str(completed["_id"]), user_id="u1")
+    assert inactive_exc.value.code == "GAME_NOT_ACTIVE"
+
+    waiting_turn = active_game_doc(turn="black")
+    ask_games_turn = FakeGamesCollection()
+    ask_games_turn.docs.append(waiting_turn)
+    turn_service = GameService(ask_games_turn)
+    turn_service.utcnow = lambda: now  # type: ignore[method-assign]
+    with pytest.raises(GameValidationError) as turn_exc:
+        await turn_service.execute_ask_any(game_id=str(waiting_turn["_id"]), user_id="u1")
+    assert turn_exc.value.code == "NOT_YOUR_TURN"
+
+    human_games = FakeGamesCollection()
+    human_game = active_game_doc()
+    human_games.docs.append(human_game)
+    human_service = GameService(human_games)
+    human_service.utcnow = lambda: now  # type: ignore[method-assign]
+    ask_timeout_checks = iter([None, timeout_payload("black")])
+    persisted: list[str] = []
+    monkeypatch.setattr(
+        "app.services.game_service.ask_any",
+        lambda engine: {  # noqa: ARG005
+            "move_done": False,
+            "announcement": "HAS_ANY",
+            "special_announcement": None,
+            "capture_square": None,
+            "full_fen": "full",
+            "white_fen": "white",
+            "black_fen": "black",
+            "turn": "black",
+            "game_over": False,
+            "has_any": True,
+        },
+    )
+    monkeypatch.setattr(human_service._clock, "check_timeout", lambda **kwargs: next(ask_timeout_checks))
+
+    async def persist_entry(entry: CachedGameEntry, *, expected_previous_state: str = "active"):  # noqa: ARG001
+        persisted.append(expected_previous_state)
+        return entry.game
+
+    monkeypatch.setattr(human_service, "_persist_terminal_entry", persist_entry)
+    ask_response = await human_service.execute_ask_any(game_id=str(human_game["_id"]), user_id="u1")
+    assert ask_response["game_over"] is True
+    assert persisted == ["active"]
