@@ -118,3 +118,26 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
     assert bots_report.json()["bots"][0]["username"] == "gptnano"
 
     assert unauth.status_code == 401
+
+
+def test_user_games_defaults_to_100_per_page() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    service = StubService()
+    app.dependency_overrides[get_user_service] = lambda: service
+
+    class FakeUsers:
+        async def find_one(self, query):
+            return {"_id": "507f1f77bcf86cd799439011", "username": "playerone"}
+
+    class FakeDB:
+        users = FakeUsers()
+        sessions = object()
+
+    db = FakeDB()
+    dependencies.get_db = lambda: db
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        history = client.get("/api/user/playerone/games")
+
+    assert history.status_code == 200
+    service.get_game_history.assert_awaited_once_with(db, "507f1f77bcf86cd799439011", 1, 100)

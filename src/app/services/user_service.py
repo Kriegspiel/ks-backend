@@ -168,13 +168,13 @@ class UserService:
 
     @staticmethod
     def _completed_turn_count(game: dict[str, Any]) -> int:
-        turns = 0
+        completed_plies = 0
         for move in game.get("moves", []):
             if isinstance(move, dict):
-                turns += 1 if move.get("move_done") else 0
+                completed_plies += 1 if move.get("move_done") else 0
             else:
-                turns += 1
-        return turns
+                completed_plies += 1
+        return math.ceil(completed_plies / 2)
 
     @staticmethod
     def _result_track_template() -> dict[str, dict[str, int]]:
