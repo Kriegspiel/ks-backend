@@ -169,6 +169,21 @@ class FakeDB:
         self.game_archives = game_archives
 
 
+def test_find_uses_single_argument_call_when_projection_is_omitted() -> None:
+    class TrackingCollection:
+        def __init__(self) -> None:
+            self.calls: list[tuple] = []
+
+        def find(self, *args):
+            self.calls.append(args)
+            return "cursor"
+
+    collection = TrackingCollection()
+
+    assert UserService._find(collection, {"role": "bot"}) == "cursor"
+    assert collection.calls == [({"role": "bot"},)]
+
+
 @pytest.mark.asyncio
 async def test_create_user_stores_canonical_username_display_and_hashed_password() -> None:
     users = FakeUsersCollection()

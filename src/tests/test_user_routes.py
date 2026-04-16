@@ -165,3 +165,32 @@ def test_user_routes_return_404_for_missing_profile_and_history_targets(monkeypa
     assert profile.status_code == 404
     assert history.status_code == 404
     assert rating_history.status_code == 404
+
+
+def test_user_rating_history_route_returns_service_payload(monkeypatch) -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    service = StubService()
+    service.get_rating_history = AsyncMock(
+        return_value={
+            "track": "overall",
+            "series": {
+                "game": [{"label": "Game 1", "elo": 1216}],
+                "date": [{"label": "2026-04-15", "elo": 1216}],
+            },
+        }
+    )
+    app.dependency_overrides[get_user_service] = lambda: service
+
+    class FakeUsers:
+        async def find_one(self, query):  # noqa: ANN001
+            return {"_id": "507f1f77bcf86cd799439011", "username": "playerone"}
+
+    db = type("FakeDB", (), {"users": FakeUsers(), "sessions": object()})()
+    monkeypatch.setattr(dependencies, "get_db", lambda: db)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/user/playerone/rating-history?track=overall&limit=100")
+
+    assert response.status_code == 200
+    assert response.json()["series"]["game"][0]["elo"] == 1216
+    service.get_rating_history.assert_awaited_once_with(db, "507f1f77bcf86cd799439011", track="overall", limit=100)
