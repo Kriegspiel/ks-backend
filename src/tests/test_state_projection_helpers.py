@@ -108,12 +108,19 @@ def test_state_projection_possible_actions_and_referee_log_cover_remaining_publi
                 "special_announcement": "CHECK_FILE",
                 "capture_square": "d4",
                 "timestamp": None,
+            },
+            {
+                "ply": 2,
+                "announcement": "SECRET_MOVE",
+                "special_announcement": "CHECK_RANK",
+                "capture_square": None,
+                "timestamp": None,
             }
         ]
     )
 
     assert actions == ["ask_any"]
-    assert [item["announcement"] for item in referee_log] == ["REGULAR_MOVE", "CHECK_FILE"]
+    assert [item["announcement"] for item in referee_log] == ["REGULAR_MOVE", "CHECK_FILE", "CHECK_RANK"]
 
 
 def test_state_projection_viewer_scoresheet_skips_empty_turns() -> None:
