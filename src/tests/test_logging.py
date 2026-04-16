@@ -4,7 +4,7 @@ import json
 
 import structlog
 
-from app.logging_config import configure_logging
+from app.logging_config import _redact_sensitive, configure_logging
 
 
 def test_logging_production_renders_json(capsys) -> None:
@@ -30,3 +30,17 @@ def test_logging_development_renders_console(capsys) -> None:
     line = capsys.readouterr().out.strip().splitlines()[-1]
     assert "dev_event" in line
     assert "source_ip" in line
+
+
+def test_redact_sensitive_redacts_nested_lists_and_tuples() -> None:
+    payload = {
+        "password": "secret",
+        "events": [{"token": "abc"}, ("ok", {"session_cookie": "def"})],
+    }
+
+    redacted = _redact_sensitive(payload)
+
+    assert redacted["password"] == "[REDACTED]"
+    assert redacted["events"][0]["token"] == "[REDACTED]"
+    assert redacted["events"][1][0] == "ok"
+    assert redacted["events"][1][1]["session_cookie"] == "[REDACTED]"

@@ -154,3 +154,53 @@ async def test_get_current_user_returns_authenticated_bot_for_bearer_token(monke
     )
 
     assert user.username == "randobot"
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_falls_back_to_session_when_bearer_token_is_not_a_bot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_doc = {
+        "_id": "507f1f77bcf86cd799439011",
+        "username": "playerone",
+        "username_display": "PlayerOne",
+        "email": "player@example.com",
+        "password_hash": "hash",
+        "auth_providers": ["local"],
+        "profile": {"bio": "", "avatar_url": None, "country": None},
+        "stats": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0, "elo": 1200, "elo_peak": 1200},
+        "settings": {"board_theme": "default", "piece_set": "cburnett", "sound_enabled": True, "auto_ask_any": False},
+        "role": "user",
+        "status": "active",
+        "last_active_at": datetime.now(UTC),
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+    }
+
+    class FakeUserService:
+        def __init__(self, users) -> None:  # noqa: ANN001
+            self.users = users
+
+        async def authenticate_bot_token(self, token: str) -> UserModel | None:
+            assert token == "ksbot_token.secret"
+            return None
+
+    fake_db = SimpleNamespace(users=SimpleNamespace(find_one=AsyncMock(return_value=user_doc)))
+    monkeypatch.setattr(deps, "get_db", lambda: fake_db)
+    monkeypatch.setattr(deps, "UserService", FakeUserService)
+
+    session_service = SimpleNamespace(
+        get_active_session=AsyncMock(return_value={"user_id": "507f1f77bcf86cd799439011"}),
+        delete_session=AsyncMock(),
+    )
+
+    user = await get_current_user(
+        SimpleNamespace(
+            headers={"authorization": "Bearer ksbot_token.secret"},
+            cookies={SessionService.COOKIE_NAME: "sid"},
+        ),
+        session_service,
+    )
+
+    assert user.username == "playerone"
+    session_service.get_active_session.assert_awaited_once_with("sid")

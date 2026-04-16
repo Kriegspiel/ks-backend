@@ -285,3 +285,51 @@ def test_game_router_open_and_mine_error_paths(app_with_game_service) -> None:
     assert open_games.json()["error"]["code"] == "GAME_FULL"
     assert mine.status_code == 404
     assert mine.json()["error"]["code"] == "GAME_NOT_FOUND"
+
+
+def test_get_game_service_prefers_app_state_and_falls_back_to_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    existing_service = object()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                game_service=existing_service,
+                settings=SimpleNamespace(SITE_ORIGIN="https://kriegspiel.org"),
+            )
+        )
+    )
+
+    assert get_game_service(request) is existing_service
+
+    fake_db = SimpleNamespace(games=object(), users=object(), game_archives=object())
+    captured: dict[str, object] = {}
+
+    class FakeGameService:
+        def __init__(self, games, *, users_collection, archives_collection, site_origin) -> None:  # noqa: ANN001
+            captured["games"] = games
+            captured["users"] = users_collection
+            captured["archives"] = archives_collection
+            captured["site_origin"] = site_origin
+
+    import app.routers.game as game_router_module
+
+    monkeypatch.setattr(game_router_module, "get_db", lambda: fake_db)
+    monkeypatch.setattr(game_router_module, "GameService", FakeGameService)
+
+    fallback_request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                game_service=None,
+                settings=SimpleNamespace(SITE_ORIGIN="https://kriegspiel.org"),
+            )
+        )
+    )
+
+    service = get_game_service(fallback_request)
+
+    assert isinstance(service, FakeGameService)
+    assert captured == {
+        "games": fake_db.games,
+        "users": fake_db.users,
+        "archives": fake_db.game_archives,
+        "site_origin": "https://kriegspiel.org",
+    }

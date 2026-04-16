@@ -49,3 +49,15 @@ def test_bot_register_response_uses_default_message() -> None:
     )
 
     assert "Save this token now" in response.message
+
+
+def test_bot_register_request_allows_supported_rule_variants_to_be_omitted() -> None:
+    payload = BotRegisterRequest(
+        username="randobot",
+        display_name="Random Bot",
+        owner_email="owner@example.com",
+        description="bot",
+        supported_rule_variants=None,
+    )
+
+    assert payload.supported_rule_variants is None

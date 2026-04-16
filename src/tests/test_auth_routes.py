@@ -189,6 +189,34 @@ def test_auth_endpoints_return_503_when_db_unavailable(monkeypatch: pytest.Monke
         assert login.json()["detail"] == "Database unavailable"
 
 
+def test_bot_register_requires_matching_registration_key() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing", BOT_REGISTRATION_KEY="expected-key"))
+
+    with TestClient(app) as client:
+        missing = client.post(
+            "/api/auth/bots/register",
+            json={
+                "username": "randobot",
+                "display_name": "Random Bot",
+                "owner_email": "owner@example.com",
+                "description": "bot",
+            },
+        )
+        invalid = client.post(
+            "/api/auth/bots/register",
+            headers={"x-bot-registration-key": "wrong-key"},
+            json={
+                "username": "randobot",
+                "display_name": "Random Bot",
+                "owner_email": "owner@example.com",
+                "description": "bot",
+            },
+        )
+
+    assert missing.status_code == 401
+    assert invalid.status_code == 401
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(
     os.getenv("RUN_MONGO_INTEGRATION") != "1",

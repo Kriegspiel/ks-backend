@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock
 
 from app.config import Settings
 from app.main import create_app
@@ -90,3 +91,40 @@ def test_api_health_mirrors_health_endpoint():
 
     assert api_response.status_code in (200, 503)
     assert api_response.json()["version"] == APP_VERSION
+
+
+def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
+    import app.main as main_module
+
+    fake_db = type(
+        "FakeDB",
+        (),
+        {
+            "games": object(),
+            "users": object(),
+            "game_archives": object(),
+        },
+    )()
+    calls: list[str] = []
+
+    class FakeGameService:
+        def __init__(self, games, *, users_collection, archives_collection, site_origin) -> None:  # noqa: ANN001
+            assert games is fake_db.games
+            assert users_collection is fake_db.users
+            assert archives_collection is fake_db.game_archives
+            assert site_origin == "https://frontend.example"
+            self.start = AsyncMock(side_effect=lambda: calls.append("start"))
+            self.shutdown = AsyncMock(side_effect=lambda: calls.append("shutdown"))
+
+    monkeypatch.setattr(main_module, "init_db", AsyncMock(return_value=fake_db))
+    monkeypatch.setattr(main_module, "close_db", AsyncMock(side_effect=lambda: calls.append("close_db")))
+    monkeypatch.setattr(main_module, "GameService", FakeGameService)
+
+    app = create_app(Settings(ENVIRONMENT="testing", SITE_ORIGIN="https://frontend.example"))
+
+    with TestClient(app):
+        assert app.state.db is fake_db
+        assert app.state.db_ready is True
+        assert app.state.game_service is not None
+
+    assert calls == ["start", "shutdown", "close_db"]
