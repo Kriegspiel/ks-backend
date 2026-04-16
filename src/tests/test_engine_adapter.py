@@ -191,9 +191,9 @@ def test_answer_serializers_cover_named_checks_and_non_double_specials() -> None
     answer = KriegspielAnswer(
         MainAnnouncement.REGULAR_MOVE,
         special_announcement=SpecialCaseAnnouncement.CHECK_FILE,
-        check_1=SpecialCaseAnnouncement.CHECK_FILE,
-        check_2=SpecialCaseAnnouncement.CHECK_RANK,
     )
+    answer.check_1 = SpecialCaseAnnouncement.CHECK_FILE
+    answer.check_2 = SpecialCaseAnnouncement.CHECK_RANK
 
     serialized = _serialize_answer(answer)
     restored = _deserialize_answer(
