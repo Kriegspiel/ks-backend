@@ -188,14 +188,14 @@ def test_deserialize_answer_handles_capture_and_special_cases() -> None:
 
 
 def test_answer_serializers_cover_named_checks_and_non_double_specials() -> None:
-    answer = KriegspielAnswer(
-        MainAnnouncement.REGULAR_MOVE,
-        special_announcement=SpecialCaseAnnouncement.CHECK_FILE,
+    double_check = _deserialize_answer(
+        {
+            "main_announcement": "REGULAR_MOVE",
+            "special_announcement": "CHECK_DOUBLE",
+            "checks": ["CHECK_FILE", "CHECK_RANK"],
+        }
     )
-    answer.check_1 = SpecialCaseAnnouncement.CHECK_FILE
-    answer.check_2 = SpecialCaseAnnouncement.CHECK_RANK
-
-    serialized = _serialize_answer(answer)
+    serialized = _serialize_answer(double_check)
     restored = _deserialize_answer(
         {
             "main_announcement": "REGULAR_MOVE",
