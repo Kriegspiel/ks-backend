@@ -205,5 +205,5 @@ def test_answer_serializers_cover_named_checks_and_non_double_specials() -> None
     )
 
     assert serialized["checks"] == ["CHECK_FILE", "CHECK_RANK"]
-    assert serialized["special_announcement"] == "CHECK_FILE"
+    assert serialized["special_announcement"] == "CHECK_DOUBLE"
     assert restored.special_announcement == SpecialCaseAnnouncement.CHECK_FILE
