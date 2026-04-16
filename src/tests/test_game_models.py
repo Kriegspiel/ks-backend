@@ -68,12 +68,36 @@ def test_game_document_from_mongo_converts_id_to_string() -> None:
     assert doc.id == "12345"
 
 
+def test_game_document_from_mongo_allows_documents_without_id() -> None:
+    now = datetime.now(UTC)
+
+    doc = GameDocument.from_mongo(
+        {
+            "game_code": "A7K2M9",
+            "white": {"user_id": "u1", "username": "alexfil", "connected": True},
+            "state": "waiting",
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+
+    assert doc.id is None
+
+
 def test_create_game_request_defaults() -> None:
     req = CreateGameRequest.model_validate({})
 
     assert req.rule_variant == "berkeley_any"
     assert req.play_as == "random"
     assert req.time_control == "rapid"
+
+
+def test_create_game_request_validates_bot_fields() -> None:
+    with pytest.raises(ValidationError, match="bot_id is required"):
+        CreateGameRequest(opponent_type="bot")
+
+    with pytest.raises(ValidationError, match="only allowed when opponent_type is bot"):
+        CreateGameRequest(opponent_type="human", bot_id="507f1f77bcf86cd799439011")
 
 
 def test_create_game_response_contract_shape() -> None:

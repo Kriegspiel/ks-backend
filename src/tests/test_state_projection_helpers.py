@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.services import state_projection as projection
 
 
@@ -83,3 +85,61 @@ def test_state_projection_scoresheet_reconstruction_and_normalization_cover_fall
         )
         is None
     )
+
+
+def test_state_projection_possible_actions_and_referee_log_cover_remaining_public_branches() -> None:
+    engine = SimpleNamespace(
+        possible_to_ask=[
+            SimpleNamespace(question_type=SimpleNamespace(name="ASK_ANY"), chess_move=None),
+        ]
+    )
+
+    actions = projection.compute_possible_actions(
+        engine=engine,
+        game_state="active",
+        viewer_color="white",
+        turn="white",
+    )
+    referee_log = projection.build_referee_log(
+        [
+            {
+                "ply": 1,
+                "announcement": "REGULAR_MOVE",
+                "special_announcement": "CHECK_FILE",
+                "capture_square": "d4",
+                "timestamp": None,
+            },
+            {
+                "ply": 2,
+                "announcement": "SECRET_MOVE",
+                "special_announcement": "CHECK_RANK",
+                "capture_square": None,
+                "timestamp": None,
+            }
+        ]
+    )
+
+    assert actions == ["ask_any"]
+    assert [item["announcement"] for item in referee_log] == ["REGULAR_MOVE", "CHECK_FILE", "CHECK_RANK"]
+
+
+def test_state_projection_viewer_scoresheet_skips_empty_turns() -> None:
+    scoresheet = projection.build_viewer_scoresheet(
+        viewer_color="white",
+        stored_scoresheet={
+            "color": "white",
+            "last_move_number": 2,
+            "moves_own": [
+                [],
+                [
+                    {
+                        "question": {"question_type": "COMMON", "move_uci": "e2e4"},
+                        "answer": {"main_announcement": "REGULAR_MOVE"},
+                    }
+                ],
+            ],
+            "moves_opponent": [[], []],
+        },
+    )
+
+    assert [turn["turn"] for turn in scoresheet["turns"]] == [2]

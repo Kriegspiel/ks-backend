@@ -37,6 +37,11 @@ def test_get_db_raises_when_not_initialized():
         db_module.get_db()
 
 
+def test_resolve_database_name_requires_default_database() -> None:
+    with pytest.raises(RuntimeError, match="default database name"):
+        db_module._resolve_database_name("mongodb://localhost:27017")  # noqa: SLF001
+
+
 @pytest.mark.asyncio
 async def test_init_db_builds_motor_client_from_settings(monkeypatch):
     fake_db = _make_fake_db()
@@ -117,6 +122,7 @@ async def test_init_db_returns_handle_for_expected_database(monkeypatch):
 
     assert db is fake_db
     fake_client.__getitem__.assert_called_once_with("kriegspiel_slice120_test")
+    assert db_module.get_db() is fake_db
 
 
 @pytest.mark.integration

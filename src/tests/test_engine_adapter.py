@@ -185,3 +185,25 @@ def test_deserialize_answer_handles_capture_and_special_cases() -> None:
         }
     )
     assert special_answer.special_announcement == SpecialCaseAnnouncement.CHECK_DOUBLE
+
+
+def test_answer_serializers_cover_named_checks_and_non_double_specials() -> None:
+    double_check = _deserialize_answer(
+        {
+            "main_announcement": "REGULAR_MOVE",
+            "special_announcement": "CHECK_DOUBLE",
+            "checks": ["CHECK_FILE", "CHECK_RANK"],
+        }
+    )
+    serialized = _serialize_answer(double_check)
+    restored = _deserialize_answer(
+        {
+            "main_announcement": "REGULAR_MOVE",
+            "special_announcement": "CHECK_FILE",
+            "checks": ["CHECK_FILE"],
+        }
+    )
+
+    assert serialized["checks"] == ["CHECK_FILE", "CHECK_RANK"]
+    assert serialized["special_announcement"] == "CHECK_DOUBLE"
+    assert restored.special_announcement == SpecialCaseAnnouncement.CHECK_FILE
