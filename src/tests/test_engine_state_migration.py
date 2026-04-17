@@ -61,3 +61,31 @@ def test_canonicalize_game_document_skips_current_canonical() -> None:
     current = serialize_game_state(game)
 
     assert canonicalize_game_document({"engine_state": current, "moves": [], "rule_variant": "berkeley_any"}) is None
+
+
+def test_canonicalize_game_document_falls_back_to_move_stack_when_moves_conflict() -> None:
+    game = create_new_game(any_rule=True)
+    attempt_move(game, "e2e4")
+    legacy = _serialize_legacy_game_state(game, schema_version=1, include_scoresheets=False)
+
+    canonical = canonicalize_game_document(
+        {
+            "engine_state": legacy,
+            "rule_variant": "berkeley_any",
+            "moves": [
+                {
+                    "ply": 1,
+                    "color": "white",
+                    "question_type": "COMMON",
+                    "uci": "d2d4",
+                    "announcement": "REGULAR_MOVE",
+                    "special_announcement": None,
+                    "capture_square": None,
+                    "move_done": True,
+                }
+            ],
+        }
+    )
+
+    assert canonical is not None
+    assert canonical["game_state"]["white_scoresheet"]["moves_own"][0][0][0]["chess_move"] == "e2e4"

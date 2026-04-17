@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import chess
+from kriegspiel.move import KriegspielAnswer, KriegspielMove, KriegspielScoresheet, MainAnnouncement, QuestionAnnouncement
+from kriegspiel.serialization import MalformedDataError
 from kriegspiel.serialization import SERIALIZATION_SCHEMA_VERSION as CANONICAL_ENGINE_STATE_SCHEMA_VERSION
 
 from app.services.engine_adapter import create_new_game, deserialize_game_state, deserialize_scoresheet, serialize_game_state
@@ -33,10 +36,7 @@ def canonicalize_game_document(game: dict[str, Any]) -> dict[str, Any] | None:
 
     engine = _load_engine_for_migration(game)
     _hydrate_scoresheets_from_moves_if_needed(game=game, engine=engine, original_engine_state=current)
-    canonical = serialize_game_state(engine)
-
-    # Validate the exact payload that will be written.
-    deserialize_game_state(canonical)
+    canonical = _validated_canonical_payload(engine=engine, game=game)
     return canonical
 
 
@@ -66,3 +66,38 @@ def _legacy_engine_state_has_scoresheets(payload: Any) -> bool:
         and isinstance(payload.get("white_scoresheet"), dict)
         and isinstance(payload.get("black_scoresheet"), dict)
     )
+
+
+def _validated_canonical_payload(*, engine: Any, game: dict[str, Any]) -> dict[str, Any]:
+    canonical = serialize_game_state(engine)
+    try:
+        deserialize_game_state(canonical)
+        return canonical
+    except MalformedDataError as exc:
+        if "Scoresheet-derived moves do not match move_stack" not in str(exc):
+            raise
+
+    # Some older documents have transcripts that drifted from their scoresheet snapshots.
+    # Fall back to a minimal move_stack-derived scoresheet so canonical engine_state remains loadable.
+    _synthesize_scoresheets_from_move_stack(engine)
+    canonical = serialize_game_state(engine)
+    deserialize_game_state(canonical)
+    return canonical
+
+
+def _synthesize_scoresheets_from_move_stack(engine: Any) -> None:
+    white = KriegspielScoresheet(chess.WHITE)
+    black = KriegspielScoresheet(chess.BLACK)
+
+    for ply, chess_move in enumerate(getattr(engine._board, "move_stack", []), start=1):  # noqa: SLF001
+        move = KriegspielMove(QuestionAnnouncement.COMMON, chess_move)
+        answer = KriegspielAnswer(MainAnnouncement.REGULAR_MOVE)
+        if ply % 2 == 1:
+            white.record_move_own(move, answer)
+            black.record_move_opponent(QuestionAnnouncement.COMMON, answer)
+        else:
+            black.record_move_own(move, answer)
+            white.record_move_opponent(QuestionAnnouncement.COMMON, answer)
+
+    engine._whites_scoresheet = white  # noqa: SLF001
+    engine._blacks_scoresheet = black  # noqa: SLF001
