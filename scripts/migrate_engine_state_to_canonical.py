@@ -20,10 +20,6 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from app.config import get_settings
-from app.services.engine_state_migration import canonicalize_game_document, classify_engine_state
-
-
 def load_runtime_env() -> None:
     local_env = ROOT / ".env"
     if local_env.exists():
@@ -32,6 +28,12 @@ def load_runtime_env() -> None:
     service_env = Path("/etc/default/ks-backend")
     if service_env.exists():
         load_dotenv(service_env, override=True)
+
+
+load_runtime_env()
+
+from app.config import get_settings
+from app.services.engine_state_migration import canonicalize_game_document, classify_engine_state
 
 
 async def backup_collection(*, collection: Any, backup_path: Path) -> int:
@@ -72,7 +74,6 @@ async def migrate_collection(*, collection: Any, batch_size: int, dry_run: bool)
 
 
 async def run(*, dry_run: bool, batch_size: int, backup_root: Path | None) -> None:
-    load_runtime_env()
     settings = get_settings()
     client = AsyncIOMotorClient(settings.MONGO_URI)
     db = client.get_default_database()
