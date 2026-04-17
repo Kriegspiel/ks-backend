@@ -29,7 +29,14 @@ from app.models.game import (
 )
 from app.services.clock_service import ClockService
 from app.services.code_generator import generate_game_code
-from app.services.engine_adapter import ask_any, attempt_move, create_new_game, deserialize_game_state, serialize_game_state
+from app.services.engine_adapter import (
+    ask_any,
+    attempt_move,
+    create_new_game,
+    deserialize_game_state,
+    extract_stored_scoresheets,
+    serialize_game_state,
+)
 from app.services.state_projection import (
     allowed_moves_for_player,
     build_viewer_referee_log,
@@ -1000,12 +1007,12 @@ class GameService:
             return bool(sheet.get("moves_own") or sheet.get("moves_opponent") or int(sheet.get("last_move_number", 0)) > 0)
 
         engine_state = game.get("engine_state")
-        if isinstance(engine_state, dict):
-            white = engine_state.get("white_scoresheet")
-            black = engine_state.get("black_scoresheet")
-            if isinstance(white, dict) and isinstance(black, dict):
-                if not game.get("moves") or _scoresheet_has_entries(white) or _scoresheet_has_entries(black):
-                    return {"white": white, "black": black}
+        stored_from_engine = extract_stored_scoresheets(engine_state)
+        if stored_from_engine is not None:
+            white = stored_from_engine["white"]
+            black = stored_from_engine["black"]
+            if not game.get("moves") or _scoresheet_has_entries(white) or _scoresheet_has_entries(black):
+                return stored_from_engine
         moves = game.get("moves", [])
         if moves:
             return reconstruct_scoresheets_from_moves(moves)

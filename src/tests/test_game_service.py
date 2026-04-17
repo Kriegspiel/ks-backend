@@ -259,10 +259,10 @@ async def test_join_game_transitions_waiting_to_active_and_assigns_opposite_colo
     assert saved["black"]["user_id"] == "u1"
     assert "white_scoresheet" not in saved
     assert "black_scoresheet" not in saved
-    assert saved["engine_state"]["white_scoresheet"]["color"] == "white"
-    assert saved["engine_state"]["black_scoresheet"]["color"] == "black"
-    assert saved["engine_state"]["white_scoresheet"]["moves_own"] == []
-    assert saved["engine_state"]["black_scoresheet"]["moves_opponent"] == []
+    assert saved["engine_state"]["game_state"]["white_scoresheet"]["color"] == "WHITE"
+    assert saved["engine_state"]["game_state"]["black_scoresheet"]["color"] == "BLACK"
+    assert saved["engine_state"]["game_state"]["white_scoresheet"]["moves_own"] == []
+    assert saved["engine_state"]["game_state"]["black_scoresheet"]["moves_opponent"] == []
 
 
 @pytest.mark.asyncio
@@ -581,10 +581,7 @@ async def test_get_lobby_stats_counts_active_and_completed_windows() -> None:
 @pytest.mark.asyncio
 async def test_stored_scoresheets_prefers_engine_state_only() -> None:
     game = {
-        "engine_state": {
-            "white_scoresheet": {"color": "white", "last_move_number": 3, "moves_own": [], "moves_opponent": []},
-            "black_scoresheet": {"color": "black", "last_move_number": 3, "moves_own": [], "moves_opponent": []},
-        },
+        "engine_state": serialize_game_state(create_new_game(any_rule=True)),
         "moves": [],
     }
 

@@ -9,6 +9,7 @@ from app.services.engine_adapter import (
     _deserialize_question,
     _deserialize_scoresheet_turn,
     _repair_possible_to_ask,
+    _serialize_legacy_game_state,
     _serialize_answer,
     _serialize_color,
     _serialize_scoresheet_turn,
@@ -16,6 +17,7 @@ from app.services.engine_adapter import (
     attempt_move,
     create_new_game,
     deserialize_game_state,
+    extract_stored_scoresheets,
     project_visible_board,
     serialize_scoresheet,
     serialize_game_state,
@@ -84,7 +86,7 @@ def test_deserialize_repairs_empty_possible_to_ask_when_pawn_captures_required()
 
     assert result["announcement"] == "HAS_ANY"
 
-    payload = serialize_game_state(game)
+    payload = _serialize_legacy_game_state(game)
     payload["possible_to_ask"] = []
 
     restored = deserialize_game_state(payload)
@@ -128,7 +130,7 @@ def test_invalid_uci_and_default_scoresheet_serialization_are_stable() -> None:
 
 
 def test_deserialize_game_state_validates_board_and_repairs_missing_move_lists() -> None:
-    payload = serialize_game_state(create_new_game(any_rule=True))
+    payload = _serialize_legacy_game_state(create_new_game(any_rule=True))
     payload["board_fen"] = "invalid-fen"
 
     with pytest.raises(ValueError, match="move_stack"):
@@ -150,6 +152,23 @@ def test_deserialize_game_state_validates_board_and_repairs_missing_move_lists()
 
     with pytest.raises(AttributeError, match="pawn-capture generator"):
         _repair_possible_to_ask(RepairStub(must_use_pawns=True))
+
+
+def test_extract_stored_scoresheets_supports_canonical_and_legacy_payloads() -> None:
+    game = create_new_game(any_rule=True)
+    attempt_move(game, "e2e4")
+
+    canonical = serialize_game_state(game)
+    legacy = _serialize_legacy_game_state(game)
+
+    canonical_scoresheets = extract_stored_scoresheets(canonical)
+    legacy_scoresheets = extract_stored_scoresheets(legacy)
+
+    assert canonical_scoresheets is not None
+    assert canonical_scoresheets["white"]["moves_own"]
+    assert canonical_scoresheets["black"]["moves_opponent"]
+    assert legacy_scoresheets is not None
+    assert legacy_scoresheets["white"]["moves_own"]
 
 
 def test_engine_adapter_private_serializers_cover_fallback_shapes() -> None:

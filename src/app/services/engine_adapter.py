@@ -12,6 +12,12 @@ from kriegspiel.move import (
     QuestionAnnouncement,
     SpecialCaseAnnouncement,
 )
+from kriegspiel.serialization import (
+    SERIALIZATION_SCHEMA_VERSION as CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+    deserialize_berkeley_game,
+    deserialize_kriegspiel_scoresheet,
+    serialize_berkeley_game,
+)
 
 PlayerColor = Literal["white", "black"]
 
@@ -88,6 +94,49 @@ def deserialize_scoresheet(payload: dict[str, Any] | None, *, fallback_color: Pl
 
 
 def serialize_game_state(game: BerkeleyGame) -> dict[str, Any]:
+    return serialize_berkeley_game(game)
+
+
+def deserialize_game_state(payload: dict[str, Any]) -> BerkeleyGame:
+    if _is_canonical_engine_state(payload):
+        return deserialize_berkeley_game(payload)
+    return _deserialize_legacy_game_state(payload)
+
+
+def extract_stored_scoresheets(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]] | None:
+    if not isinstance(payload, dict):
+        return None
+
+    if _is_canonical_engine_state(payload):
+        game_state = payload.get("game_state")
+        if not isinstance(game_state, dict):
+            return None
+        white = game_state.get("white_scoresheet")
+        black = game_state.get("black_scoresheet")
+        if not isinstance(white, dict) or not isinstance(black, dict):
+            return None
+        return {
+            "white": serialize_scoresheet(deserialize_kriegspiel_scoresheet(white)),
+            "black": serialize_scoresheet(deserialize_kriegspiel_scoresheet(black)),
+        }
+
+    white = payload.get("white_scoresheet")
+    black = payload.get("black_scoresheet")
+    if isinstance(white, dict) and isinstance(black, dict):
+        return {"white": white, "black": black}
+    return None
+
+
+def _is_canonical_engine_state(payload: dict[str, Any]) -> bool:
+    return isinstance(payload.get("game_state"), dict) and payload.get("schema_version") == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+
+
+def _serialize_legacy_game_state(
+    game: BerkeleyGame,
+    *,
+    schema_version: int = 2,
+    include_scoresheets: bool = True,
+) -> dict[str, Any]:
     serialized_moves = [
         {
             "question_type": move.question_type.name,
@@ -97,20 +146,22 @@ def serialize_game_state(game: BerkeleyGame) -> dict[str, Any]:
     ]
     serialized_moves.sort(key=lambda item: (item["question_type"], item["move_uci"] or ""))
 
-    return {
-        "schema_version": 2,
+    payload: dict[str, Any] = {
+        "schema_version": schema_version,
         "any_rule": game._any_rule,  # noqa: SLF001
         "must_use_pawns": game.must_use_pawns,
         "game_over": game.game_over,
         "board_fen": game._board.fen(),  # noqa: SLF001
         "move_stack": [move.uci() for move in game._board.move_stack],  # noqa: SLF001
         "possible_to_ask": serialized_moves,
-        "white_scoresheet": serialize_scoresheet(getattr(game, "_whites_scoresheet", None)),  # noqa: SLF001
-        "black_scoresheet": serialize_scoresheet(getattr(game, "_blacks_scoresheet", None)),  # noqa: SLF001
     }
+    if include_scoresheets:
+        payload["white_scoresheet"] = serialize_scoresheet(getattr(game, "_whites_scoresheet", None))  # noqa: SLF001
+        payload["black_scoresheet"] = serialize_scoresheet(getattr(game, "_blacks_scoresheet", None))  # noqa: SLF001
+    return payload
 
 
-def deserialize_game_state(payload: dict[str, Any]) -> BerkeleyGame:
+def _deserialize_legacy_game_state(payload: dict[str, Any]) -> BerkeleyGame:
     any_rule = bool(payload.get("any_rule", True))
     game = BerkeleyGame(any_rule=any_rule)
 

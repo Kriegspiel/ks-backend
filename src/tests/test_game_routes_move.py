@@ -146,8 +146,8 @@ async def test_execute_move_persists_and_flips_turn(active_game_doc: dict) -> No
     assert games.docs[0]["moves"][0]["question_type"] == "COMMON"
     assert "white_scoresheet" not in games.docs[0]
     assert "black_scoresheet" not in games.docs[0]
-    assert games.docs[0]["engine_state"]["white_scoresheet"]["moves_own"]
-    assert games.docs[0]["engine_state"]["black_scoresheet"]["moves_opponent"]
+    assert games.docs[0]["engine_state"]["game_state"]["white_scoresheet"]["moves_own"]
+    assert games.docs[0]["engine_state"]["game_state"]["black_scoresheet"]["moves_opponent"]
 
 
 @pytest.mark.asyncio
@@ -178,7 +178,7 @@ async def test_execute_move_does_not_persist_impossible_attempts(active_game_doc
             "announcement": "IMPOSSIBLE_TO_ASK",
             "special_announcement": None,
             "capture_square": None,
-            "full_fen": active_game_doc["engine_state"]["board_fen"],
+            "full_fen": active_game_doc["engine_state"]["game_state"]["board_fen"],
             "white_fen": "4K3/PPPPPPPP/8/8/8/8/8/8 w - - 0 1",
             "black_fen": "8/8/8/8/8/8/pppppppp/4k3 w - - 0 1",
             "turn": "white",
@@ -236,7 +236,7 @@ async def test_execute_ask_any_does_not_persist_impossible_attempts(active_game_
             "announcement": "IMPOSSIBLE_TO_ASK",
             "special_announcement": None,
             "capture_square": None,
-            "full_fen": active_game_doc["engine_state"]["board_fen"],
+            "full_fen": active_game_doc["engine_state"]["game_state"]["board_fen"],
             "white_fen": "4K3/PPPPPPPP/8/8/8/8/8/8 w - - 0 1",
             "black_fen": "8/8/8/8/8/8/pppppppp/4k3 w - - 0 1",
             "turn": "white",
