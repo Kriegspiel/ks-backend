@@ -27,7 +27,7 @@ wheels = [
 
 [[package]]
 name = "backend"
-version = "0.1.0"
+version = "1.2.22"
 source = { virtual = "." }
 dependencies = [
     { name = "bcrypt" },
@@ -60,7 +60,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=4.3.0" },
     { name = "fastapi", specifier = ">=0.115.14" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "kriegspiel" },
+    { name = "kriegspiel", specifier = ">=1.2.3" },
     { name = "motor", specifier = ">=3.6.0" },
     { name = "mypy", specifier = ">=1.16.1" },
     { name = "peewee", specifier = ">=3.18.1" },
@@ -392,11 +392,11 @@ wheels = [
 
 [[package]]
 name = "kriegspiel"
-version = "1.1.1"
+version = "1.2.3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a2/2d/b70e7e4914c01570af80e85adafe2c4693f7e716ebb00d6df33142667c1e/kriegspiel-1.1.1.tar.gz", hash = "sha256:2d2f2fd5af1fb44db5cb16e7fc9570e109d1b54f69f05565b73ad5cc9d06bcfd", size = 12820, upload-time = "2023-07-29T17:00:56.011Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/44/fb/31635a2feb347dc26cf595795fe2051a1d64f29e587e243e038f9d85346b/kriegspiel-1.2.3.tar.gz", hash = "sha256:36f46a843fa5c799432786e57abeb72fafc90b3be5b3fbe4918a8cb1eb5c8d13", size = 27568, upload-time = "2026-04-17T01:19:18.873Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/e5/3352eddb99d84b872b086f3d86200abd823b4282ebf994e74bc89f2da8aa/kriegspiel-1.1.1-py3-none-any.whl", hash = "sha256:181e325bf12e27486a27dad7df4c5767c7e315a928c33fbaadd85d3fb925e0f8", size = 9448, upload-time = "2023-07-29T17:00:54.386Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/e3/49a60d2609a15a2c89d3040e18156851bd1043ae9f4fd79d6bae9e80d47c/kriegspiel-1.2.3-py3-none-any.whl", hash = "sha256:6f635f7ed79db9da376d3c3cae78c02b69f2710efa35ece55b7685d93eeaecd0", size = 16929, upload-time = "2026-04-17T01:19:17.625Z" },
 ]
 
 [[package]]

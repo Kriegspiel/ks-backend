@@ -139,8 +139,8 @@ async def test_end_to_end_lifecycle_visibility_and_action_flow() -> None:
     assert any("Opponent move" in entry.message for entry in black_view.scoresheet.turns[0].white)
     assert "white_scoresheet" not in games.docs[0]
     assert "black_scoresheet" not in games.docs[0]
-    assert games.docs[0]["engine_state"]["white_scoresheet"]["moves_own"]
-    assert games.docs[0]["engine_state"]["black_scoresheet"]["moves_opponent"]
+    assert games.docs[0]["engine_state"]["game_state"]["white_scoresheet"]["moves_own"]
+    assert games.docs[0]["engine_state"]["game_state"]["black_scoresheet"]["moves_opponent"]
 
 
 @pytest.mark.asyncio

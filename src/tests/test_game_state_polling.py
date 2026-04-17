@@ -13,7 +13,7 @@ from app.dependencies import get_current_user
 from app.main import create_app
 from app.models.user import UserModel
 from app.routers.game import get_game_service
-from app.services.engine_adapter import create_new_game, serialize_game_state
+from app.services.engine_adapter import _serialize_legacy_game_state, create_new_game, serialize_game_state
 from app.services.engine_adapter import ask_any, attempt_move
 from app.services.game_service import GameForbiddenError, GameService
 from app.services.state_projection import build_referee_log, build_referee_turns
@@ -154,7 +154,7 @@ def corrupted_has_any_game_doc() -> dict:
     attempt_move(engine, "e4e5")
     attempt_move(engine, "c8e6")
     ask_any(engine)
-    payload = serialize_game_state(engine)
+    payload = _serialize_legacy_game_state(engine)
     payload["possible_to_ask"] = [
         {"question_type": "COMMON", "move_uci": "a2b3"},
         {"question_type": "COMMON", "move_uci": "b2a3"},
