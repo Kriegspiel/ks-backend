@@ -11,6 +11,7 @@ import sys
 from typing import Any
 
 from bson import json_util
+from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
 
@@ -21,6 +22,12 @@ if str(SRC) not in sys.path:
 
 from app.config import get_settings
 from app.services.engine_state_migration import canonicalize_game_document, classify_engine_state
+
+
+def load_runtime_env() -> None:
+    for candidate in (ROOT / ".env", Path("/etc/default/ks-backend")):
+        if candidate.exists():
+            load_dotenv(candidate, override=False)
 
 
 async def backup_collection(*, collection: Any, backup_path: Path) -> int:
@@ -61,6 +68,7 @@ async def migrate_collection(*, collection: Any, batch_size: int, dry_run: bool)
 
 
 async def run(*, dry_run: bool, batch_size: int, backup_root: Path | None) -> None:
+    load_runtime_env()
     settings = get_settings()
     client = AsyncIOMotorClient(settings.MONGO_URI)
     db = client.get_default_database()
