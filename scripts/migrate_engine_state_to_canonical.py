@@ -25,9 +25,13 @@ from app.services.engine_state_migration import canonicalize_game_document, clas
 
 
 def load_runtime_env() -> None:
-    for candidate in (ROOT / ".env", Path("/etc/default/ks-backend")):
-        if candidate.exists():
-            load_dotenv(candidate, override=False)
+    local_env = ROOT / ".env"
+    if local_env.exists():
+        load_dotenv(local_env, override=False)
+
+    service_env = Path("/etc/default/ks-backend")
+    if service_env.exists():
+        load_dotenv(service_env, override=True)
 
 
 async def backup_collection(*, collection: Any, backup_path: Path) -> int:
