@@ -209,9 +209,13 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
     # simulate archival pipeline handoff for transcript/recent checks
     games.docs.clear()
 
+    participant_transcript = await service.get_game_transcript(game_id=str(gid), user_id="u1")
+    assert participant_transcript.viewer_color == "white"
+
     spectator_transcript = await service.get_game_transcript(game_id=str(gid), user_id="u9")
     assert spectator_transcript.game_id == str(gid)
     assert spectator_transcript.rule_variant == "berkeley_any"
+    assert spectator_transcript.viewer_color is None
 
     recent = await service.get_recent_completed_games(limit=10)
     assert len(recent.games) == 1

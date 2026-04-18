@@ -251,6 +251,7 @@ class GameTranscriptResponse(BaseModel):
 
     game_id: str
     rule_variant: RuleVariant
+    viewer_color: PlayerColor | None = None
     moves: list[TranscriptMoveItem]
 
 

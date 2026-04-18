@@ -369,6 +369,7 @@ def test_completed_game_moves_transcript_returns_expected_shape() -> None:
         return_value={
             "game_id": "664b2ca7f7f86cd799439011",
             "rule_variant": "berkeley_any",
+            "viewer_color": "white",
             "moves": [
                 {
                     "ply": 1,
@@ -395,6 +396,7 @@ def test_completed_game_moves_transcript_returns_expected_shape() -> None:
     assert transcript.status_code == 200
     body = transcript.json()
     assert body["game_id"] == "664b2ca7f7f86cd799439011"
+    assert body["viewer_color"] == "white"
     assert body["moves"][0]["replay_fen"] == {
         "full": "fen-full",
         "white": "fen-white",
