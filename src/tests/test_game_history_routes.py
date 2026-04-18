@@ -138,6 +138,7 @@ async def test_get_game_transcript_access_matrix_and_archive_fallback(game_docs)
     service = GameService(games, archives)
 
     participant = await service.get_game_transcript(game_id=str(active["_id"]), user_id="u1")
+    assert participant.viewer_color == "white"
     assert participant.moves[0].answer.main == "REGULAR_MOVE"
     assert participant.moves[0].replay_fen is not None
     assert participant.moves[0].replay_fen.full.startswith("rnbqkbnr")
@@ -148,6 +149,7 @@ async def test_get_game_transcript_access_matrix_and_archive_fallback(game_docs)
 
     completed_public = await service.get_game_transcript(game_id=str(archived["_id"]), user_id="u3")
     assert completed_public.game_id == str(archived["_id"])
+    assert completed_public.viewer_color is None
 
 
 @pytest.mark.asyncio
@@ -227,6 +229,7 @@ def app_with_history_service() -> tuple:
             return_value={
                 "game_id": "gid1",
                 "rule_variant": "berkeley_any",
+                "viewer_color": "white",
                 "moves": [
                     {
                         "ply": 1,
@@ -306,6 +309,7 @@ def test_history_routes_happy_path(app_with_history_service) -> None:
         recent = client.get("/api/game/recent")
 
     assert transcript.status_code == 200
+    assert transcript.json()["viewer_color"] == "white"
     assert transcript.json()["moves"][0]["answer"]["main"] == "REGULAR_MOVE"
     assert recent.status_code == 200
     assert len(recent.json()["games"]) == 1

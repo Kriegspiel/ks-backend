@@ -1657,6 +1657,7 @@ class GameService:
         if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
             raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access an active game transcript")
 
+        viewer_color = self._player_color_for_user(game=game, user_id=user_id)
         moves = self._history_moves(game.get("moves", []))
         replay_fens = self._build_replay_fens(moves)
         transcript_moves = [
@@ -1670,6 +1671,7 @@ class GameService:
         return GameTranscriptResponse(
             game_id=str(game["_id"]),
             rule_variant=game.get("rule_variant", "berkeley_any"),
+            viewer_color=viewer_color,
             moves=transcript_moves,
         )
 
