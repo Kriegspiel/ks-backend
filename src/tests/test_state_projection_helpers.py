@@ -8,6 +8,9 @@ from app.services import state_projection as projection
 def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_paths() -> None:
     assert projection._format_public_announcement("UNKNOWN", None) == ""
     assert projection._format_public_announcement("CAPTURE_DONE", "d4") == "Capture done at D4"
+    assert projection._format_public_announcement("CAPTURE_DONE", "d4", captured_piece_announcement="PAWN") == "Pawn captured at D4"
+    assert projection._next_turn_message(next_turn_pawn_tries=2, next_turn_has_pawn_capture=None) == "2 pawn tries"
+    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=True) == "Has pawn capture"
     assert projection._scoresheet_answer_texts(
         {
             "main_announcement": "REGULAR_MOVE",
@@ -85,6 +88,24 @@ def test_state_projection_scoresheet_reconstruction_and_normalization_cover_fall
         )
         is None
     )
+
+
+def test_state_projection_scoresheet_texts_include_rule_specific_announcements() -> None:
+    assert projection._scoresheet_answer_texts(
+        {
+            "main_announcement": "CAPTURE_DONE",
+            "capture_square": "d4",
+            "captured_piece_announcement": "PIECE",
+            "next_turn_has_pawn_capture": True,
+        }
+    ) == ["Piece captured at D4", "Has pawn capture"]
+
+    assert projection._scoresheet_answer_texts(
+        {
+            "main_announcement": "REGULAR_MOVE",
+            "next_turn_pawn_tries": 2,
+        }
+    ) == ["Move complete", "2 pawn tries"]
 
 
 def test_state_projection_possible_actions_and_referee_log_cover_remaining_public_branches() -> None:

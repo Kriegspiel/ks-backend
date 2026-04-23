@@ -11,6 +11,7 @@ _ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS = {
     'HAS_ANY',
     'NO_ANY',
     'ILLEGAL_MOVE',
+    'NONSENSE',
 }
 
 _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS = {
@@ -29,6 +30,7 @@ _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS = {
 
 _PUBLIC_ANNOUNCEMENT_TEXT = {
     'ILLEGAL_MOVE': 'Illegal move',
+    'NONSENSE': 'Nonsense',
     'REGULAR_MOVE': 'Move complete',
     'CAPTURE_DONE': 'Capture done',
     'HAS_ANY': 'Has pawn captures',
@@ -83,13 +85,34 @@ def compute_possible_actions(*, engine: Any, game_state: str, viewer_color: Play
     return actions
 
 
-def _format_public_announcement(code: str, capture_square: str | None) -> str:
+def _format_public_announcement(
+    code: str,
+    capture_square: str | None,
+    *,
+    captured_piece_announcement: str | None = None,
+) -> str:
     text = _PUBLIC_ANNOUNCEMENT_TEXT.get(code)
     if not text:
         return ''
     if code == 'CAPTURE_DONE' and capture_square:
+        if captured_piece_announcement == 'PAWN':
+            return f'Pawn captured at {capture_square.upper()}'
+        if captured_piece_announcement == 'PIECE':
+            return f'Piece captured at {capture_square.upper()}'
         return f'{text} at {capture_square.upper()}'
     return text
+
+
+def _next_turn_message(*, next_turn_pawn_tries: Any, next_turn_has_pawn_capture: Any) -> str:
+    if isinstance(next_turn_pawn_tries, int):
+        if next_turn_pawn_tries <= 0:
+            return 'No pawn captures'
+        if next_turn_pawn_tries == 1:
+            return '1 pawn try'
+        return f'{next_turn_pawn_tries} pawn tries'
+    if next_turn_has_pawn_capture is True:
+        return 'Has pawn capture'
+    return ''
 
 
 def _move_prompt_label(move: dict[str, Any], *, perspective: Literal['own', 'opponent']) -> str:
@@ -102,7 +125,7 @@ def _move_prompt_label(move: dict[str, Any], *, perspective: Literal['own', 'opp
 def _announcement_kind(question_type: str, main: str | None) -> str:
     if question_type == 'ASK_ANY':
         return 'ask_any'
-    if main == 'ILLEGAL_MOVE':
+    if main in {'ILLEGAL_MOVE', 'NONSENSE'}:
         return 'illegal_move'
     if main == 'CAPTURE_DONE':
         return 'capture'
@@ -114,9 +137,23 @@ def _move_messages(move: dict[str, Any]) -> list[str]:
     announcement = move.get('announcement')
     special_announcement = move.get('special_announcement')
     capture_square = move.get('capture_square')
+    captured_piece_announcement = move.get('captured_piece_announcement')
 
     if announcement in _ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS:
-        out.append(_format_public_announcement(announcement, capture_square))
+        out.append(
+            _format_public_announcement(
+                announcement,
+                capture_square,
+                captured_piece_announcement=captured_piece_announcement,
+            )
+        )
+
+    next_turn_message = _next_turn_message(
+        next_turn_pawn_tries=move.get('next_turn_pawn_tries'),
+        next_turn_has_pawn_capture=move.get('next_turn_has_pawn_capture'),
+    )
+    if next_turn_message:
+        out.append(next_turn_message)
 
     if special_announcement in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
         out.append(_format_public_announcement(special_announcement, None))
@@ -159,6 +196,20 @@ def build_referee_log(moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     'announcement': announcement,
                     'special_announcement': None,
                     'capture_square': move.get('capture_square'),
+                }
+            )
+
+        next_turn_message = _next_turn_message(
+            next_turn_pawn_tries=move.get('next_turn_pawn_tries'),
+            next_turn_has_pawn_capture=move.get('next_turn_has_pawn_capture'),
+        )
+        if next_turn_message:
+            out.append(
+                {
+                    **base_item,
+                    'announcement': next_turn_message,
+                    'special_announcement': None,
+                    'capture_square': None,
                 }
             )
 
@@ -284,6 +335,9 @@ def reconstruct_scoresheets_from_moves(moves: list[dict[str, Any]]) -> dict[str,
                 'main_announcement': move.get('announcement'),
                 'special_announcement': move.get('special_announcement'),
                 'capture_square': move.get('capture_square'),
+                'captured_piece_announcement': move.get('captured_piece_announcement'),
+                'next_turn_pawn_tries': move.get('next_turn_pawn_tries'),
+                'next_turn_has_pawn_capture': move.get('next_turn_has_pawn_capture'),
                 'checks': [],
                 'move_done': bool(move.get('move_done', False)),
             },
@@ -348,7 +402,19 @@ def _scoresheet_answer_texts(answer: dict[str, Any]) -> list[str]:
     texts: list[str] = []
     main = answer.get('main_announcement')
     if isinstance(main, str) and main in _ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS:
-        texts.append(_format_public_announcement(main, answer.get('capture_square')))
+        texts.append(
+            _format_public_announcement(
+                main,
+                answer.get('capture_square'),
+                captured_piece_announcement=answer.get('captured_piece_announcement'),
+            )
+        )
+    next_turn_message = _next_turn_message(
+        next_turn_pawn_tries=answer.get('next_turn_pawn_tries'),
+        next_turn_has_pawn_capture=answer.get('next_turn_has_pawn_capture'),
+    )
+    if next_turn_message:
+        texts.append(next_turn_message)
     special = answer.get('special_announcement')
     if isinstance(special, str) and special in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
         texts.append(_format_public_announcement(special, None))

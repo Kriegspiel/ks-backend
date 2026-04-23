@@ -27,7 +27,7 @@ wheels = [
 
 [[package]]
 name = "backend"
-version = "1.2.24"
+version = "1.2.25"
 source = { virtual = "." }
 dependencies = [
     { name = "bcrypt" },
@@ -63,7 +63,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=4.3.0" },
     { name = "fastapi", specifier = ">=0.115.14" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "kriegspiel", specifier = ">=1.2.6" },
+    { name = "kriegspiel", git = "https://github.com/Kriegspiel/ks-game.git?rev=ed9c297e94c15e58953043d72e07bfe7ab77fb7c" },
     { name = "motor", specifier = ">=3.6.0" },
     { name = "mypy", specifier = ">=1.16.1" },
     { name = "peewee", specifier = ">=3.18.1" },
@@ -520,14 +520,10 @@ wheels = [
 
 [[package]]
 name = "kriegspiel"
-version = "1.2.6"
-source = { registry = "https://pypi.org/simple" }
+version = "1.4.0"
+source = { git = "https://github.com/Kriegspiel/ks-game.git?rev=ed9c297e94c15e58953043d72e07bfe7ab77fb7c#ed9c297e94c15e58953043d72e07bfe7ab77fb7c" }
 dependencies = [
     { name = "python-chess" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ad/e6/c60a45510673b1ecd058422bc376741a4621bea7a82ddfa64a4eab2f4be5/kriegspiel-1.2.6.tar.gz", hash = "sha256:a65b7552009cd0670e7b87d3b6288f16778d2c4cd357eb40f215bb4fa64e9dca", size = 32633, upload-time = "2026-04-23T13:25:57.838Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/22/8f/d6847ce4908f2b879eb70de6d7592c038d667775fc66d6ce714e31bdb197/kriegspiel-1.2.6-py3-none-any.whl", hash = "sha256:fb1b2949121023bd60e2304cd75c681a3c95fb7f3007952e76fec0da472c2392", size = 20101, upload-time = "2026-04-23T13:25:56.513Z" },
 ]
 
 [[package]]

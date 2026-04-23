@@ -20,6 +20,15 @@ def test_bot_register_request_validates_supported_rule_variants_and_deduplicates
     )
     assert payload.supported_rule_variants == ["berkeley", "berkeley_any"]
 
+    extended = BotRegisterRequest(
+        username="randobot",
+        display_name="Random Bot",
+        owner_email="owner@example.com",
+        description="bot",
+        supported_rule_variants=["cincinnati", "wild16", "cincinnati"],
+    )
+    assert extended.supported_rule_variants == ["cincinnati", "wild16"]
+
     with pytest.raises(ValueError, match="Unsupported rule variant"):
         BotRegisterRequest(
             username="randobot",

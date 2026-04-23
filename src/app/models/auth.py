@@ -62,7 +62,7 @@ class BotRegisterRequest(BaseModel):
         normalized: list[str] = []
         for item in value:
             rule = item.strip()
-            if rule not in {"berkeley", "berkeley_any"}:
+            if rule not in {"berkeley", "berkeley_any", "cincinnati", "wild16"}:
                 raise ValueError("Unsupported rule variant")
             if rule not in normalized:
                 normalized.append(rule)

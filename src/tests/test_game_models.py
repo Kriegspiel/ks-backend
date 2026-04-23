@@ -92,6 +92,13 @@ def test_create_game_request_defaults() -> None:
     assert req.time_control == "rapid"
 
 
+@pytest.mark.parametrize("rule_variant", ["berkeley", "berkeley_any", "cincinnati", "wild16"])
+def test_create_game_request_accepts_supported_rule_variants(rule_variant: str) -> None:
+    req = CreateGameRequest(rule_variant=rule_variant)
+
+    assert req.rule_variant == rule_variant
+
+
 def test_create_game_request_validates_bot_fields() -> None:
     with pytest.raises(ValidationError, match="bot_id is required"):
         CreateGameRequest(opponent_type="bot")

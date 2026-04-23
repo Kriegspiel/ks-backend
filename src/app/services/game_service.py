@@ -422,6 +422,15 @@ class GameService:
         return isinstance(announcement, str) and announcement in NONSENSE_HISTORY_ANNOUNCEMENTS
 
     @classmethod
+    def _should_store_public_history_entry(cls, *, rule_variant: str, source: dict[str, Any]) -> bool:
+        if cls._is_nonsense_history_entry(source):
+            return False
+        announcement = source.get("announcement")
+        if rule_variant == "wild16" and announcement == "ILLEGAL_MOVE" and not bool(source.get("move_done", False)):
+            return False
+        return True
+
+    @classmethod
     def _history_moves(cls, moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [move for move in moves if not cls._is_nonsense_history_entry(move)]
 
@@ -776,7 +785,10 @@ class GameService:
             "answer": {
                 "main": move.get("announcement", ""),
                 "capture_square": move.get("capture_square"),
+                "captured_piece_announcement": move.get("captured_piece_announcement"),
                 "special": move.get("special_announcement"),
+                "next_turn_pawn_tries": move.get("next_turn_pawn_tries"),
+                "next_turn_has_pawn_capture": move.get("next_turn_has_pawn_capture"),
             },
             "move_done": bool(move.get("move_done", False)),
             "timestamp": move.get("timestamp"),
@@ -969,7 +981,7 @@ class GameService:
         if state:
             engine = deserialize_game_state(state)
         else:
-            engine = create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
+            engine = create_new_game(rule_variant=game.get("rule_variant", "berkeley_any"))
         self._repair_forced_pawn_capture_state(game=game, engine=engine)
         return engine
 
@@ -1075,7 +1087,7 @@ class GameService:
         profile = bot.get("bot_profile") or {}
         variants = profile.get("supported_rule_variants")
         if isinstance(variants, list) and variants:
-            return [str(item) for item in variants if str(item) in {"berkeley", "berkeley_any"}]
+            return [str(item) for item in variants if str(item) in {"berkeley", "berkeley_any", "cincinnati", "wild16"}]
         username = str(bot.get("username") or "").strip().lower()
         if username == "randobotany":
             return ["berkeley_any"]
@@ -1200,7 +1212,6 @@ class GameService:
             bot = await self._load_bot(request.bot_id or "")
             if request.rule_variant not in self._bot_supported_rule_variants(bot):
                 raise GameValidationError(code="BOT_RULE_VARIANT_UNSUPPORTED", message="Selected bot does not support that ruleset")
-            joiner_color: PlayerColor = "black" if color == "white" else "white"
             bot_player = self._player_embed(user_id=str(bot["_id"]), username=bot["username"], role="bot")
             if color == "white":
                 document["white"] = creator
@@ -1208,7 +1219,7 @@ class GameService:
             else:
                 document["white"] = bot_player
                 document["black"] = creator
-            engine = create_new_game(any_rule=request.rule_variant == "berkeley_any")
+            engine = create_new_game(rule_variant=request.rule_variant)
             document.update(
                 {
                     "state": "active",
@@ -1286,7 +1297,7 @@ class GameService:
             white = joiner
             black = creator
 
-        engine = create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
+        engine = create_new_game(rule_variant=game.get("rule_variant", "berkeley_any"))
         updated = await self._games.find_one_and_update(
             {"_id": game["_id"], "state": "waiting"},
             {
@@ -1463,6 +1474,9 @@ class GameService:
                 "announcement": outcome["announcement"],
                 "special_announcement": outcome["special_announcement"],
                 "capture_square": outcome["capture_square"],
+                "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+                "next_turn_pawn_tries": outcome.get("next_turn_pawn_tries"),
+                "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
                 "move_done": outcome["move_done"],
                 "timestamp": now,
                 "replay_fen": self._outcome_replay_fen(outcome),
@@ -1481,7 +1495,7 @@ class GameService:
             game["turn"] = outcome["turn"]
             game["time_control"] = advanced_time_control
             game["updated_at"] = now
-            if not self._is_nonsense_history_entry(outcome):
+            if self._should_store_public_history_entry(rule_variant=game.get("rule_variant", "berkeley_any"), source=outcome):
                 game.setdefault("moves", []).append(move_record)
             if outcome["move_done"]:
                 game["move_number"] = int(game.get("move_number", 1)) + 1
@@ -1518,6 +1532,9 @@ class GameService:
             "announcement": outcome["announcement"],
             "special_announcement": outcome["special_announcement"],
             "capture_square": outcome["capture_square"],
+            "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+            "next_turn_pawn_tries": outcome.get("next_turn_pawn_tries"),
+            "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
             "turn": game.get("turn"),
             "game_over": bool(game_over),
             "clock": clock_payload,
@@ -1559,6 +1576,9 @@ class GameService:
                 "announcement": outcome["announcement"],
                 "special_announcement": outcome["special_announcement"],
                 "capture_square": outcome["capture_square"],
+                "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+                "next_turn_pawn_tries": outcome.get("next_turn_pawn_tries"),
+                "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
                 "move_done": outcome["move_done"],
                 "timestamp": now,
                 "replay_fen": self._outcome_replay_fen(outcome),
@@ -1577,7 +1597,7 @@ class GameService:
             game["turn"] = outcome["turn"]
             game["time_control"] = advanced_time_control
             game["updated_at"] = now
-            if not self._is_nonsense_history_entry(outcome):
+            if self._should_store_public_history_entry(rule_variant=game.get("rule_variant", "berkeley_any"), source=outcome):
                 game.setdefault("moves", []).append(move_record)
             if timeout is not None:
                 self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
@@ -1599,7 +1619,7 @@ class GameService:
             game_id=game_id,
             user_id=user_id,
             side=color,
-            question_type="COMMON",
+            question_type="ASK_ANY",
             move_done=outcome["move_done"],
             game_over=bool(game_over),
         )
@@ -1608,6 +1628,9 @@ class GameService:
             "announcement": outcome["announcement"],
             "special_announcement": outcome["special_announcement"],
             "capture_square": outcome["capture_square"],
+            "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+            "next_turn_pawn_tries": outcome.get("next_turn_pawn_tries"),
+            "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
             "turn": game.get("turn"),
             "game_over": bool(game_over),
             "has_any": outcome["has_any"],

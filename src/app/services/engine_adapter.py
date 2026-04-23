@@ -3,8 +3,11 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import chess
+from kriegspiel import KriegspielGame
 from kriegspiel.berkeley import BerkeleyGame
+from kriegspiel.cincinnati import CincinnatiGame
 from kriegspiel.move import (
+    CapturedPieceAnnouncement,
     KriegspielAnswer,
     KriegspielMove,
     KriegspielScoresheet,
@@ -18,8 +21,11 @@ from kriegspiel.serialization import (
     deserialize_kriegspiel_scoresheet,
     serialize_berkeley_game,
 )
+from kriegspiel.wild16 import Wild16Game
 
 PlayerColor = Literal["white", "black"]
+RuleVariant = Literal["berkeley", "berkeley_any", "cincinnati", "wild16"]
+SUPPORTED_RULE_VARIANTS = frozenset({"berkeley", "berkeley_any", "cincinnati", "wild16"})
 
 PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION = 3
 SUPPORTED_CANONICAL_ENGINE_STATE_SCHEMA_VERSIONS = frozenset(
@@ -30,11 +36,23 @@ SUPPORTED_CANONICAL_ENGINE_STATE_SCHEMA_VERSIONS = frozenset(
 )
 
 
-def create_new_game(*, any_rule: bool = True) -> BerkeleyGame:
-    return BerkeleyGame(any_rule=any_rule)
+def create_new_game(*, any_rule: bool | None = None, rule_variant: RuleVariant | None = None) -> KriegspielGame:
+    if rule_variant is None:
+        resolved_any_rule = True if any_rule is None else any_rule
+        rule_variant = "berkeley_any" if resolved_any_rule else "berkeley"
+
+    if rule_variant == "berkeley":
+        return BerkeleyGame(ruleset="berkeley")
+    if rule_variant == "berkeley_any":
+        return BerkeleyGame(ruleset="berkeley_any")
+    if rule_variant == "cincinnati":
+        return CincinnatiGame()
+    if rule_variant == "wild16":
+        return Wild16Game()
+    raise ValueError(f"Unsupported rule variant: {rule_variant}")
 
 
-def project_visible_board(game: BerkeleyGame, color: PlayerColor) -> chess.Board:
+def project_visible_board(game: KriegspielGame, color: PlayerColor) -> chess.Board:
     board = game._board.copy(stack=False)  # noqa: SLF001
     player_color = chess.WHITE if color == "white" else chess.BLACK
     for square in chess.SQUARES:
@@ -44,17 +62,17 @@ def project_visible_board(game: BerkeleyGame, color: PlayerColor) -> chess.Board
     return board
 
 
-def visible_fen(game: BerkeleyGame, color: PlayerColor) -> str:
+def visible_fen(game: KriegspielGame, color: PlayerColor) -> str:
     board = project_visible_board(game, color)
     turn = "w" if game.turn == chess.WHITE else "b"
     return f"{board.board_fen()} {turn} - - 0 1"
 
 
-def full_fen(game: BerkeleyGame) -> str:
+def full_fen(game: KriegspielGame) -> str:
     return game._board.fen()  # noqa: SLF001
 
 
-def attempt_move(game: BerkeleyGame, move_uci: str) -> dict[str, Any]:
+def attempt_move(game: KriegspielGame, move_uci: str) -> dict[str, Any]:
     try:
         chess_move = chess.Move.from_uci(move_uci)
     except ValueError:
@@ -63,13 +81,16 @@ def attempt_move(game: BerkeleyGame, move_uci: str) -> dict[str, Any]:
             "announcement": "INVALID_UCI",
             "special_announcement": None,
             "capture_square": None,
+            "captured_piece_announcement": None,
+            "next_turn_pawn_tries": None,
+            "next_turn_has_pawn_capture": None,
         }
 
     answer = game.ask_for(KriegspielMove(QuestionAnnouncement.COMMON, chess_move))
     return _answer_payload(game, answer)
 
 
-def ask_any(game: BerkeleyGame) -> dict[str, Any]:
+def ask_any(game: KriegspielGame) -> dict[str, Any]:
     answer = game.ask_for(KriegspielMove(QuestionAnnouncement.ASK_ANY))
     payload = _answer_payload(game, answer)
     payload["has_any"] = payload["announcement"] == "HAS_ANY"
@@ -101,11 +122,11 @@ def deserialize_scoresheet(payload: dict[str, Any] | None, *, fallback_color: Pl
     return scoresheet
 
 
-def serialize_game_state(game: BerkeleyGame) -> dict[str, Any]:
+def serialize_game_state(game: KriegspielGame) -> dict[str, Any]:
     return serialize_berkeley_game(game)
 
 
-def deserialize_game_state(payload: dict[str, Any]) -> BerkeleyGame:
+def deserialize_game_state(payload: dict[str, Any]) -> KriegspielGame:
     if is_supported_canonical_engine_state(payload):
         return deserialize_berkeley_game(payload)
     return _deserialize_legacy_game_state(payload)
@@ -155,7 +176,7 @@ def _is_canonical_engine_state(payload: dict[str, Any]) -> bool:
 
 
 def _serialize_legacy_game_state(
-    game: BerkeleyGame,
+    game: KriegspielGame,
     *,
     schema_version: int = 2,
     include_scoresheets: bool = True,
@@ -171,6 +192,7 @@ def _serialize_legacy_game_state(
 
     payload: dict[str, Any] = {
         "schema_version": schema_version,
+        "ruleset_id": game.ruleset_id,
         "any_rule": game._any_rule,  # noqa: SLF001
         "must_use_pawns": game.must_use_pawns,
         "game_over": game.game_over,
@@ -184,9 +206,12 @@ def _serialize_legacy_game_state(
     return payload
 
 
-def _deserialize_legacy_game_state(payload: dict[str, Any]) -> BerkeleyGame:
-    any_rule = bool(payload.get("any_rule", True))
-    game = BerkeleyGame(any_rule=any_rule)
+def _deserialize_legacy_game_state(payload: dict[str, Any]) -> KriegspielGame:
+    ruleset_id = payload.get("ruleset_id")
+    if not isinstance(ruleset_id, str):
+        any_rule = bool(payload.get("any_rule", True))
+        ruleset_id = "berkeley_any" if any_rule else "berkeley"
+    game = create_new_game(rule_variant=ruleset_id)
 
     board = chess.Board()
     for move_uci in payload.get("move_stack", []):
@@ -206,7 +231,7 @@ def _deserialize_legacy_game_state(payload: dict[str, Any]) -> BerkeleyGame:
     return game
 
 
-def _repair_possible_to_ask(game: BerkeleyGame) -> None:
+def _repair_possible_to_ask(game: KriegspielGame) -> None:
     current = list(getattr(game, "_possible_to_ask", []))  # noqa: SLF001
     if current or getattr(game, "_game_over", False):  # noqa: SLF001
         return
@@ -231,8 +256,9 @@ def _deserialize_ks_move(item: dict[str, Any]) -> KriegspielMove:
     return KriegspielMove(question, chess.Move.from_uci(move_uci))
 
 
-def _answer_payload(game: BerkeleyGame, answer: Any) -> dict[str, Any]:
+def _answer_payload(game: KriegspielGame, answer: Any) -> dict[str, Any]:
     capture_square = chess.square_name(answer.capture_at_square) if answer.capture_at_square is not None else None
+    captured_piece = answer.captured_piece_announcement
     special = answer.special_announcement
 
     return {
@@ -240,6 +266,11 @@ def _answer_payload(game: BerkeleyGame, answer: Any) -> dict[str, Any]:
         "announcement": answer.main_announcement.name,
         "special_announcement": None if special is None or special == SpecialCaseAnnouncement.NONE else special.name,
         "capture_square": capture_square,
+        "captured_piece_announcement": (
+            captured_piece.name if isinstance(captured_piece, CapturedPieceAnnouncement) else None
+        ),
+        "next_turn_pawn_tries": answer.next_turn_pawn_tries,
+        "next_turn_has_pawn_capture": answer.next_turn_has_pawn_capture,
         "full_fen": game._board.fen(),  # noqa: SLF001
         "white_fen": visible_fen(game, "white"),
         "black_fen": visible_fen(game, "black"),
@@ -320,6 +351,9 @@ def _serialize_answer(answer: Any) -> dict[str, Any]:
             "main_announcement": "ILLEGAL_MOVE",
             "special_announcement": None,
             "capture_square": None,
+            "captured_piece_announcement": None,
+            "next_turn_pawn_tries": None,
+            "next_turn_has_pawn_capture": None,
             "checks": [],
             "move_done": False,
         }
@@ -334,6 +368,11 @@ def _serialize_answer(answer: Any) -> dict[str, Any]:
         "main_announcement": answer.main_announcement.name,
         "special_announcement": None if special in {None, SpecialCaseAnnouncement.NONE} else special.name,
         "capture_square": chess.square_name(answer.capture_at_square) if answer.capture_at_square is not None else None,
+        "captured_piece_announcement": (
+            answer.captured_piece_announcement.name if answer.captured_piece_announcement is not None else None
+        ),
+        "next_turn_pawn_tries": answer.next_turn_pawn_tries,
+        "next_turn_has_pawn_capture": answer.next_turn_has_pawn_capture,
         "checks": checks,
         "move_done": bool(answer.move_done),
     }
@@ -346,6 +385,15 @@ def _deserialize_answer(payload: Any) -> KriegspielAnswer:
     capture_square = data.get("capture_square")
     if main == MainAnnouncement.CAPTURE_DONE and isinstance(capture_square, str):
         kwargs["capture_at_square"] = chess.parse_square(capture_square)
+    captured_piece = data.get("captured_piece_announcement")
+    if isinstance(captured_piece, str):
+        kwargs["captured_piece_announcement"] = CapturedPieceAnnouncement[captured_piece]
+    next_turn_pawn_tries = data.get("next_turn_pawn_tries")
+    if isinstance(next_turn_pawn_tries, int):
+        kwargs["next_turn_pawn_tries"] = next_turn_pawn_tries
+    next_turn_has_pawn_capture = data.get("next_turn_has_pawn_capture")
+    if isinstance(next_turn_has_pawn_capture, bool):
+        kwargs["next_turn_has_pawn_capture"] = next_turn_has_pawn_capture
 
     special_name = data.get("special_announcement")
     if isinstance(special_name, str):

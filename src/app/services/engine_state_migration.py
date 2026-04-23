@@ -177,7 +177,7 @@ def _load_engine_for_migration(game: dict[str, Any]) -> Any:
     state = game.get("engine_state")
     if isinstance(state, dict):
         return deserialize_game_state(state)
-    return create_new_game(any_rule=game.get("rule_variant", "berkeley_any") == "berkeley_any")
+    return create_new_game(rule_variant=game.get("rule_variant", "berkeley_any"))
 
 
 def _hydrate_scoresheets_from_moves_if_needed(*, game: dict[str, Any], engine: Any, original_engine_state: Any) -> None:

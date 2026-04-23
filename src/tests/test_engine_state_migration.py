@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from kriegspiel import __version__ as KRIEGSPIEL_LIBRARY_VERSION
 from kriegspiel.serialization import SERIALIZATION_SCHEMA_VERSION as CANONICAL_ENGINE_STATE_SCHEMA_VERSION
 from kriegspiel.serialization import MalformedDataError
 
@@ -81,7 +82,7 @@ def test_canonicalize_game_document_migrates_previous_canonical_schema() -> None
     assert classify_engine_state(previous) == "canonical:3"
     assert canonical is not None
     assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
-    assert canonical["library_version"] == "1.2.6"
+    assert canonical["library_version"] == KRIEGSPIEL_LIBRARY_VERSION
     assert canonical["game_state"]["ruleset_id"] == "berkeley_any"
     assert canonical["game_state"]["move_stack"] == ["e2e4"]
 
@@ -106,7 +107,7 @@ def test_build_engine_state_migration_update_patches_previous_canonical_schema()
 
     assert update == {
         "engine_state.schema_version": CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
-        "engine_state.library_version": "1.2.6",
+        "engine_state.library_version": KRIEGSPIEL_LIBRARY_VERSION,
         "engine_state.game_state.ruleset_id": "berkeley",
     }
 
