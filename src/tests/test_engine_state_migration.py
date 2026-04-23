@@ -6,7 +6,10 @@ from kriegspiel.serialization import SERIALIZATION_SCHEMA_VERSION as CANONICAL_E
 from kriegspiel.serialization import MalformedDataError
 
 from app.services.engine_adapter import _serialize_legacy_game_state, attempt_move, create_new_game, serialize_game_state
-from app.services.engine_adapter import PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+from app.services.engine_adapter import (
+    INTERMEDIATE_CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+    PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+)
 from app.services.engine_state_migration import (
     build_engine_state_migration_update,
     canonicalize_game_document,
@@ -97,6 +100,23 @@ def test_canonicalize_game_document_preserves_berkeley_without_any_rule_from_pre
     assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
     assert canonical["game_state"]["ruleset_id"] == "berkeley"
     assert canonical["game_state"]["any_rule"] is False
+
+
+def test_canonicalize_game_document_migrates_intermediate_canonical_schema() -> None:
+    game = create_new_game(any_rule=True)
+    attempt_move(game, "e2e4")
+
+    intermediate = serialize_game_state(game)
+    intermediate["schema_version"] = INTERMEDIATE_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    intermediate["library_version"] = "1.2.6"
+
+    canonical = canonicalize_game_document({"engine_state": intermediate, "moves": [], "rule_variant": "berkeley_any"})
+
+    assert canonical is not None
+    assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    assert canonical["library_version"] == KRIEGSPIEL_LIBRARY_VERSION
+    assert canonical["game_state"]["ruleset_id"] == "berkeley_any"
+    assert canonical["game_state"]["move_stack"] == ["e2e4"]
 
 
 def test_build_engine_state_migration_update_patches_previous_canonical_schema() -> None:

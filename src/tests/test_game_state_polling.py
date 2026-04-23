@@ -13,7 +13,12 @@ from app.dependencies import get_current_user
 from app.main import create_app
 from app.models.user import UserModel
 from app.routers.game import get_game_service
-from app.services.engine_adapter import _serialize_legacy_game_state, create_new_game, serialize_game_state
+from app.services.engine_adapter import (
+    INTERMEDIATE_CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+    _serialize_legacy_game_state,
+    create_new_game,
+    serialize_game_state,
+)
 from app.services.engine_adapter import ask_any, attempt_move
 from app.services.game_service import GameForbiddenError, GameService
 from app.services.state_projection import build_referee_log, build_referee_turns
@@ -225,6 +230,21 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
     assert black_state.referee_log[1].announcement == "Ask any pawn captures — Has pawn captures"
     assert [turn.model_dump() for turn in white_state.referee_turns] == [{"turn": 1, "white": [{"kind": "move", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Move complete", "messages": ["Move complete"], "move_uci": "e2e4", "question_type": "COMMON"}], "black": [{"kind": "ask_any", "actor": "opponent", "prompt": "Opponent asked any pawn captures", "message": "Opponent asked any pawn captures — Has pawn captures", "messages": ["Has pawn captures"], "move_uci": None, "question_type": "ASK_ANY"}]}]
     assert [turn.model_dump() for turn in black_state.referee_turns] == [{"turn": 1, "white": [{"kind": "move", "actor": "opponent", "prompt": "Opponent move", "message": "Opponent move — Move complete", "messages": ["Move complete"], "move_uci": None, "question_type": "COMMON"}], "black": [{"kind": "ask_any", "actor": "self", "prompt": "Ask any pawn captures", "message": "Ask any pawn captures — Has pawn captures", "messages": ["Has pawn captures"], "move_uci": None, "question_type": "ASK_ANY"}]}]
+
+
+@pytest.mark.asyncio
+async def test_get_game_state_accepts_intermediate_canonical_engine_state(active_game_doc: dict) -> None:
+    games = FakeGamesCollection()
+    active_game_doc["engine_state"]["schema_version"] = INTERMEDIATE_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    active_game_doc["engine_state"]["library_version"] = "1.2.6"
+    games.docs.append(active_game_doc)
+    service = GameService(games)
+
+    state = await service.get_game_state(game_id=str(active_game_doc["_id"]), user_id="u1")
+
+    assert state.state == "active"
+    assert state.possible_actions == ["move", "ask_any"]
+    assert "e2e4" in state.allowed_moves
 
 
 @pytest.mark.asyncio
