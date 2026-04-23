@@ -13,6 +13,7 @@ from kriegspiel.move import (
 
 from app.services.engine_adapter import (
     CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+    INTERMEDIATE_CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
     PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
     _deserialize_answer,
     _deserialize_color,
@@ -107,6 +108,22 @@ def test_deserialize_game_state_accepts_previous_canonical_schema() -> None:
     assert is_current_canonical_engine_state(payload) is False
     assert restored._board.fen() == game._board.fen()  # noqa: SLF001
     assert restored.ruleset_id == "berkeley"
+
+
+def test_deserialize_game_state_accepts_intermediate_canonical_schema() -> None:
+    game = create_new_game(any_rule=True)
+    attempt_move(game, "e2e4")
+
+    payload = serialize_game_state(game)
+    payload["schema_version"] = INTERMEDIATE_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    payload["library_version"] = "1.2.6"
+
+    restored = deserialize_game_state(payload)
+
+    assert is_supported_canonical_engine_state(payload) is True
+    assert is_current_canonical_engine_state(payload) is False
+    assert restored._board.fen() == game._board.fen()  # noqa: SLF001
+    assert restored.ruleset_id == "berkeley_any"
 
 
 def test_deserialize_repairs_empty_possible_to_ask_when_pawn_captures_required() -> None:
