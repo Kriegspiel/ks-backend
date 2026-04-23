@@ -6,7 +6,11 @@ from kriegspiel.serialization import MalformedDataError
 
 from app.services.engine_adapter import _serialize_legacy_game_state, attempt_move, create_new_game, serialize_game_state
 from app.services.engine_adapter import PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
-from app.services.engine_state_migration import canonicalize_game_document, classify_engine_state
+from app.services.engine_state_migration import (
+    build_engine_state_migration_update,
+    canonicalize_game_document,
+    classify_engine_state,
+)
 
 
 def _previous_canonical_payload(game):
@@ -92,6 +96,19 @@ def test_canonicalize_game_document_preserves_berkeley_without_any_rule_from_pre
     assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
     assert canonical["game_state"]["ruleset_id"] == "berkeley"
     assert canonical["game_state"]["any_rule"] is False
+
+
+def test_build_engine_state_migration_update_patches_previous_canonical_schema() -> None:
+    game = create_new_game(any_rule=False)
+    previous = _previous_canonical_payload(game)
+
+    update = build_engine_state_migration_update({"engine_state": previous, "moves": [], "rule_variant": "berkeley"})
+
+    assert update == {
+        "engine_state.schema_version": CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+        "engine_state.library_version": "1.2.6",
+        "engine_state.game_state.ruleset_id": "berkeley",
+    }
 
 
 def test_canonicalize_game_document_rejects_previous_canonical_board_mismatch() -> None:

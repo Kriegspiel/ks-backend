@@ -45,6 +45,37 @@ def canonicalize_game_document(game: dict[str, Any]) -> dict[str, Any] | None:
     return canonical
 
 
+def build_engine_state_migration_update(game: dict[str, Any]) -> dict[str, Any] | None:
+    current = game.get("engine_state")
+    if is_current_canonical_engine_state(current):
+        return None
+
+    patch = _previous_canonical_engine_state_patch(current)
+    if patch is not None:
+        return patch
+
+    canonical = canonicalize_game_document(game)
+    if canonical is None:
+        return None
+    return {"engine_state": canonical}
+
+
+def _previous_canonical_engine_state_patch(payload: Any) -> dict[str, Any] | None:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+        or not isinstance(payload.get("game_state"), dict)
+    ):
+        return None
+
+    any_rule = bool(payload["game_state"].get("any_rule", True))
+    return {
+        "engine_state.schema_version": CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+        "engine_state.library_version": KRIEGSPIEL_LIBRARY_VERSION,
+        "engine_state.game_state.ruleset_id": "berkeley_any" if any_rule else "berkeley",
+    }
+
+
 def _upgrade_previous_canonical_engine_state(payload: Any) -> dict[str, Any] | None:
     if (
         not isinstance(payload, dict)

@@ -34,7 +34,7 @@ load_runtime_env()
 
 from app.config import get_settings  # noqa: E402
 from app.services.engine_adapter import CANONICAL_ENGINE_STATE_SCHEMA_VERSION  # noqa: E402
-from app.services.engine_state_migration import canonicalize_game_document, classify_engine_state  # noqa: E402
+from app.services.engine_state_migration import build_engine_state_migration_update, classify_engine_state  # noqa: E402
 
 
 async def backup_collection(*, collection: Any, backup_path: Path) -> int:
@@ -57,13 +57,13 @@ async def migrate_collection(*, collection: Any, batch_size: int, dry_run: bool)
     cursor = collection.find({}, {"engine_state": 1, "moves": 1, "rule_variant": 1})
     async for doc in cursor:
         shape = classify_engine_state(doc.get("engine_state"))
-        canonical = canonicalize_game_document(doc)
-        if canonical is None:
+        update = build_engine_state_migration_update(doc)
+        if update is None:
             skipped += 1
             continue
         migrated += 1
         by_shape[shape] += 1
-        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": {"engine_state": canonical}}))
+        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": update}))
         if not dry_run and len(ops) >= batch_size:
             await collection.bulk_write(ops, ordered=False)
             ops.clear()
