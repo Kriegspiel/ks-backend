@@ -21,6 +21,14 @@ from kriegspiel.serialization import (
 
 PlayerColor = Literal["white", "black"]
 
+PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION = 3
+SUPPORTED_CANONICAL_ENGINE_STATE_SCHEMA_VERSIONS = frozenset(
+    {
+        PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+        CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+    }
+)
+
 
 def create_new_game(*, any_rule: bool = True) -> BerkeleyGame:
     return BerkeleyGame(any_rule=any_rule)
@@ -98,7 +106,7 @@ def serialize_game_state(game: BerkeleyGame) -> dict[str, Any]:
 
 
 def deserialize_game_state(payload: dict[str, Any]) -> BerkeleyGame:
-    if _is_canonical_engine_state(payload):
+    if is_supported_canonical_engine_state(payload):
         return deserialize_berkeley_game(payload)
     return _deserialize_legacy_game_state(payload)
 
@@ -107,7 +115,7 @@ def extract_stored_scoresheets(payload: dict[str, Any] | None) -> dict[str, dict
     if not isinstance(payload, dict):
         return None
 
-    if _is_canonical_engine_state(payload):
+    if is_supported_canonical_engine_state(payload):
         game_state = payload.get("game_state")
         if not isinstance(game_state, dict):
             return None
@@ -127,8 +135,23 @@ def extract_stored_scoresheets(payload: dict[str, Any] | None) -> dict[str, dict
     return None
 
 
+def is_current_canonical_engine_state(payload: Any) -> bool:
+    return _has_canonical_engine_state_shape(payload) and payload.get("schema_version") == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+
+
+def is_supported_canonical_engine_state(payload: Any) -> bool:
+    return (
+        _has_canonical_engine_state_shape(payload)
+        and payload.get("schema_version") in SUPPORTED_CANONICAL_ENGINE_STATE_SCHEMA_VERSIONS
+    )
+
+
+def _has_canonical_engine_state_shape(payload: Any) -> bool:
+    return isinstance(payload, dict) and isinstance(payload.get("game_state"), dict)
+
+
 def _is_canonical_engine_state(payload: dict[str, Any]) -> bool:
-    return isinstance(payload.get("game_state"), dict) and payload.get("schema_version") == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    return is_supported_canonical_engine_state(payload)
 
 
 def _serialize_legacy_game_state(
@@ -192,7 +215,9 @@ def _repair_possible_to_ask(game: BerkeleyGame) -> None:
     if not getattr(game, "_must_use_pawns", False):  # noqa: SLF001
         return
 
-    pawn_capture_factory = getattr(game, "_generate_possible_pawn_captures", None) or getattr(game, "_generate_posible_pawn_captures", None)
+    pawn_capture_factory = getattr(game, "_generate_possible_pawn_captures", None) or getattr(
+        game, "_generate_posible_pawn_captures", None
+    )
     if pawn_capture_factory is None:
         raise AttributeError("BerkeleyGame pawn-capture generator is unavailable")
     game._possible_to_ask = list(pawn_capture_factory())  # noqa: SLF001

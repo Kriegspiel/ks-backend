@@ -32,8 +32,9 @@ def load_runtime_env() -> None:
 
 load_runtime_env()
 
-from app.config import get_settings
-from app.services.engine_state_migration import canonicalize_game_document, classify_engine_state
+from app.config import get_settings  # noqa: E402
+from app.services.engine_adapter import CANONICAL_ENGINE_STATE_SCHEMA_VERSION  # noqa: E402
+from app.services.engine_state_migration import build_engine_state_migration_update, classify_engine_state  # noqa: E402
 
 
 async def backup_collection(*, collection: Any, backup_path: Path) -> int:
@@ -56,13 +57,13 @@ async def migrate_collection(*, collection: Any, batch_size: int, dry_run: bool)
     cursor = collection.find({}, {"engine_state": 1, "moves": 1, "rule_variant": 1})
     async for doc in cursor:
         shape = classify_engine_state(doc.get("engine_state"))
-        canonical = canonicalize_game_document(doc)
-        if canonical is None:
+        update = build_engine_state_migration_update(doc)
+        if update is None:
             skipped += 1
             continue
         migrated += 1
         by_shape[shape] += 1
-        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": {"engine_state": canonical}}))
+        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": update}))
         if not dry_run and len(ops) >= batch_size:
             await collection.bulk_write(ops, ordered=False)
             ops.clear()
@@ -95,6 +96,7 @@ async def run(*, dry_run: bool, batch_size: int, backup_root: Path | None) -> No
     print(
         {
             "dry_run": dry_run,
+            "target_schema_version": CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
             "games": games_result,
             "game_archives": archives_result,
         }
@@ -103,7 +105,9 @@ async def run(*, dry_run: bool, batch_size: int, backup_root: Path | None) -> No
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Migrate stored game engine_state payloads to canonical ks-game serialization.")
+    parser = argparse.ArgumentParser(
+        description="Migrate stored game engine_state payloads to the current ks-game serialization."
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--backup-root", type=Path, default=None)
