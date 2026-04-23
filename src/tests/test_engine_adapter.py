@@ -4,6 +4,8 @@ import pytest
 from kriegspiel.move import KriegspielAnswer, KriegspielMove, MainAnnouncement, QuestionAnnouncement, SpecialCaseAnnouncement
 
 from app.services.engine_adapter import (
+    CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+    PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
     _deserialize_answer,
     _deserialize_color,
     _deserialize_question,
@@ -18,10 +20,20 @@ from app.services.engine_adapter import (
     create_new_game,
     deserialize_game_state,
     extract_stored_scoresheets,
+    is_current_canonical_engine_state,
+    is_supported_canonical_engine_state,
     project_visible_board,
     serialize_scoresheet,
     serialize_game_state,
 )
+
+
+def _previous_canonical_payload(game):
+    payload = serialize_game_state(game)
+    payload["schema_version"] = PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    payload["library_version"] = "1.2.3"
+    payload["game_state"].pop("ruleset_id", None)
+    return payload
 
 
 def test_create_new_game_and_legal_move_succeeds() -> None:
@@ -73,6 +85,20 @@ def test_serialize_deserialize_round_trip_preserves_state() -> None:
     assert restored.turn == game.turn
     assert restored.must_use_pawns == game.must_use_pawns
     assert [m.uci() for m in restored._board.move_stack] == [m.uci() for m in game._board.move_stack]  # noqa: SLF001
+
+
+def test_deserialize_game_state_accepts_previous_canonical_schema() -> None:
+    game = create_new_game(any_rule=False)
+    attempt_move(game, "e2e4")
+
+    payload = _previous_canonical_payload(game)
+    restored = deserialize_game_state(payload)
+
+    assert payload["schema_version"] == 3
+    assert is_supported_canonical_engine_state(payload) is True
+    assert is_current_canonical_engine_state(payload) is False
+    assert restored._board.fen() == game._board.fen()  # noqa: SLF001
+    assert restored.ruleset_id == "berkeley"
 
 
 def test_deserialize_repairs_empty_possible_to_ask_when_pawn_captures_required() -> None:
@@ -160,15 +186,20 @@ def test_extract_stored_scoresheets_supports_canonical_and_legacy_payloads() -> 
 
     canonical = serialize_game_state(game)
     legacy = _serialize_legacy_game_state(game)
+    previous_canonical = _previous_canonical_payload(game)
 
     canonical_scoresheets = extract_stored_scoresheets(canonical)
     legacy_scoresheets = extract_stored_scoresheets(legacy)
+    previous_canonical_scoresheets = extract_stored_scoresheets(previous_canonical)
 
+    assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
     assert canonical_scoresheets is not None
     assert canonical_scoresheets["white"]["moves_own"]
     assert canonical_scoresheets["black"]["moves_opponent"]
     assert legacy_scoresheets is not None
     assert legacy_scoresheets["white"]["moves_own"]
+    assert previous_canonical_scoresheets is not None
+    assert previous_canonical_scoresheets["white"]["moves_own"]
 
 
 def test_engine_adapter_private_serializers_cover_fallback_shapes() -> None:

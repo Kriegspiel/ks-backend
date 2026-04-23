@@ -5,9 +5,14 @@ from typing import Any
 import chess
 from kriegspiel.move import KriegspielAnswer, KriegspielMove, KriegspielScoresheet, MainAnnouncement, QuestionAnnouncement
 from kriegspiel.serialization import MalformedDataError
-from kriegspiel.serialization import SERIALIZATION_SCHEMA_VERSION as CANONICAL_ENGINE_STATE_SCHEMA_VERSION
 
-from app.services.engine_adapter import create_new_game, deserialize_game_state, deserialize_scoresheet, serialize_game_state
+from app.services.engine_adapter import (
+    create_new_game,
+    deserialize_game_state,
+    deserialize_scoresheet,
+    is_current_canonical_engine_state,
+    serialize_game_state,
+)
 from app.services.state_projection import reconstruct_scoresheets_from_moves
 
 
@@ -19,14 +24,6 @@ def classify_engine_state(payload: Any) -> str:
     if isinstance(payload, dict):
         return f"legacy:{payload.get('schema_version', 'unknown')}"
     return type(payload).__name__
-
-
-def is_current_canonical_engine_state(payload: Any) -> bool:
-    return (
-        isinstance(payload, dict)
-        and isinstance(payload.get("game_state"), dict)
-        and payload.get("schema_version") == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
-    )
 
 
 def canonicalize_game_document(game: dict[str, Any]) -> dict[str, Any] | None:

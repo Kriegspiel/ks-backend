@@ -32,8 +32,9 @@ def load_runtime_env() -> None:
 
 load_runtime_env()
 
-from app.config import get_settings
-from app.services.engine_state_migration import canonicalize_game_document, classify_engine_state
+from app.config import get_settings  # noqa: E402
+from app.services.engine_adapter import CANONICAL_ENGINE_STATE_SCHEMA_VERSION  # noqa: E402
+from app.services.engine_state_migration import canonicalize_game_document, classify_engine_state  # noqa: E402
 
 
 async def backup_collection(*, collection: Any, backup_path: Path) -> int:
@@ -95,6 +96,7 @@ async def run(*, dry_run: bool, batch_size: int, backup_root: Path | None) -> No
     print(
         {
             "dry_run": dry_run,
+            "target_schema_version": CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
             "games": games_result,
             "game_archives": archives_result,
         }
@@ -103,7 +105,9 @@ async def run(*, dry_run: bool, batch_size: int, backup_root: Path | None) -> No
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Migrate stored game engine_state payloads to canonical ks-game serialization.")
+    parser = argparse.ArgumentParser(
+        description="Migrate stored game engine_state payloads to the current ks-game serialization."
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--backup-root", type=Path, default=None)

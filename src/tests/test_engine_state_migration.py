@@ -3,7 +3,16 @@ from __future__ import annotations
 from kriegspiel.serialization import SERIALIZATION_SCHEMA_VERSION as CANONICAL_ENGINE_STATE_SCHEMA_VERSION
 
 from app.services.engine_adapter import _serialize_legacy_game_state, attempt_move, create_new_game, serialize_game_state
-from app.services.engine_state_migration import canonicalize_game_document
+from app.services.engine_adapter import PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+from app.services.engine_state_migration import canonicalize_game_document, classify_engine_state
+
+
+def _previous_canonical_payload(game):
+    payload = serialize_game_state(game)
+    payload["schema_version"] = PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    payload["library_version"] = "1.2.3"
+    payload["game_state"].pop("ruleset_id", None)
+    return payload
 
 
 def test_canonicalize_game_document_migrates_legacy_v2_payload() -> None:
@@ -53,6 +62,32 @@ def test_canonicalize_game_document_bootstraps_missing_engine_state() -> None:
 
     assert canonical is not None
     assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    assert canonical["game_state"]["any_rule"] is False
+
+
+def test_canonicalize_game_document_migrates_previous_canonical_schema() -> None:
+    game = create_new_game(any_rule=True)
+    attempt_move(game, "e2e4")
+
+    previous = _previous_canonical_payload(game)
+    canonical = canonicalize_game_document({"engine_state": previous, "moves": [], "rule_variant": "berkeley_any"})
+
+    assert classify_engine_state(previous) == "canonical:3"
+    assert canonical is not None
+    assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    assert canonical["game_state"]["ruleset_id"] == "berkeley_any"
+    assert canonical["game_state"]["move_stack"] == ["e2e4"]
+
+
+def test_canonicalize_game_document_preserves_berkeley_without_any_rule_from_previous_schema() -> None:
+    game = create_new_game(any_rule=False)
+
+    previous = _previous_canonical_payload(game)
+    canonical = canonicalize_game_document({"engine_state": previous, "moves": [], "rule_variant": "berkeley"})
+
+    assert canonical is not None
+    assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    assert canonical["game_state"]["ruleset_id"] == "berkeley"
     assert canonical["game_state"]["any_rule"] is False
 
 
