@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import pytest
 from kriegspiel.serialization import SERIALIZATION_SCHEMA_VERSION as CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+from kriegspiel.serialization import MalformedDataError
 
 from app.services.engine_adapter import _serialize_legacy_game_state, attempt_move, create_new_game, serialize_game_state
 from app.services.engine_adapter import PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION
@@ -75,6 +77,7 @@ def test_canonicalize_game_document_migrates_previous_canonical_schema() -> None
     assert classify_engine_state(previous) == "canonical:3"
     assert canonical is not None
     assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
+    assert canonical["library_version"] == "1.2.6"
     assert canonical["game_state"]["ruleset_id"] == "berkeley_any"
     assert canonical["game_state"]["move_stack"] == ["e2e4"]
 
@@ -89,6 +92,26 @@ def test_canonicalize_game_document_preserves_berkeley_without_any_rule_from_pre
     assert canonical["schema_version"] == CANONICAL_ENGINE_STATE_SCHEMA_VERSION
     assert canonical["game_state"]["ruleset_id"] == "berkeley"
     assert canonical["game_state"]["any_rule"] is False
+
+
+def test_canonicalize_game_document_rejects_previous_canonical_board_mismatch() -> None:
+    game = create_new_game(any_rule=True)
+    attempt_move(game, "e2e4")
+    previous = _previous_canonical_payload(game)
+    previous["game_state"]["board_fen"] = create_new_game(any_rule=True)._board.fen()  # noqa: SLF001
+
+    with pytest.raises(MalformedDataError, match="move_stack"):
+        canonicalize_game_document({"engine_state": previous, "moves": [], "rule_variant": "berkeley_any"})
+
+
+def test_canonicalize_game_document_rejects_previous_canonical_scoresheet_mismatch() -> None:
+    game = create_new_game(any_rule=True)
+    attempt_move(game, "e2e4")
+    previous = _previous_canonical_payload(game)
+    previous["game_state"]["white_scoresheet"]["moves_own"][0][0][0]["chess_move"] = "d2d4"
+
+    with pytest.raises(MalformedDataError, match="Scoresheet-derived moves"):
+        canonicalize_game_document({"engine_state": previous, "moves": [], "rule_variant": "berkeley_any"})
 
 
 def test_canonicalize_game_document_skips_current_canonical() -> None:
