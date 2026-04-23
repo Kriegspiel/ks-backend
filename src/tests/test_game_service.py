@@ -168,13 +168,19 @@ class FakeUsersCollection:
         return None
 
 
-def active_game_doc(*, white_role: str = "user", black_role: str = "user", turn: str = "white") -> dict:
+def active_game_doc(
+    *,
+    white_role: str = "user",
+    black_role: str = "user",
+    turn: str = "white",
+    rule_variant: str = "berkeley_any",
+) -> dict:
     now = datetime.now(UTC)
-    engine = create_new_game(any_rule=True)
+    engine = create_new_game(rule_variant=rule_variant)
     return {
         "_id": ObjectId(),
         "game_code": "ACTIVE1",
-        "rule_variant": "berkeley_any",
+        "rule_variant": rule_variant,
         "white": {"user_id": "u1", "username": "w", "connected": True, "role": white_role},
         "black": {"user_id": "u2", "username": "b", "connected": True, "role": black_role},
         "state": "active",
@@ -258,11 +264,50 @@ async def test_join_game_transitions_waiting_to_active_and_assigns_opposite_colo
     assert saved["white"]["user_id"] == "u2"
     assert saved["black"]["user_id"] == "u1"
     assert "white_scoresheet" not in saved
-    assert "black_scoresheet" not in saved
-    assert saved["engine_state"]["game_state"]["white_scoresheet"]["color"] == "WHITE"
-    assert saved["engine_state"]["game_state"]["black_scoresheet"]["color"] == "BLACK"
-    assert saved["engine_state"]["game_state"]["white_scoresheet"]["moves_own"] == []
-    assert saved["engine_state"]["game_state"]["black_scoresheet"]["moves_opponent"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rule_variant", ["cincinnati", "wild16"])
+async def test_join_game_bootstraps_matching_ruleset_engine(rule_variant: str) -> None:
+    games = FakeGamesCollection()
+    now = datetime.now(UTC)
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "A7K2M9",
+            "rule_variant": rule_variant,
+            "creator_color": "white",
+            "white": {"user_id": "u1", "username": "creator", "connected": True},
+            "black": None,
+            "state": "waiting",
+            "turn": None,
+            "move_number": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games)
+
+    await service.join_game(user_id="u2", username="joiner", game_code="A7K2M9")
+
+    assert games.docs[0]["engine_state"]["game_state"]["ruleset_id"] == rule_variant
+
+
+@pytest.mark.asyncio
+async def test_execute_move_hides_wild16_private_illegal_attempts_from_shared_history() -> None:
+    games = FakeGamesCollection()
+    games.docs.append(active_game_doc(rule_variant="wild16"))
+    service = GameService(games)
+
+    response = await service.execute_move(game_id=str(games.docs[0]["_id"]), user_id="u1", uci="e2e5")
+    await service.flush_all()
+
+    assert response["announcement"] == "ILLEGAL_MOVE"
+    assert response["move_done"] is False
+    assert games.docs[0]["moves"] == []
+    own_scoresheet = games.docs[0]["engine_state"]["game_state"]["white_scoresheet"]["moves_own"]
+    assert own_scoresheet[0][0][1]["main_announcement"] == "ILLEGAL_MOVE"
+    assert games.docs[0]["engine_state"]["game_state"]["black_scoresheet"]["moves_opponent"] == []
 
 
 @pytest.mark.asyncio

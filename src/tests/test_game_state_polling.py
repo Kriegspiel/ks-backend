@@ -242,6 +242,133 @@ async def test_get_game_state_repairs_missing_forced_pawn_captures(corrupted_has
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rule_variant", "expected_message"),
+    [
+        ("cincinnati", "Opponent move — Move complete · Has pawn capture"),
+        ("wild16", "Opponent move — Move complete · 1 pawn try"),
+    ],
+)
+async def test_get_game_state_surfaces_ruleset_specific_announcements(
+    rule_variant: str,
+    expected_message: str,
+) -> None:
+    gid = ObjectId()
+    now = datetime.now(UTC)
+    engine = create_new_game(rule_variant=rule_variant)
+    first = attempt_move(engine, "e2e4")
+    second = attempt_move(engine, "d7d5")
+    games = FakeGamesCollection()
+    games.docs.append(
+        {
+            "_id": gid,
+            "game_code": "A7K2M9",
+            "rule_variant": rule_variant,
+            "creator_color": "white",
+            "white": {"user_id": "u1", "username": "w", "connected": True},
+            "black": {"user_id": "u2", "username": "b", "connected": True},
+            "state": "active",
+            "turn": "white",
+            "move_number": 3,
+            "moves": [
+                {
+                    "ply": 1,
+                    "color": "white",
+                    "question_type": "COMMON",
+                    "uci": "e2e4",
+                    "announcement": first["announcement"],
+                    "special_announcement": first["special_announcement"],
+                    "capture_square": first["capture_square"],
+                    "captured_piece_announcement": first.get("captured_piece_announcement"),
+                    "next_turn_pawn_tries": first.get("next_turn_pawn_tries"),
+                    "next_turn_has_pawn_capture": first.get("next_turn_has_pawn_capture"),
+                    "move_done": first["move_done"],
+                    "timestamp": now,
+                },
+                {
+                    "ply": 2,
+                    "color": "black",
+                    "question_type": "COMMON",
+                    "uci": "d7d5",
+                    "announcement": second["announcement"],
+                    "special_announcement": second["special_announcement"],
+                    "capture_square": second["capture_square"],
+                    "captured_piece_announcement": second.get("captured_piece_announcement"),
+                    "next_turn_pawn_tries": second.get("next_turn_pawn_tries"),
+                    "next_turn_has_pawn_capture": second.get("next_turn_has_pawn_capture"),
+                    "move_done": second["move_done"],
+                    "timestamp": now,
+                },
+            ],
+            "engine_state": serialize_game_state(engine),
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games)
+
+    white_state = await service.get_game_state(game_id=str(gid), user_id="u1")
+
+    assert white_state.possible_actions == ["move"]
+    assert [entry.message for entry in white_state.referee_turns[0].black] == [expected_message]
+
+
+@pytest.mark.asyncio
+async def test_get_game_state_keeps_wild16_private_illegal_attempts_private() -> None:
+    gid = ObjectId()
+    now = datetime.now(UTC)
+    engine = create_new_game(rule_variant="wild16")
+    illegal = attempt_move(engine, "e2e5")
+    legal = attempt_move(engine, "e2e4")
+    games = FakeGamesCollection()
+    games.docs.append(
+        {
+            "_id": gid,
+            "game_code": "A7K2M9",
+            "rule_variant": "wild16",
+            "creator_color": "white",
+            "white": {"user_id": "u1", "username": "w", "connected": True},
+            "black": {"user_id": "u2", "username": "b", "connected": True},
+            "state": "active",
+            "turn": "black",
+            "move_number": 2,
+            "moves": [
+                {
+                    "ply": 1,
+                    "color": "white",
+                    "question_type": "COMMON",
+                    "uci": "e2e4",
+                    "announcement": legal["announcement"],
+                    "special_announcement": legal["special_announcement"],
+                    "capture_square": legal["capture_square"],
+                    "captured_piece_announcement": legal.get("captured_piece_announcement"),
+                    "next_turn_pawn_tries": legal.get("next_turn_pawn_tries"),
+                    "next_turn_has_pawn_capture": legal.get("next_turn_has_pawn_capture"),
+                    "move_done": legal["move_done"],
+                    "timestamp": now,
+                },
+            ],
+            "engine_state": serialize_game_state(engine),
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games)
+
+    white_state = await service.get_game_state(game_id=str(gid), user_id="u1")
+    black_state = await service.get_game_state(game_id=str(gid), user_id="u2")
+
+    assert illegal["announcement"] == "ILLEGAL_MOVE"
+    assert [entry.message for entry in white_state.scoresheet.turns[0].white] == [
+        "Move attempt — Illegal move",
+        "Move attempt — Move complete · No pawn captures",
+    ]
+    assert [entry.message for entry in black_state.scoresheet.turns[0].white] == [
+        "Opponent move — Move complete · No pawn captures",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_game_state_rejects_non_participants(active_game_doc: dict) -> None:
     games = FakeGamesCollection()
     games.docs.append(active_game_doc)

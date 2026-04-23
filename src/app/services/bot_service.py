@@ -15,7 +15,7 @@ class BotService:
         profile = doc.get("bot_profile") or {}
         variants = profile.get("supported_rule_variants")
         if isinstance(variants, list) and variants:
-            return [str(item) for item in variants if str(item) in {"berkeley", "berkeley_any"}]
+            return [str(item) for item in variants if str(item) in {"berkeley", "berkeley_any", "cincinnati", "wild16"}]
         username = str(doc.get("username") or "").strip().lower()
         if username == "randobotany":
             return ["berkeley_any"]

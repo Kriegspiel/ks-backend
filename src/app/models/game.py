@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 GameState = Literal["waiting", "active", "completed"]
-RuleVariant = Literal["berkeley", "berkeley_any"]
+RuleVariant = Literal["berkeley", "berkeley_any", "cincinnati", "wild16"]
 PlayerColor = Literal["white", "black"]
 OpponentType = Literal["human", "bot"]
 
@@ -118,6 +118,9 @@ class MoveResponse(BaseModel):
     announcement: str
     special_announcement: str | None = None
     capture_square: str | None = None
+    captured_piece_announcement: Literal["PAWN", "PIECE"] | None = None
+    next_turn_pawn_tries: int | None = Field(default=None, ge=0)
+    next_turn_has_pawn_capture: bool | None = None
     turn: PlayerColor | None = None
     game_over: bool
     clock: ClockState
@@ -230,7 +233,10 @@ class TranscriptAnswer(BaseModel):
 
     main: str
     capture_square: str | None = None
+    captured_piece_announcement: Literal["PAWN", "PIECE"] | None = None
     special: str | None = None
+    next_turn_pawn_tries: int | None = Field(default=None, ge=0)
+    next_turn_has_pawn_capture: bool | None = None
 
 
 class TranscriptMoveItem(BaseModel):

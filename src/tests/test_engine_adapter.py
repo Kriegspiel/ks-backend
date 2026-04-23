@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import chess
 import pytest
-from kriegspiel.move import KriegspielAnswer, KriegspielMove, MainAnnouncement, QuestionAnnouncement, SpecialCaseAnnouncement
+from kriegspiel.move import (
+    CapturedPieceAnnouncement,
+    KriegspielAnswer,
+    KriegspielMove,
+    MainAnnouncement,
+    QuestionAnnouncement,
+    SpecialCaseAnnouncement,
+)
 
 from app.services.engine_adapter import (
     CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
@@ -151,6 +159,9 @@ def test_invalid_uci_and_default_scoresheet_serialization_are_stable() -> None:
         "announcement": "INVALID_UCI",
         "special_announcement": None,
         "capture_square": None,
+        "captured_piece_announcement": None,
+        "next_turn_pawn_tries": None,
+        "next_turn_has_pawn_capture": None,
     }
     assert serialize_scoresheet(None) == {"color": None, "last_move_number": 0, "moves_own": [], "moves_opponent": []}
 
@@ -257,3 +268,46 @@ def test_answer_serializers_cover_named_checks_and_non_double_specials() -> None
     assert serialized["checks"] == ["CHECK_FILE", "CHECK_RANK"]
     assert serialized["special_announcement"] == "CHECK_DOUBLE"
     assert restored.special_announcement == SpecialCaseAnnouncement.CHECK_FILE
+
+
+@pytest.mark.parametrize(
+    ("rule_variant", "expected_ruleset_id"),
+    [("cincinnati", "cincinnati"), ("wild16", "wild16")],
+)
+def test_create_new_game_accepts_new_rulesets(rule_variant: str, expected_ruleset_id: str) -> None:
+    game = create_new_game(rule_variant=rule_variant)
+
+    assert game.ruleset_id == expected_ruleset_id
+
+
+def test_attempt_move_surfaces_cincinnati_next_turn_binary_pawn_capture() -> None:
+    game = create_new_game(rule_variant="cincinnati")
+
+    attempt_move(game, "e2e4")
+    result = attempt_move(game, "d7d5")
+
+    assert result["announcement"] == "REGULAR_MOVE"
+    assert result["next_turn_has_pawn_capture"] is True
+    assert result["next_turn_pawn_tries"] is None
+
+
+def test_attempt_move_surfaces_wild16_pawn_try_count_and_typed_capture() -> None:
+    game = create_new_game(rule_variant="wild16")
+    attempt_move(game, "e2e4")
+    result = attempt_move(game, "d7d5")
+
+    assert result["announcement"] == "REGULAR_MOVE"
+    assert result["next_turn_pawn_tries"] == 1
+    assert result["next_turn_has_pawn_capture"] is None
+
+    capture = _serialize_answer(
+        KriegspielAnswer(
+            MainAnnouncement.CAPTURE_DONE,
+            capture_at_square=chess.D4,
+            captured_piece_announcement=CapturedPieceAnnouncement.PAWN,
+            next_turn_pawn_tries=0,
+        )
+    )
+
+    assert capture["captured_piece_announcement"] == "PAWN"
+    assert capture["next_turn_pawn_tries"] == 0
