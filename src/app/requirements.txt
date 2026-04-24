@@ -7,6 +7,7 @@ bcrypt==4.3.0
 python-jose[cryptography]==3.4.0
 kriegspiel @ git+https://github.com/Kriegspiel/ks-game.git@341f4bbb83b1afcb2e3a65b8201405138cc5387b
 structlog==24.2.0
+sentry-sdk[fastapi]>=2.0.0
 python-multipart==0.0.22
 httpx==0.28.1
 pymongo==4.9.2
