@@ -119,6 +119,7 @@ def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "init_db", AsyncMock(return_value=fake_db))
     monkeypatch.setattr(main_module, "close_db", AsyncMock(side_effect=lambda: calls.append("close_db")))
     monkeypatch.setattr(main_module, "GameService", FakeGameService)
+    monkeypatch.setattr(main_module, "capture_backend_restart", lambda settings: calls.append(f"restart:{settings.ENVIRONMENT}") or "evt")
 
     app = create_app(Settings(ENVIRONMENT="testing", SITE_ORIGIN="https://frontend.example"))
 
@@ -127,4 +128,4 @@ def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
         assert app.state.db_ready is True
         assert app.state.game_service is not None
 
-    assert calls == ["start", "shutdown", "close_db"]
+    assert calls == ["start", "restart:testing", "shutdown", "close_db"]

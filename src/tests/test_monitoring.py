@@ -61,3 +61,37 @@ def test_before_send_redacts_sensitive_request_headers() -> None:
             }
         }
     }
+
+
+def test_capture_backend_restart_skips_without_dsn(monkeypatch) -> None:
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(monitoring.sentry_sdk, "capture_message", lambda message, level: messages.append((message, level)))
+
+    assert monitoring.capture_backend_restart(Settings(SENTRY_DSN=None)) is None
+    assert messages == []
+
+
+def test_capture_backend_restart_sends_info_message_with_context(monkeypatch) -> None:
+    tags: list[tuple[str, str]] = []
+    contexts: list[tuple[str, dict[str, str]]] = []
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(monitoring.sentry_sdk, "set_tag", lambda key, value: tags.append((key, value)))
+    monkeypatch.setattr(monitoring.sentry_sdk, "set_context", lambda key, value: contexts.append((key, value)))
+    monkeypatch.setattr(
+        monitoring.sentry_sdk,
+        "capture_message",
+        lambda message, level: messages.append((message, level)) or "event-id-123",
+    )
+
+    event_id = monitoring.capture_backend_restart(
+        Settings(
+            APP_VERSION="9.8.7",
+            ENVIRONMENT="production",
+            SENTRY_DSN="https://public@example.com/1",
+        )
+    )
+
+    assert event_id == "event-id-123"
+    assert tags == [("startup_event", "backend_restart")]
+    assert contexts == [("backend_restart", {"version": "9.8.7", "environment": "production"})]
+    assert messages == [("ks-backend restarted", "info")]

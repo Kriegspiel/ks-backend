@@ -51,3 +51,18 @@ def configure_sentry(settings: Settings) -> bool:
     )
     sentry_sdk.set_tag("service", "ks-backend")
     return True
+
+
+def capture_backend_restart(settings: Settings) -> str | None:
+    if not settings.SENTRY_DSN:
+        return None
+
+    sentry_sdk.set_tag("startup_event", "backend_restart")
+    sentry_sdk.set_context(
+        "backend_restart",
+        {
+            "version": settings.APP_VERSION,
+            "environment": settings.ENVIRONMENT,
+        },
+    )
+    return sentry_sdk.capture_message("ks-backend restarted", level="info")
