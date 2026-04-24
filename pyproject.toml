@@ -1,6 +1,6 @@
 [project]
 name = "backend"
-version = "1.2.28"
+version = "1.2.29"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,6 +21,7 @@ dependencies = [
     "python-jose[cryptography]>=3.4.0",
     "python-multipart>=0.0.22",
     "structlog>=24.2.0",
+    "sentry-sdk[fastapi]>=2.0.0",
 ]
 
 [tool.mypy]

@@ -4,11 +4,13 @@ from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import RedirectResponse
+import sentry_sdk
 import structlog
 
 from app.config import Settings, get_settings
 from app.db import close_db, get_db, init_db
 from app.logging_config import configure_logging
+from app.monitoring import configure_sentry
 from app.routers.auth import router as auth_router
 from app.routers.bot import router as bot_router
 from app.routers.game import router as game_router
@@ -50,6 +52,7 @@ async def lifespan(app: FastAPI):
         logger.info("db_init_success")
     except Exception as exc:
         logger.warning("db_init_failed", error_type=type(exc).__name__)
+        sentry_sdk.capture_exception(exc)
         app.state.db = None
         app.state.db_ready = False
 
@@ -65,9 +68,10 @@ async def lifespan(app: FastAPI):
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings if settings is not None else get_settings()
     configure_logging(resolved_settings.ENVIRONMENT)
+    sentry_enabled = configure_sentry(resolved_settings)
     app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.settings = resolved_settings
-    logger.info("app_bootstrap", environment=resolved_settings.ENVIRONMENT)
+    logger.info("app_bootstrap", environment=resolved_settings.ENVIRONMENT, sentry_enabled=sentry_enabled)
 
     app.add_middleware(
         CORSMiddleware,
