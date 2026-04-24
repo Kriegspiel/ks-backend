@@ -112,6 +112,8 @@ def _next_turn_message(*, next_turn_pawn_tries: Any, next_turn_has_pawn_capture:
         return f'{next_turn_pawn_tries} pawn tries'
     if next_turn_has_pawn_capture is True:
         return 'Has pawn capture'
+    if next_turn_has_pawn_capture is False:
+        return 'No pawn captures'
     return ''
 
 

@@ -224,6 +224,22 @@ async def test_execute_ask_any_records_result_without_uci_leak(active_game_doc: 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rule_variant", ["berkeley", "cincinnati", "wild16"])
+async def test_execute_ask_any_rejects_rulesets_without_any(active_game_doc: dict, rule_variant: str) -> None:
+    active_game_doc["rule_variant"] = rule_variant
+    active_game_doc["engine_state"] = serialize_game_state(create_new_game(rule_variant=rule_variant))
+    games = FakeGamesCollection()
+    games.docs.append(active_game_doc)
+    service = GameService(games)
+
+    with pytest.raises(GameValidationError) as exc:
+        await service.execute_ask_any(game_id=str(active_game_doc["_id"]), user_id="u1")
+
+    assert exc.value.code == "ACTION_NOT_AVAILABLE"
+    assert games.docs[0]["moves"] == []
+
+
+@pytest.mark.asyncio
 async def test_execute_ask_any_does_not_persist_impossible_attempts(active_game_doc: dict) -> None:
     games = FakeGamesCollection()
     games.docs.append(active_game_doc)
