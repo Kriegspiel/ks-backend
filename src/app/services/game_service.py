@@ -1433,6 +1433,7 @@ class GameService:
                 game_state=game["state"],
                 viewer_color=color,
                 turn=game.get("turn"),
+                rule_variant=game.get("rule_variant"),
             ),
             result=game.get("result"),
             clock=self._clock.response_clock(time_control=time_control, now=now),
@@ -1572,6 +1573,7 @@ class GameService:
                 game_state=game["state"],
                 viewer_color=color,
                 turn=game.get("turn"),
+                rule_variant=game.get("rule_variant"),
             ):
                 raise GameValidationError(
                     code="ACTION_NOT_AVAILABLE",
