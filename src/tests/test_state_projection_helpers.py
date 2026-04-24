@@ -11,6 +11,7 @@ def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_
     assert projection._format_public_announcement("CAPTURE_DONE", "d4", captured_piece_announcement="PAWN") == "Pawn captured at D4"
     assert projection._next_turn_message(next_turn_pawn_tries=2, next_turn_has_pawn_capture=None) == "2 pawn tries"
     assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=True) == "Has pawn capture"
+    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=False) == "No pawn captures"
     assert projection._scoresheet_answer_texts(
         {
             "main_announcement": "REGULAR_MOVE",

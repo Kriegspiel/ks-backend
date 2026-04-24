@@ -1567,6 +1567,17 @@ class GameService:
                 raise GameValidationError(code="NOT_YOUR_TURN", message="It is not your turn")
 
             engine = self._load_or_bootstrap_engine(game)
+            if "ask_any" not in compute_possible_actions(
+                engine=engine,
+                game_state=game["state"],
+                viewer_color=color,
+                turn=game.get("turn"),
+            ):
+                raise GameValidationError(
+                    code="ACTION_NOT_AVAILABLE",
+                    message="Ask any pawn captures is not available in this game",
+                )
+
             outcome = ask_any(engine)
             move_record = {
                 "ply": len(game.get("moves", [])) + 1,
