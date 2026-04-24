@@ -278,8 +278,8 @@ async def test_get_game_state_repairs_missing_forced_pawn_captures(corrupted_has
 @pytest.mark.parametrize(
     ("rule_variant", "expected_message"),
     [
-        ("cincinnati", "Opponent move — Move complete · Has pawn capture"),
-        ("wild16", "Opponent move — Move complete · 1 pawn try"),
+        ("cincinnati", "Has pawn capture"),
+        ("wild16", "1 pawn try"),
     ],
 )
 async def test_get_game_state_surfaces_ruleset_specific_announcements(
@@ -343,15 +343,19 @@ async def test_get_game_state_surfaces_ruleset_specific_announcements(
     white_state = await service.get_game_state(game_id=str(gid), user_id="u1")
 
     assert white_state.possible_actions == ["move"]
-    assert [entry.message for entry in white_state.referee_turns[0].black] == [expected_message]
+    assert [entry.message for entry in white_state.referee_turns[0].black] == [
+        "No pawn captures",
+        "Opponent move — Move complete",
+    ]
+    assert [entry.message for entry in white_state.referee_turns[1].white] == [expected_message]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("rule_variant", "expected_message"),
     [
-        ("cincinnati", "Opponent move — Move complete · No pawn captures"),
-        ("wild16", "Opponent move — Move complete · No pawn captures"),
+        ("cincinnati", "No pawn captures"),
+        ("wild16", "No pawn captures"),
     ],
 )
 async def test_get_game_state_blocks_pawn_capture_attempts_after_no_capture_announcement(
@@ -418,7 +422,11 @@ async def test_get_game_state_blocks_pawn_capture_attempts_after_no_capture_anno
     assert "e4e5" in white_state.allowed_moves
     assert "e4d5" not in white_state.allowed_moves
     assert "e4f5" not in white_state.allowed_moves
-    assert [entry.message for entry in white_state.referee_turns[0].black] == [expected_message]
+    assert [entry.message for entry in white_state.referee_turns[0].black] == [
+        "No pawn captures",
+        "Opponent move — Move complete",
+    ]
+    assert [entry.message for entry in white_state.referee_turns[1].white] == [expected_message]
 
 
 @pytest.mark.asyncio
@@ -469,11 +477,13 @@ async def test_get_game_state_keeps_wild16_private_illegal_attempts_private() ->
     assert illegal["announcement"] == "ILLEGAL_MOVE"
     assert [entry.message for entry in white_state.scoresheet.turns[0].white] == [
         "Move attempt — Illegal move",
-        "Move attempt — Move complete · No pawn captures",
+        "Move attempt — Move complete",
     ]
+    assert [entry.message for entry in white_state.scoresheet.turns[0].black] == ["No pawn captures"]
     assert [entry.message for entry in black_state.scoresheet.turns[0].white] == [
-        "Opponent move — Move complete · No pawn captures",
+        "Opponent move — Move complete",
     ]
+    assert [entry.message for entry in black_state.scoresheet.turns[0].black] == ["No pawn captures"]
 
 
 @pytest.mark.asyncio

@@ -142,6 +142,38 @@ def _announcement_kind(question_type: str, main: str | None) -> str:
     return 'move'
 
 
+def _next_turn_side(*, color: PlayerColor, turn: int) -> tuple[int, PlayerColor]:
+    if color == 'white':
+        return turn, 'black'
+    return turn + 1, 'white'
+
+
+def _status_announcement(message: str, *, perspective: Literal['own', 'opponent']) -> dict[str, Any]:
+    return {
+        'kind': 'status',
+        'actor': 'self' if perspective == 'own' else 'opponent',
+        'prompt': None,
+        'message': message,
+        'messages': [message],
+        'move_uci': None,
+        'question_type': None,
+    }
+
+
+def _move_next_turn_message(move: dict[str, Any]) -> str:
+    return _next_turn_message(
+        next_turn_pawn_tries=move.get('next_turn_pawn_tries'),
+        next_turn_has_pawn_capture=move.get('next_turn_has_pawn_capture'),
+    )
+
+
+def _answer_next_turn_message(answer: dict[str, Any]) -> str:
+    return _next_turn_message(
+        next_turn_pawn_tries=answer.get('next_turn_pawn_tries'),
+        next_turn_has_pawn_capture=answer.get('next_turn_has_pawn_capture'),
+    )
+
+
 def _move_messages(move: dict[str, Any]) -> list[str]:
     out: list[str] = []
     announcement = move.get('announcement')
@@ -157,13 +189,6 @@ def _move_messages(move: dict[str, Any]) -> list[str]:
                 captured_piece_announcement=captured_piece_announcement,
             )
         )
-
-    next_turn_message = _next_turn_message(
-        next_turn_pawn_tries=move.get('next_turn_pawn_tries'),
-        next_turn_has_pawn_capture=move.get('next_turn_has_pawn_capture'),
-    )
-    if next_turn_message:
-        out.append(next_turn_message)
 
     if special_announcement in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
         out.append(_format_public_announcement(special_announcement, None))
@@ -209,14 +234,13 @@ def build_referee_log(moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
 
-        next_turn_message = _next_turn_message(
-            next_turn_pawn_tries=move.get('next_turn_pawn_tries'),
-            next_turn_has_pawn_capture=move.get('next_turn_has_pawn_capture'),
-        )
+        next_turn_message = _move_next_turn_message(move)
         if next_turn_message:
+            next_ply = (move.get('ply') + 1) if isinstance(move.get('ply'), int) else None
             out.append(
                 {
                     **base_item,
+                    'ply': next_ply,
                     'announcement': next_turn_message,
                     'special_announcement': None,
                     'capture_square': None,
@@ -252,6 +276,12 @@ def build_referee_turns(moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
         entry = turns.setdefault(turn, {'turn': turn, 'white': [], 'black': []})
         entry[color].append(announcement)
 
+        next_turn_message = _move_next_turn_message(move)
+        if next_turn_message:
+            next_turn, next_color = _next_turn_side(color=color, turn=turn)
+            next_entry = turns.setdefault(next_turn, {'turn': next_turn, 'white': [], 'black': []})
+            next_entry[next_color].append(_status_announcement(next_turn_message, perspective='own'))
+
     return [turns[key] for key in sorted(turns)]
 
 
@@ -260,20 +290,56 @@ def build_viewer_scoresheet(*, viewer_color: PlayerColor, stored_scoresheet: dic
     own_turns = scoresheet.get('moves_own') if isinstance(scoresheet.get('moves_own'), list) else []
     opponent_turns = scoresheet.get('moves_opponent') if isinstance(scoresheet.get('moves_opponent'), list) else []
     turn_count = max(len(own_turns), len(opponent_turns))
+    turn_map: dict[int, dict[str, Any]] = {}
 
-    turns: list[dict[str, Any]] = []
+    def ensure_turn(turn_number: int) -> dict[str, Any]:
+        return turn_map.setdefault(turn_number, {'turn': turn_number, 'white': [], 'black': []})
+
+    def append_entries(
+        raw_entries: list[Any],
+        *,
+        turn_number: int,
+        color: PlayerColor,
+        perspective: Literal['own', 'opponent'],
+    ) -> None:
+        for raw_entry in raw_entries:
+            if not raw_entry:
+                continue
+
+            normalized = _normalize_scoresheet_entry(raw_entry, perspective=perspective)
+            if normalized:
+                ensure_turn(turn_number)[color].append(normalized)
+
+            answer = (
+                raw_entry.get('answer')
+                if isinstance(raw_entry, dict) and isinstance(raw_entry.get('answer'), dict)
+                else {}
+            )
+            next_turn_message = _answer_next_turn_message(answer)
+            if next_turn_message:
+                next_turn, next_color = _next_turn_side(color=color, turn=turn_number)
+                next_perspective = 'own' if next_color == viewer_color else 'opponent'
+                ensure_turn(next_turn)[next_color].append(_status_announcement(next_turn_message, perspective=next_perspective))
+
     for index in range(turn_count):
-        own_entries = [_normalize_scoresheet_entry(entry, perspective='own') for entry in own_turns[index] if entry] if index < len(own_turns) else []
-        opponent_entries = [_normalize_scoresheet_entry(entry, perspective='opponent') for entry in opponent_turns[index] if entry] if index < len(opponent_turns) else []
-        own_entries = [entry for entry in own_entries if entry]
-        opponent_entries = [entry for entry in opponent_entries if entry]
-        turn_item = {
-            'turn': index + 1,
-            'white': own_entries if viewer_color == 'white' else opponent_entries,
-            'black': own_entries if viewer_color == 'black' else opponent_entries,
-        }
-        if turn_item['white'] or turn_item['black']:
-            turns.append(turn_item)
+        turn_number = index + 1
+        own_color: PlayerColor = viewer_color
+        opponent_color: PlayerColor = 'black' if viewer_color == 'white' else 'white'
+        append_entries(
+            own_turns[index] if index < len(own_turns) else [],
+            turn_number=turn_number,
+            color=own_color,
+            perspective='own',
+        )
+        append_entries(
+            opponent_turns[index] if index < len(opponent_turns) else [],
+            turn_number=turn_number,
+            color=opponent_color,
+            perspective='opponent',
+        )
+
+    turns = [turn_map[key] for key in sorted(turn_map)]
+    turns = [turn for turn in turns if turn['white'] or turn['black']]
 
     return {
         'viewer_color': viewer_color,
@@ -363,8 +429,18 @@ def reconstruct_scoresheets_from_moves(moves: list[dict[str, Any]]) -> dict[str,
         _append_turn_entry(black_opponent, turn, opponent_pair if color == 'white' else None)
 
     return {
-        'white': {'color': 'white', 'last_move_number': last_move_number, 'moves_own': white_own, 'moves_opponent': white_opponent},
-        'black': {'color': 'black', 'last_move_number': last_move_number, 'moves_own': black_own, 'moves_opponent': black_opponent},
+        'white': {
+            'color': 'white',
+            'last_move_number': last_move_number,
+            'moves_own': white_own,
+            'moves_opponent': white_opponent,
+        },
+        'black': {
+            'color': 'black',
+            'last_move_number': last_move_number,
+            'moves_own': black_own,
+            'moves_opponent': black_opponent,
+        },
     }
 
 
@@ -419,12 +495,6 @@ def _scoresheet_answer_texts(answer: dict[str, Any]) -> list[str]:
                 captured_piece_announcement=answer.get('captured_piece_announcement'),
             )
         )
-    next_turn_message = _next_turn_message(
-        next_turn_pawn_tries=answer.get('next_turn_pawn_tries'),
-        next_turn_has_pawn_capture=answer.get('next_turn_has_pawn_capture'),
-    )
-    if next_turn_message:
-        texts.append(next_turn_message)
     special = answer.get('special_announcement')
     if isinstance(special, str) and special in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
         texts.append(_format_public_announcement(special, None))

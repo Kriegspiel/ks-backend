@@ -99,14 +99,57 @@ def test_state_projection_scoresheet_texts_include_rule_specific_announcements()
             "captured_piece_announcement": "PIECE",
             "next_turn_has_pawn_capture": True,
         }
-    ) == ["Piece captured at D4", "Has pawn capture"]
+    ) == ["Piece captured at D4"]
 
     assert projection._scoresheet_answer_texts(
         {
             "main_announcement": "REGULAR_MOVE",
             "next_turn_pawn_tries": 2,
         }
-    ) == ["Move complete", "2 pawn tries"]
+    ) == ["Move complete"]
+
+    assert projection.build_viewer_scoresheet(
+        viewer_color="white",
+        stored_scoresheet={
+            "color": "white",
+            "last_move_number": 1,
+            "moves_own": [
+                [
+                    {
+                        "question": {"question_type": "COMMON", "move_uci": "e2e4"},
+                        "answer": {"main_announcement": "REGULAR_MOVE", "next_turn_pawn_tries": 0},
+                    }
+                ]
+            ],
+            "moves_opponent": [[]],
+        },
+    )["turns"] == [
+        {
+            "turn": 1,
+            "white": [
+                {
+                    "kind": "move",
+                    "actor": "self",
+                    "prompt": "Move attempt",
+                    "message": "Move attempt — Move complete",
+                    "messages": ["Move complete"],
+                    "move_uci": "e2e4",
+                    "question_type": "COMMON",
+                }
+            ],
+            "black": [
+                {
+                    "kind": "status",
+                    "actor": "opponent",
+                    "prompt": None,
+                    "message": "No pawn captures",
+                    "messages": ["No pawn captures"],
+                    "move_uci": None,
+                    "question_type": None,
+                }
+            ],
+        }
+    ]
 
 
 def test_state_projection_possible_actions_and_referee_log_cover_remaining_public_branches() -> None:
