@@ -10,7 +10,7 @@ import structlog
 from app.config import Settings, get_settings
 from app.db import close_db, get_db, init_db
 from app.logging_config import configure_logging
-from app.monitoring import configure_sentry
+from app.monitoring import capture_backend_restart, configure_sentry
 from app.routers.auth import router as auth_router
 from app.routers.bot import router as bot_router
 from app.routers.game import router as game_router
@@ -49,7 +49,8 @@ async def lifespan(app: FastAPI):
             site_origin=app.state.settings.SITE_ORIGIN,
         )
         await app.state.game_service.start()
-        logger.info("db_init_success")
+        restart_event_id = capture_backend_restart(app.state.settings)
+        logger.info("db_init_success", sentry_restart_event_id=restart_event_id)
     except Exception as exc:
         logger.warning("db_init_failed", error_type=type(exc).__name__)
         sentry_sdk.capture_exception(exc)
