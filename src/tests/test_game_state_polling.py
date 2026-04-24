@@ -248,6 +248,19 @@ async def test_get_game_state_accepts_intermediate_canonical_engine_state(active
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rule_variant", ["berkeley", "cincinnati", "wild16"])
+async def test_get_game_state_hides_stale_ask_any_outside_berkeley_any(active_game_doc: dict, rule_variant: str) -> None:
+    games = FakeGamesCollection()
+    active_game_doc["rule_variant"] = rule_variant
+    games.docs.append(active_game_doc)
+    service = GameService(games)
+
+    state = await service.get_game_state(game_id=str(active_game_doc["_id"]), user_id="u1")
+
+    assert state.possible_actions == ["move"]
+
+
+@pytest.mark.asyncio
 async def test_get_game_state_repairs_missing_forced_pawn_captures(corrupted_has_any_game_doc: dict) -> None:
     games = FakeGamesCollection()
     games.docs.append(corrupted_has_any_game_doc)

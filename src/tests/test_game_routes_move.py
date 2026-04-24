@@ -227,7 +227,8 @@ async def test_execute_ask_any_records_result_without_uci_leak(active_game_doc: 
 @pytest.mark.parametrize("rule_variant", ["berkeley", "cincinnati", "wild16"])
 async def test_execute_ask_any_rejects_rulesets_without_any(active_game_doc: dict, rule_variant: str) -> None:
     active_game_doc["rule_variant"] = rule_variant
-    active_game_doc["engine_state"] = serialize_game_state(create_new_game(rule_variant=rule_variant))
+    # Even stale/corrupt engine state must not resurrect Berkeley+Any actions.
+    active_game_doc["engine_state"] = serialize_game_state(create_new_game(rule_variant="berkeley_any"))
     games = FakeGamesCollection()
     games.docs.append(active_game_doc)
     service = GameService(games)

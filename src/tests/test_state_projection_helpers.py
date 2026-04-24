@@ -142,6 +142,13 @@ def test_state_projection_possible_actions_and_referee_log_cover_remaining_publi
     )
 
     assert actions == ["ask_any"]
+    assert projection.compute_possible_actions(
+        engine=engine,
+        game_state="active",
+        viewer_color="white",
+        turn="white",
+        rule_variant="cincinnati",
+    ) == []
     assert [item["announcement"] for item in referee_log] == ["REGULAR_MOVE", "CHECK_FILE", "CHECK_RANK"]
 
 

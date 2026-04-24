@@ -66,16 +66,24 @@ def allowed_moves_for_player(*, engine: Any, game_state: str, viewer_color: Play
     )
 
 
-def compute_possible_actions(*, engine: Any, game_state: str, viewer_color: PlayerColor, turn: str | None) -> list[str]:
+def compute_possible_actions(
+    *,
+    engine: Any,
+    game_state: str,
+    viewer_color: PlayerColor,
+    turn: str | None,
+    rule_variant: str | None = None,
+) -> list[str]:
     if game_state != 'active' or turn != viewer_color:
         return []
 
     has_move = False
     has_ask_any = False
+    allow_ask_any = (rule_variant or 'berkeley_any') == 'berkeley_any'
     for option in engine.possible_to_ask:
         question_type = option.question_type.name
         has_move = has_move or question_type == 'COMMON'
-        has_ask_any = has_ask_any or question_type == 'ASK_ANY'
+        has_ask_any = has_ask_any or (allow_ask_any and question_type == 'ASK_ANY')
 
     actions: list[str] = []
     if has_move:
