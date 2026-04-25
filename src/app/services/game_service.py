@@ -524,8 +524,36 @@ class GameService:
         if game.get("state") == "completed" and game.get("rule_variant") == "wild16":
             detailed_moves = cls._scoresheet_history_moves(game)
             if len(detailed_moves) > len(public_moves):
-                return detailed_moves
+                return cls._normalize_wild16_review_pawn_tries(detailed_moves)
+            return cls._normalize_wild16_review_pawn_tries(public_moves)
         return public_moves
+
+    @staticmethod
+    def _wild16_pawn_try_count(board: chess.Board) -> int:
+        pawn_squares = board.pieces(chess.PAWN, board.turn)
+        return len(
+            {
+                (move.from_square, move.to_square)
+                for move in board.legal_moves
+                if move.from_square in pawn_squares and board.is_capture(move)
+            }
+        )
+
+    @classmethod
+    def _normalize_wild16_review_pawn_tries(cls, moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        board = chess.Board()
+        out: list[dict[str, Any]] = []
+        for source in moves:
+            move = dict(source)
+            if move.get("question_type") == "COMMON" and move.get("move_done") and move.get("uci"):
+                try:
+                    board.push(chess.Move.from_uci(move["uci"]))
+                except ValueError:
+                    pass
+                if isinstance(move.get("next_turn_pawn_tries"), int):
+                    move["next_turn_pawn_tries"] = cls._wild16_pawn_try_count(board)
+            out.append(move)
+        return out
 
     @staticmethod
     def _is_human_involved_game(game: dict[str, Any]) -> bool:
