@@ -215,3 +215,34 @@ def test_state_projection_viewer_scoresheet_skips_empty_turns() -> None:
     )
 
     assert [turn["turn"] for turn in scoresheet["turns"]] == [2]
+
+
+def test_state_projection_black_viewer_orders_turn_start_status_before_black_attempts() -> None:
+    scoresheet = projection.build_viewer_scoresheet(
+        viewer_color="black",
+        stored_scoresheet={
+            "color": "black",
+            "last_move_number": 1,
+            "moves_own": [
+                [
+                    {
+                        "question": {"question_type": "COMMON", "move_uci": "d7d5"},
+                        "answer": {"main_announcement": "ILLEGAL_MOVE"},
+                    }
+                ]
+            ],
+            "moves_opponent": [
+                [
+                    {
+                        "question": {"question_type": "COMMON"},
+                        "answer": {"main_announcement": "REGULAR_MOVE", "next_turn_pawn_tries": 1},
+                    }
+                ]
+            ],
+        },
+    )
+
+    assert [entry["message"] for entry in scoresheet["turns"][0]["black"]] == [
+        "1 pawn try",
+        "Move attempt — Illegal move",
+    ]
