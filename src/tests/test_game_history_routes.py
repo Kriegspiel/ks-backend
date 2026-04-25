@@ -285,6 +285,75 @@ async def test_completed_wild16_transcript_uses_referee_scoresheet_with_private_
 
 
 @pytest.mark.asyncio
+async def test_completed_wild16_transcript_recomputes_legacy_promotion_pawn_try_counts() -> None:
+    now = datetime(2026, 4, 25, tzinfo=UTC)
+    game_id = ObjectId()
+    engine = create_new_game(rule_variant="wild16")
+    attempted_moves = [
+        ("white", "g2g4"),
+        ("black", "e7e5"),
+        ("white", "f1h3"),
+        ("black", "e5e4"),
+        ("white", "a2a3"),
+        ("black", "e4e3"),
+        ("white", "h3g2"),
+        ("black", "e3d2"),
+        ("white", "g2h3"),
+        ("white", "g2d5"),
+        ("white", "c2c3"),
+        ("white", "e1f1"),
+    ]
+    public_moves: list[dict] = []
+
+    for index, (color, uci) in enumerate(attempted_moves, start=1):
+        outcome = attempt_move(engine, uci)
+        move_record = {
+            "ply": len(public_moves) + 1,
+            "color": color,
+            "question_type": "COMMON",
+            "uci": uci,
+            "announcement": outcome["announcement"],
+            "special_announcement": outcome["special_announcement"],
+            "capture_square": outcome["capture_square"],
+            "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+            "next_turn_pawn_tries": 4 if uci == "e1f1" else outcome.get("next_turn_pawn_tries"),
+            "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
+            "move_done": outcome["move_done"],
+            "timestamp": now + timedelta(seconds=index),
+        }
+        if not (outcome["announcement"] == "ILLEGAL_MOVE" and not outcome["move_done"]):
+            public_moves.append(move_record)
+
+    engine_state = serialize_game_state(engine)
+    for turn in engine_state["game_state"]["white_scoresheet"]["moves_own"]:
+        for move_data, answer_data in turn:
+            if move_data.get("chess_move") == "e1f1":
+                answer_data["next_turn_pawn_tries"] = 4
+
+    archived = {
+        "_id": game_id,
+        "game_code": "KZQYR8",
+        "rule_variant": "wild16",
+        "state": "completed",
+        "white": {"user_id": "u1", "username": "white", "connected": True},
+        "black": {"user_id": "u2", "username": "black", "connected": True},
+        "moves": public_moves,
+        "engine_state": engine_state,
+        "result": {"winner": None, "reason": "draw"},
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    transcript = await GameService(FakeCollection([]), FakeCollection([archived])).get_game_transcript(
+        game_id=str(game_id),
+        user_id="spectator",
+    )
+
+    e1f1 = next(move for move in transcript.moves if move.uci == "e1f1")
+    assert e1f1.answer.next_turn_pawn_tries == 1
+
+
+@pytest.mark.asyncio
 async def test_get_recent_completed_games_uses_archive_order_and_limit_clamp(game_docs) -> None:
     _active, archived, older = game_docs
     service = GameService(FakeCollection([]), FakeCollection([older, archived]))
