@@ -32,6 +32,7 @@ from app.services.engine_adapter import (
     is_current_canonical_engine_state,
     is_supported_canonical_engine_state,
     project_visible_board,
+    public_material_summary,
     serialize_scoresheet,
     serialize_game_state,
 )
@@ -328,3 +329,29 @@ def test_attempt_move_surfaces_wild16_pawn_try_count_and_typed_capture() -> None
 
     assert capture["captured_piece_announcement"] == "PAWN"
     assert capture["next_turn_pawn_tries"] == 0
+
+
+@pytest.mark.parametrize("rule_variant", ["berkeley", "berkeley_any"])
+def test_public_material_summary_hides_pawn_counts_for_berkeley_family(rule_variant: str) -> None:
+    game = create_new_game(rule_variant=rule_variant)
+    attempt_move(game, "e2e4")
+    attempt_move(game, "d7d5")
+    attempt_move(game, "e4d5")
+
+    assert public_material_summary(game) == {
+        "white": {"pieces_remaining": 16, "pawns_captured": None},
+        "black": {"pieces_remaining": 15, "pawns_captured": None},
+    }
+
+
+@pytest.mark.parametrize("rule_variant", ["cincinnati", "wild16"])
+def test_public_material_summary_includes_public_pawn_counts_for_typed_rulesets(rule_variant: str) -> None:
+    game = create_new_game(rule_variant=rule_variant)
+    attempt_move(game, "e2e4")
+    attempt_move(game, "d7d5")
+    attempt_move(game, "e4d5")
+
+    assert public_material_summary(game) == {
+        "white": {"pieces_remaining": 16, "pawns_captured": 0},
+        "black": {"pieces_remaining": 15, "pawns_captured": 1},
+    }

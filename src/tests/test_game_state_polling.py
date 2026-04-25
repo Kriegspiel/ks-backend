@@ -219,6 +219,11 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
     assert "a2b3" in white_state.allowed_moves
     assert black_state.possible_actions == []
     assert black_state.allowed_moves == []
+    assert white_state.material_summary.model_dump() == {
+        "white": {"pieces_remaining": 16, "pawns_captured": None},
+        "black": {"pieces_remaining": 16, "pawns_captured": None},
+    }
+    assert black_state.material_summary == white_state.material_summary
     assert white_state.scoresheet.viewer_color == "white"
     assert [entry.message for entry in white_state.scoresheet.turns[0].white] == ["Move attempt — Move complete"]
     assert [entry.message for entry in black_state.scoresheet.turns[0].white] == ["Opponent move — Move complete"]

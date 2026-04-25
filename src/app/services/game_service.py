@@ -35,6 +35,7 @@ from app.services.engine_adapter import (
     create_new_game,
     deserialize_game_state,
     extract_stored_scoresheets,
+    public_material_summary,
     serialize_game_state,
 )
 from app.services.state_projection import (
@@ -1546,6 +1547,7 @@ class GameService:
                 viewer_color=color,
                 turn=game.get("turn"),
             ),
+            material_summary=public_material_summary(engine),
             scoresheet=viewer_scoresheet,
             referee_log=build_viewer_referee_log(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
             referee_turns=build_viewer_referee_turns(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
