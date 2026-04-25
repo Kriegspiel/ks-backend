@@ -435,6 +435,99 @@ class GameService:
         return [move for move in moves if not cls._is_nonsense_history_entry(move)]
 
     @staticmethod
+    def _scoresheet_own_turns(scoresheet: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        turns = scoresheet.get("moves_own")
+        return turns if isinstance(turns, list) else []
+
+    @staticmethod
+    def _scoresheet_entry_to_history_move(*, entry: dict[str, Any], color: PlayerColor) -> dict[str, Any] | None:
+        question = entry.get("question") if isinstance(entry.get("question"), dict) else {}
+        answer = entry.get("answer") if isinstance(entry.get("answer"), dict) else {}
+        question_type = str(question.get("question_type") or "").upper()
+        announcement = answer.get("main_announcement")
+        if not question_type or question_type == "NONE" or not isinstance(announcement, str):
+            return None
+
+        return {
+            "color": color,
+            "question_type": question_type,
+            "uci": question.get("move_uci"),
+            "announcement": announcement,
+            "special_announcement": answer.get("special_announcement"),
+            "capture_square": answer.get("capture_square"),
+            "captured_piece_announcement": answer.get("captured_piece_announcement"),
+            "next_turn_pawn_tries": answer.get("next_turn_pawn_tries"),
+            "next_turn_has_pawn_capture": answer.get("next_turn_has_pawn_capture"),
+            "move_done": bool(answer.get("move_done", False)),
+        }
+
+    @staticmethod
+    def _matches_public_history_entry(*, detailed: dict[str, Any], public: dict[str, Any]) -> bool:
+        return (
+            detailed.get("color") == public.get("color")
+            and detailed.get("question_type") == public.get("question_type")
+            and detailed.get("uci") == public.get("uci")
+            and detailed.get("announcement") == public.get("announcement")
+            and bool(detailed.get("move_done", False)) == bool(public.get("move_done", False))
+        )
+
+    @classmethod
+    def _merge_public_history_metadata(
+        cls,
+        *,
+        detailed_moves: list[dict[str, Any]],
+        public_moves: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        public_index = 0
+        for detailed in detailed_moves:
+            if not bool(detailed.get("move_done", False)):
+                continue
+
+            for index in range(public_index, len(public_moves)):
+                public = public_moves[index]
+                if not cls._matches_public_history_entry(detailed=detailed, public=public):
+                    continue
+                public_index = index + 1
+                detailed["timestamp"] = public.get("timestamp")
+                detailed["replay_fen"] = public.get("replay_fen")
+                break
+
+        return detailed_moves
+
+    @classmethod
+    def _scoresheet_history_moves(cls, game: dict[str, Any]) -> list[dict[str, Any]]:
+        stored_scoresheets = cls._stored_scoresheets(game)
+        white_turns = cls._scoresheet_own_turns(stored_scoresheets["white"])
+        black_turns = cls._scoresheet_own_turns(stored_scoresheets["black"])
+        turn_count = max(len(white_turns), len(black_turns))
+        moves: list[dict[str, Any]] = []
+
+        for index in range(turn_count):
+            for color, turns in (("white", white_turns), ("black", black_turns)):
+                if index >= len(turns):
+                    continue
+                for entry in turns[index]:
+                    if not isinstance(entry, dict):
+                        continue
+                    move = cls._scoresheet_entry_to_history_move(entry=entry, color=color)
+                    if move is not None:
+                        moves.append(move)
+
+        return cls._merge_public_history_metadata(
+            detailed_moves=moves,
+            public_moves=cls._history_moves(game.get("moves", [])),
+        )
+
+    @classmethod
+    def _review_history_moves(cls, game: dict[str, Any]) -> list[dict[str, Any]]:
+        public_moves = cls._history_moves(game.get("moves", []))
+        if game.get("state") == "completed" and game.get("rule_variant") == "wild16":
+            detailed_moves = cls._scoresheet_history_moves(game)
+            if len(detailed_moves) > len(public_moves):
+                return detailed_moves
+        return public_moves
+
+    @staticmethod
     def _is_human_involved_game(game: dict[str, Any]) -> bool:
         players = [game.get("white"), game.get("black")]
         return any(player and player.get("role") != "bot" for player in players)
@@ -1694,7 +1787,7 @@ class GameService:
             raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access an active game transcript")
 
         viewer_color = self._player_color_for_user(game=game, user_id=user_id)
-        moves = self._history_moves(game.get("moves", []))
+        moves = self._review_history_moves(game)
         replay_fens = self._build_replay_fens(moves)
         transcript_moves = [
             self._to_transcript_move(
