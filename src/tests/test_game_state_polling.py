@@ -706,6 +706,10 @@ def app_with_state_service() -> tuple:
                 "your_color": "white",
                 "your_fen": "8/8/8/8/4P3/8/PPPP1PPP/RNBQKBNR w - - 0 1",
                 "allowed_moves": ["a2a3", "a2a4"],
+                "material_summary": {
+                    "white": {"pieces_remaining": 16, "pawns_captured": None},
+                    "black": {"pieces_remaining": 16, "pawns_captured": None},
+                },
                 "scoresheet": {"viewer_color": "white", "last_move_number": 1, "turns": [{"turn": 1, "white": ["Move attempt — Move complete", "Ask any pawn captures — Has pawn captures"], "black": []}]},
                 "referee_log": [{"ply": 1, "announcement": "REGULAR_MOVE", "timestamp": None}, {"ply": 1, "announcement": "HAS_ANY", "timestamp": None}],
                 "referee_turns": [{"turn": 1, "white": ["Move attempt — Move complete", "Ask any pawn captures — Has pawn captures"], "black": []}],
