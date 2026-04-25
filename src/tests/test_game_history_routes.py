@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -13,6 +13,7 @@ from app.dependencies import get_current_user
 from app.main import create_app
 from app.models.user import UserModel
 from app.routers.game import get_game_service
+from app.services.engine_adapter import attempt_move, create_new_game, serialize_game_state
 from app.services.game_service import GameForbiddenError, GameService
 
 
@@ -208,6 +209,79 @@ async def test_get_game_transcript_filters_nonsense_attempts_and_renumbers_ply()
     assert [move.answer.main for move in transcript.moves] == ["REGULAR_MOVE", "REGULAR_MOVE"]
     assert [move.ply for move in transcript.moves] == [1, 2]
     assert transcript.moves[-1].replay_fen is not None
+
+
+@pytest.mark.asyncio
+async def test_completed_wild16_transcript_uses_referee_scoresheet_with_private_illegal_attempts() -> None:
+    now = datetime(2026, 4, 25, tzinfo=UTC)
+    game_id = ObjectId()
+    engine = create_new_game(rule_variant="wild16")
+    attempted_moves = [
+        ("white", "e2e4"),
+        ("black", "d7d5"),
+        ("white", "e4f5"),
+        ("white", "e4d5"),
+    ]
+    public_moves: list[dict] = []
+
+    for index, (color, uci) in enumerate(attempted_moves, start=1):
+        outcome = attempt_move(engine, uci)
+        move_record = {
+            "ply": len(public_moves) + 1,
+            "color": color,
+            "question_type": "COMMON",
+            "uci": uci,
+            "announcement": outcome["announcement"],
+            "special_announcement": outcome["special_announcement"],
+            "capture_square": outcome["capture_square"],
+            "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+            "next_turn_pawn_tries": outcome.get("next_turn_pawn_tries"),
+            "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
+            "move_done": outcome["move_done"],
+            "timestamp": now + timedelta(seconds=index),
+        }
+        if not (outcome["announcement"] == "ILLEGAL_MOVE" and not outcome["move_done"]):
+            public_moves.append(move_record)
+
+    active = {
+        "_id": game_id,
+        "game_code": "WILD16",
+        "rule_variant": "wild16",
+        "state": "active",
+        "white": {"user_id": "u1", "username": "white", "connected": True},
+        "black": {"user_id": "u2", "username": "black", "connected": True},
+        "moves": public_moves,
+        "engine_state": serialize_game_state(engine),
+        "created_at": now,
+        "updated_at": now,
+    }
+    archived = {
+        **active,
+        "state": "completed",
+        "result": {"winner": "white", "reason": "checkmate"},
+    }
+
+    active_transcript = await GameService(FakeCollection([active]), FakeCollection([])).get_game_transcript(
+        game_id=str(game_id),
+        user_id="u1",
+    )
+    assert [move.uci for move in active_transcript.moves] == ["e2e4", "d7d5", "e4d5"]
+
+    completed_transcript = await GameService(FakeCollection([]), FakeCollection([archived])).get_game_transcript(
+        game_id=str(game_id),
+        user_id="spectator",
+    )
+
+    assert [move.uci for move in completed_transcript.moves] == ["e2e4", "d7d5", "e4f5", "e4d5"]
+    assert [move.answer.main for move in completed_transcript.moves] == [
+        "REGULAR_MOVE",
+        "REGULAR_MOVE",
+        "ILLEGAL_MOVE",
+        "CAPTURE_DONE",
+    ]
+    assert completed_transcript.moves[2].move_done is False
+    assert completed_transcript.moves[2].replay_fen == completed_transcript.moves[1].replay_fen
+    assert completed_transcript.moves[3].timestamp == public_moves[-1]["timestamp"]
 
 
 @pytest.mark.asyncio
