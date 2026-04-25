@@ -557,6 +557,48 @@ async def test_wild16_failed_pawn_capture_attempt_disappears_from_allowed_moves(
 
 
 @pytest.mark.asyncio
+async def test_wild16_promotion_capture_variants_count_as_one_pawn_try() -> None:
+    gid = ObjectId()
+    now = datetime.now(UTC)
+    games = FakeGamesCollection()
+    games.docs.append(
+        {
+            "_id": gid,
+            "game_code": "KZQYR8",
+            "rule_variant": "wild16",
+            "creator_color": "white",
+            "white": {"user_id": "u1", "username": "w", "connected": True},
+            "black": {"user_id": "u2", "username": "b", "connected": True},
+            "state": "active",
+            "turn": "white",
+            "move_number": 1,
+            "moves": [],
+            "engine_state": serialize_game_state(create_new_game(rule_variant="wild16")),
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games)
+
+    await service.execute_move(game_id=str(gid), user_id="u1", uci="g2g4")
+    await service.execute_move(game_id=str(gid), user_id="u2", uci="e7e5")
+    await service.execute_move(game_id=str(gid), user_id="u1", uci="f1h3")
+    await service.execute_move(game_id=str(gid), user_id="u2", uci="e5e4")
+    await service.execute_move(game_id=str(gid), user_id="u1", uci="a2a3")
+    await service.execute_move(game_id=str(gid), user_id="u2", uci="e4e3")
+    await service.execute_move(game_id=str(gid), user_id="u1", uci="h3g2")
+    await service.execute_move(game_id=str(gid), user_id="u2", uci="e3d2")
+    await service.execute_move(game_id=str(gid), user_id="u1", uci="g2h3")
+    await service.execute_move(game_id=str(gid), user_id="u1", uci="g2d5")
+    await service.execute_move(game_id=str(gid), user_id="u1", uci="c2c3")
+    response = await service.execute_move(game_id=str(gid), user_id="u1", uci="e1f1")
+    black_state = await service.get_game_state(game_id=str(gid), user_id="u2")
+
+    assert response["next_turn_pawn_tries"] == 1
+    assert {"d2c1q", "d2c1r", "d2c1b", "d2c1n"} <= set(black_state.allowed_moves)
+
+
+@pytest.mark.asyncio
 async def test_get_game_state_rejects_non_participants(active_game_doc: dict) -> None:
     games = FakeGamesCollection()
     games.docs.append(active_game_doc)
