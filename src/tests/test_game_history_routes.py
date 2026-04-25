@@ -326,9 +326,9 @@ async def test_completed_wild16_transcript_recomputes_legacy_promotion_pawn_try_
 
     engine_state = serialize_game_state(engine)
     for turn in engine_state["game_state"]["white_scoresheet"]["moves_own"]:
-        for entry in turn:
-            if entry["question"].get("move_uci") == "e1f1":
-                entry["answer"]["next_turn_pawn_tries"] = 4
+        for move_data, answer_data in turn:
+            if move_data.get("chess_move") == "e1f1":
+                answer_data["next_turn_pawn_tries"] = 4
 
     archived = {
         "_id": game_id,
