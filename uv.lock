@@ -27,7 +27,7 @@ wheels = [
 
 [[package]]
 name = "backend"
-version = "1.2.34"
+version = "1.2.35"
 source = { virtual = "." }
 dependencies = [
     { name = "bcrypt" },
@@ -64,7 +64,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=4.3.0" },
     { name = "fastapi", specifier = ">=0.115.14" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "kriegspiel", git = "https://github.com/Kriegspiel/ks-game.git?rev=6a6fa94320d96db2ac109314872f41cdbb8fe9c3" },
+    { name = "kriegspiel", git = "https://github.com/Kriegspiel/ks-game.git?rev=ea4894e5dae716fa4dff7bd547c8f927d85387b6" },
     { name = "motor", specifier = ">=3.6.0" },
     { name = "mypy", specifier = ">=1.16.1" },
     { name = "peewee", specifier = ">=3.18.1" },
@@ -522,8 +522,8 @@ wheels = [
 
 [[package]]
 name = "kriegspiel"
-version = "1.4.2"
-source = { git = "https://github.com/Kriegspiel/ks-game.git?rev=6a6fa94320d96db2ac109314872f41cdbb8fe9c3#6a6fa94320d96db2ac109314872f41cdbb8fe9c3" }
+version = "1.4.3"
+source = { git = "https://github.com/Kriegspiel/ks-game.git?rev=ea4894e5dae716fa4dff7bd547c8f927d85387b6#ea4894e5dae716fa4dff7bd547c8f927d85387b6" }
 dependencies = [
     { name = "python-chess" },
 ]
