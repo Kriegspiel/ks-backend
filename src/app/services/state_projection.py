@@ -323,19 +323,22 @@ def build_viewer_scoresheet(*, viewer_color: PlayerColor, stored_scoresheet: dic
 
     for index in range(turn_count):
         turn_number = index + 1
-        own_color: PlayerColor = viewer_color
-        opponent_color: PlayerColor = 'black' if viewer_color == 'white' else 'white'
+        white_turns = own_turns if viewer_color == 'white' else opponent_turns
+        black_turns = own_turns if viewer_color == 'black' else opponent_turns
+        white_perspective: Literal['own', 'opponent'] = 'own' if viewer_color == 'white' else 'opponent'
+        black_perspective: Literal['own', 'opponent'] = 'own' if viewer_color == 'black' else 'opponent'
+
         append_entries(
-            own_turns[index] if index < len(own_turns) else [],
+            white_turns[index] if index < len(white_turns) else [],
             turn_number=turn_number,
-            color=own_color,
-            perspective='own',
+            color='white',
+            perspective=white_perspective,
         )
         append_entries(
-            opponent_turns[index] if index < len(opponent_turns) else [],
+            black_turns[index] if index < len(black_turns) else [],
             turn_number=turn_number,
-            color=opponent_color,
-            perspective='opponent',
+            color='black',
+            perspective=black_perspective,
         )
 
     turns = [turn_map[key] for key in sorted(turn_map)]
