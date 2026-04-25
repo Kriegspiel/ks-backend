@@ -74,6 +74,22 @@ def full_fen(game: KriegspielGame) -> str:
     return game._board.fen()  # noqa: SLF001
 
 
+def public_material_summary(game: KriegspielGame) -> dict[str, dict[str, int | None]]:
+    summary = game.public_material_summary
+
+    return {
+        "white": _material_side_payload(summary.white),
+        "black": _material_side_payload(summary.black),
+    }
+
+
+def _material_side_payload(side: Any) -> dict[str, int | None]:
+    return {
+        "pieces_remaining": int(getattr(side, "pieces_remaining", 16)),
+        "pawns_captured": getattr(side, "pawns_captured", None),
+    }
+
+
 def attempt_move(game: KriegspielGame, move_uci: str) -> dict[str, Any]:
     try:
         chess_move = chess.Move.from_uci(move_uci)

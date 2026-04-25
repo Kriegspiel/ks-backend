@@ -185,6 +185,20 @@ class ViewerScoresheet(BaseModel):
     turns: list[ScoresheetTurn] = Field(default_factory=list)
 
 
+class MaterialSideSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pieces_remaining: int = Field(ge=0, le=16)
+    pawns_captured: int | None = Field(default=None, ge=0, le=8)
+
+
+class MaterialSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    white: MaterialSideSummary
+    black: MaterialSideSummary
+
+
 class GameStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -195,6 +209,7 @@ class GameStateResponse(BaseModel):
     your_color: PlayerColor
     your_fen: str
     allowed_moves: list[str] = Field(default_factory=list)
+    material_summary: MaterialSummary
     scoresheet: ViewerScoresheet
     referee_log: list[RefereeLogItem]
     referee_turns: list[RefereeTurnEntry] = Field(default_factory=list)

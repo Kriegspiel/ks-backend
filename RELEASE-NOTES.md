@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.2.37
+
+- **Material Summary API**: game state responses now expose engine-derived
+  remaining material, including public pawn-capture counts for Cincinnati and
+  Wild 16.
+
 ## ks-backend v. 1.2.36
 
 - **Wild 16 Review Accuracy**: completed review transcripts now normalize

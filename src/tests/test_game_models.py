@@ -11,6 +11,8 @@ from app.models.game import (
     GameDocument,
     GameMetadataResponse,
     JoinGameResponse,
+    MaterialSideSummary,
+    MaterialSummary,
     OpenGamesResponse,
 )
 
@@ -146,6 +148,28 @@ def test_join_game_response_contract_shape() -> None:
 
     assert response.state == "active"
     assert response.play_as == "black"
+
+
+def test_material_summary_contract_shape() -> None:
+    response = MaterialSummary.model_validate(
+        {
+            "white": {"pieces_remaining": 15, "pawns_captured": 1},
+            "black": {"pieces_remaining": 16, "pawns_captured": None},
+        }
+    )
+
+    assert response.white == MaterialSideSummary(pieces_remaining=15, pawns_captured=1)
+    assert response.black == MaterialSideSummary(pieces_remaining=16, pawns_captured=None)
+
+
+def test_material_summary_rejects_impossible_counts() -> None:
+    with pytest.raises(ValidationError):
+        MaterialSummary.model_validate(
+            {
+                "white": {"pieces_remaining": 17, "pawns_captured": 0},
+                "black": {"pieces_remaining": 16, "pawns_captured": 9},
+            }
+        )
 
 
 def test_open_games_response_contract_shape() -> None:
