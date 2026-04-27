@@ -15,7 +15,7 @@ class ClockService:
         return max(0.0, (end - start).total_seconds())
 
     @classmethod
-    def default_time_control(cls, *, now: datetime, active_color: PlayerColor = "white") -> dict[str, Any]:
+    def default_time_control(cls, *, now: datetime, active_color: PlayerColor | None = None) -> dict[str, Any]:
         return {
             "base": cls.RAPID_BASE_SECONDS,
             "increment": cls.RAPID_INCREMENT_SECONDS,
@@ -68,7 +68,8 @@ class ClockService:
             else:
                 black += increment
 
-        active_color: PlayerColor = next_active_color if move_done else mover_color
+        clock_has_started = projected.get("active_color") in ("white", "black")
+        active_color: PlayerColor | None = next_active_color if move_done else (mover_color if clock_has_started else None)
         return {
             "base": float(time_control.get("base", cls.RAPID_BASE_SECONDS)),
             "increment": increment,
