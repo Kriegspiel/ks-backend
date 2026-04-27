@@ -16,6 +16,17 @@ def test_get_remaining_decrements_active_clock() -> None:
     assert projected["active_color"] == "white"
 
 
+def test_default_clock_waits_for_the_first_completed_move() -> None:
+    now = datetime(2026, 3, 26, 12, 0, tzinfo=UTC)
+    time_control = ClockService.default_time_control(now=now)
+
+    projected = ClockService.get_remaining(time_control=time_control, now=now + timedelta(seconds=30))
+
+    assert projected["white_remaining"] == 1500.0
+    assert projected["black_remaining"] == 1500.0
+    assert projected["active_color"] is None
+
+
 def test_deduct_and_increment_applies_increment_on_legal_move() -> None:
     now = datetime(2026, 3, 26, 12, 0, tzinfo=UTC)
     time_control = ClockService.default_time_control(now=now, active_color="white")
@@ -29,6 +40,40 @@ def test_deduct_and_increment_applies_increment_on_legal_move() -> None:
     )
 
     assert updated["white_remaining"] == 1505.0
+    assert updated["black_remaining"] == 1500.0
+    assert updated["active_color"] == "black"
+
+
+def test_non_move_attempt_does_not_start_a_paused_opening_clock() -> None:
+    now = datetime(2026, 3, 26, 12, 0, tzinfo=UTC)
+    time_control = ClockService.default_time_control(now=now)
+
+    updated = ClockService.deduct_and_increment(
+        time_control=time_control,
+        mover_color="white",
+        now=now + timedelta(seconds=5),
+        move_done=False,
+        next_active_color="white",
+    )
+
+    assert updated["white_remaining"] == 1500.0
+    assert updated["black_remaining"] == 1500.0
+    assert updated["active_color"] is None
+
+
+def test_first_completed_white_move_starts_black_clock() -> None:
+    now = datetime(2026, 3, 26, 12, 0, tzinfo=UTC)
+    time_control = ClockService.default_time_control(now=now)
+
+    updated = ClockService.deduct_and_increment(
+        time_control=time_control,
+        mover_color="white",
+        now=now + timedelta(seconds=5),
+        move_done=True,
+        next_active_color="black",
+    )
+
+    assert updated["white_remaining"] == 1510.0
     assert updated["black_remaining"] == 1500.0
     assert updated["active_color"] == "black"
 

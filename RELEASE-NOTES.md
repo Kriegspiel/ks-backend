@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.2.38
+
+- **Clock Start**: newly active games now keep both clocks paused until White
+  completes the first legal move; failed opening attempts do not start either
+  player's clock.
+
 ## ks-backend v. 1.2.37
 
 - **Material Summary API**: game state responses now expose engine-derived

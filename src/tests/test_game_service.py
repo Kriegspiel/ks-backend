@@ -263,7 +263,26 @@ async def test_join_game_transitions_waiting_to_active_and_assigns_opposite_colo
     assert saved["state"] == "active"
     assert saved["white"]["user_id"] == "u2"
     assert saved["black"]["user_id"] == "u1"
+    assert saved["time_control"]["active_color"] is None
     assert "white_scoresheet" not in saved
+
+
+@pytest.mark.asyncio
+async def test_bot_game_clock_waits_for_white_first_move() -> None:
+    bot_id = ObjectId()
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    users.docs.append({"_id": bot_id, "username": "randobot", "role": "bot", "status": "active"})
+    service = GameService(games, users_collection=users)
+
+    response = await service.create_game(
+        user_id="u1",
+        username="creator",
+        request=CreateGameRequest(opponent_type="bot", bot_id=str(bot_id), play_as="white", time_control="rapid"),
+    )
+
+    assert response.state == "active"
+    assert games.docs[0]["time_control"]["active_color"] is None
 
 
 @pytest.mark.asyncio

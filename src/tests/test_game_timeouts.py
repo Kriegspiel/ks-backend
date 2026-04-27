@@ -146,6 +146,28 @@ async def test_legal_move_updates_clock_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_first_legal_move_starts_clock_without_charging_opening_wait() -> None:
+    now = datetime.now(UTC)
+    game_id = ObjectId()
+    games = FakeGamesCollection()
+    doc = _active_doc(now, game_id)
+    doc["time_control"] = ClockService.default_time_control(now=now)
+    games.docs.append(doc)
+
+    class Frozen(GameService):
+        @staticmethod
+        def utcnow() -> datetime:
+            return now + timedelta(seconds=3)
+
+    service = Frozen(games)
+    move = await service.execute_move(game_id=str(game_id), user_id="u1", uci="e2e4")
+
+    assert move["clock"]["active_color"] == "black"
+    assert move["clock"]["white_remaining"] == pytest.approx(1510.0)
+    assert move["clock"]["black_remaining"] == pytest.approx(1500.0)
+
+
+@pytest.mark.asyncio
 async def test_move_rejects_non_participant() -> None:
     now = datetime.now(UTC)
     gid = ObjectId()

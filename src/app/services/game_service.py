@@ -1158,7 +1158,20 @@ class GameService:
         time_control = game.get("time_control")
         if isinstance(time_control, dict):
             return time_control
-        return self._clock.default_time_control(now=now, active_color=game.get("turn") or "white")
+        return self._clock.default_time_control(now=now, active_color=self._clock_active_color_for_game(game))
+
+    @staticmethod
+    def _clock_active_color_for_game(game: dict[str, Any]) -> PlayerColor | None:
+        if game.get("state") != "active":
+            return None
+        try:
+            move_number = int(game.get("move_number", 1) or 1)
+        except (TypeError, ValueError):
+            move_number = 1
+        if move_number <= 1:
+            return None
+        turn = game.get("turn")
+        return turn if turn in ("white", "black") else None
 
     async def _adjudicate_timeout_if_needed(self, *, game: dict[str, Any], now: datetime) -> dict[str, Any]:
         if game.get("state") != "active":
@@ -1348,7 +1361,7 @@ class GameService:
                     "turn": "white",
                     "engine_state": serialize_game_state(engine),
                     "moves": [],
-                    "time_control": self._clock.default_time_control(now=now, active_color="white"),
+                    "time_control": self._clock.default_time_control(now=now),
                     "expires_at": None,
                 }
             )
@@ -1430,7 +1443,7 @@ class GameService:
                     "turn": "white",
                     "engine_state": serialize_game_state(engine),
                     "moves": [],
-                    "time_control": self._clock.default_time_control(now=now, active_color="white"),
+                    "time_control": self._clock.default_time_control(now=now),
                     "updated_at": now,
                     "expires_at": None,
                 },
