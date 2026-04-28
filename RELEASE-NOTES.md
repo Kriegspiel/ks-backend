@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.1
+
+- **Guest Game Metadata**: game metadata responses now allow guest player
+  roles, preventing `/api/game/mine` failures when a bot is paired with a guest
+  opponent.
+
 ## ks-backend v. 1.3.0
 
 - **Guest Play**: added session-backed guest account creation via
