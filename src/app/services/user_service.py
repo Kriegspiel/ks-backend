@@ -17,6 +17,7 @@ from pymongo.errors import DuplicateKeyError
 from app.config import get_settings
 from app.models.auth import BotRegisterRequest, RegisterRequest
 from app.models.user import UserModel, default_user_stats_payload, normalize_user_stats_payload, utcnow
+from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
 
 DEFAULT_BOT_OWNER_EMAIL = "bots@kriegspiel.org"
 PASSWORD_HASH_SCHEME_BCRYPT_SHA256 = "bcrypt_sha256$"
@@ -428,6 +429,65 @@ class UserService:
         payload["_id"] = result.inserted_id
         return UserModel.from_mongo(payload)
 
+    @classmethod
+    def _guest_username_for_index(cls, index: int) -> str:
+        first = GUEST_FIRST_NAMES[index % len(GUEST_FIRST_NAMES)]
+        last = GUEST_LAST_NAMES[(index // len(GUEST_FIRST_NAMES)) % len(GUEST_LAST_NAMES)]
+        return f"guest_{first}_{last}"
+
+    @classmethod
+    def guest_name_pool_size(cls) -> int:
+        return len(GUEST_FIRST_NAMES) * len(GUEST_LAST_NAMES)
+
+    async def create_guest_user(self) -> UserModel:
+        total_names = self.guest_name_pool_size()
+        start_index = secrets.randbelow(total_names)
+
+        for offset in range(total_names):
+            username = self._guest_username_for_index(start_index + offset)
+            if await self._users.find_one({"username": username}) is not None:
+                continue
+
+            now = utcnow()
+            payload = {
+                "username": username,
+                "username_display": username,
+                "email": f"{username}@guests.kriegspiel.local",
+                "email_verified": True,
+                "email_verification_sent_at": None,
+                "email_verified_at": now,
+                "password_hash": self.hash_password(secrets.token_urlsafe(32)),
+                "auth_providers": ["guest"],
+                "profile": {"bio": "Guest player", "avatar_url": None, "country": None},
+                "bot_profile": None,
+                "stats": default_user_stats_payload(),
+                "settings": {
+                    "board_theme": "default",
+                    "piece_set": "cburnett",
+                    "sound_enabled": True,
+                    "auto_ask_any": False,
+                },
+                "role": "guest",
+                "status": "active",
+                "last_active_at": now,
+                "created_at": now,
+                "updated_at": now,
+            }
+
+            try:
+                result = await self._users.insert_one(payload)
+            except DuplicateKeyError:
+                continue
+
+            payload["_id"] = result.inserted_id
+            return UserModel.from_mongo(payload)
+
+        raise UserConflictError(
+            field="username",
+            code="GUEST_NAME_POOL_EXHAUSTED",
+            message="No guest names are available right now",
+        )
+
     @staticmethod
     def _default_bot_listed(*, username: str, display_name: str, description: str) -> bool:
         combined = f"{username} {display_name} {description}".lower()
@@ -632,7 +692,7 @@ class UserService:
         query = {
             "status": "active",
             "$or": [
-                {"role": {"$ne": "bot"}, "stats.games_played": {"$gte": 5}},
+                {"role": {"$nin": ["bot", "guest"]}, "stats.games_played": {"$gte": 5}},
                 {"role": "bot", "bot_profile.listed": True},
             ],
         }

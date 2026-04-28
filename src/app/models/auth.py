@@ -39,6 +39,12 @@ class LoginResponse(BaseModel):
     username: str
 
 
+class GuestLoginResponse(BaseModel):
+    user_id: str
+    username: str
+    message: str = "Guest account created. You are now logged in."
+
+
 class BotRegisterRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

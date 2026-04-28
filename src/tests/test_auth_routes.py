@@ -39,6 +39,19 @@ def _user_doc() -> dict:
     }
 
 
+def _guest_doc() -> dict:
+    payload = _user_doc()
+    payload["_id"] = "507f1f77bcf86cd799439099"
+    payload["username"] = "guest_adolf_adams"
+    payload["username_display"] = "guest_adolf_adams"
+    payload["email"] = "guest_adolf_adams@guests.kriegspiel.local"
+    payload["email_verified"] = True
+    payload["email_verified_at"] = datetime.now(UTC)
+    payload["auth_providers"] = ["guest"]
+    payload["role"] = "guest"
+    return payload
+
+
 @pytest.fixture
 def app_no_db(monkeypatch: pytest.MonkeyPatch):
     fake_users = SimpleNamespace(find_one=AsyncMock(return_value=None), insert_one=AsyncMock())
@@ -58,8 +71,10 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
     from app.services.user_service import UserConflictError
 
     created_user = UserModel.from_mongo(_user_doc())
+    guest_user = UserModel.from_mongo(_guest_doc())
     service = SimpleNamespace(
         create_user=AsyncMock(return_value=created_user),
+        create_guest_user=AsyncMock(return_value=guest_user),
         authenticate=AsyncMock(return_value=created_user),
     )
 
@@ -69,6 +84,9 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
 
         async def create_user(self, payload):
             return await service.create_user(payload)
+
+        async def create_guest_user(self):
+            return await service.create_guest_user()
 
         async def authenticate(self, username, password):
             return await service.authenticate(username, password)
@@ -91,6 +109,13 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
 
         login = client.post("/api/auth/login", json={"username": "playerone", "password": "abc12345"})
         assert login.status_code == 200
+
+        guest = client.post("/api/auth/guest")
+        assert guest.status_code == 201
+        assert guest.json()["username"] == "guest_adolf_adams"
+        guest_cookie = guest.headers.get("set-cookie", "")
+        assert "session_id=sess123" in guest_cookie
+        assert f"Max-Age={SessionService.GUEST_SESSION_MAX_AGE_SECONDS}" in guest_cookie
 
         service.authenticate = AsyncMock(return_value=None)
         invalid = client.post("/api/auth/login", json={"username": "playerone", "password": "wrong"})
@@ -120,6 +145,7 @@ def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
     body = me.json()
     assert body["username"] == "playerone"
     assert body["email"] == "player@example.com"
+    assert body["is_guest"] is False
 
 
 def test_cookie_secure_flag_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,6 +213,10 @@ def test_auth_endpoints_return_503_when_db_unavailable(monkeypatch: pytest.Monke
         login = client.post("/api/auth/login", json={"username": "playerone", "password": "abc12345"})
         assert login.status_code == 503
         assert login.json()["detail"] == "Database unavailable"
+
+        guest = client.post("/api/auth/guest")
+        assert guest.status_code == 503
+        assert guest.json()["detail"] == "Database unavailable"
 
 
 def test_bot_register_requires_matching_registration_key() -> None:

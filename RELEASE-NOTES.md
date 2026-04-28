@@ -4,6 +4,13 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.0
+
+- **Guest Play**: added session-backed guest account creation via
+  `/api/auth/guest`, using a 200-by-200 chess-player-inspired name pool and
+  collision-safe `guest_first_last` usernames. Guest sessions use a one-year
+  sliding lifetime so the same browser keeps its guest identity much longer.
+
 ## ks-backend v. 1.2.38
 
 - **Clock Start**: newly active games now keep both clocks paused until White
