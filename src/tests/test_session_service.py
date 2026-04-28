@@ -13,7 +13,7 @@ from app.services.session_service import SessionService
 async def test_create_session_inserts_expected_document() -> None:
     sessions = SimpleNamespace(insert_one=AsyncMock())
     service = SessionService(sessions)
-    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="playerone")
+    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="playerone", role="user")
 
     session_id = await service.create_session(user=user, ip="127.0.0.1", user_agent="pytest")
 
@@ -25,12 +25,31 @@ async def test_create_session_inserts_expected_document() -> None:
     assert payload["username"] == "playerone"
     assert payload["ip"] == "127.0.0.1"
     assert payload["user_agent"] == "pytest"
+    assert payload["max_age_seconds"] == SessionService.SESSION_MAX_AGE_SECONDS
+    assert payload["expires_at"] - payload["created_at"] == timedelta(seconds=SessionService.SESSION_MAX_AGE_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_create_guest_session_uses_long_lived_expiry() -> None:
+    sessions = SimpleNamespace(insert_one=AsyncMock())
+    service = SessionService(sessions)
+    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="guest_adolf_adams", role="guest")
+
+    await service.create_session(user=user, ip="127.0.0.1", user_agent="pytest")
+
+    payload = sessions.insert_one.await_args.args[0]
+    assert payload["max_age_seconds"] == SessionService.GUEST_SESSION_MAX_AGE_SECONDS
+    assert payload["expires_at"] - payload["created_at"] == timedelta(seconds=SessionService.GUEST_SESSION_MAX_AGE_SECONDS)
 
 
 @pytest.mark.asyncio
 async def test_get_active_session_extends_expiry() -> None:
     now = datetime.now(UTC)
-    session = {"_id": "sid", "expires_at": now + timedelta(minutes=5)}
+    session = {
+        "_id": "sid",
+        "expires_at": now + timedelta(minutes=5),
+        "max_age_seconds": SessionService.GUEST_SESSION_MAX_AGE_SECONDS,
+    }
     sessions = SimpleNamespace(find_one=AsyncMock(return_value=session), update_one=AsyncMock(), delete_one=AsyncMock())
     service = SessionService(sessions)
 
@@ -39,6 +58,9 @@ async def test_get_active_session_extends_expiry() -> None:
     assert active is not None
     assert sessions.update_one.await_count == 1
     assert sessions.delete_one.await_count == 0
+    update_payload = sessions.update_one.await_args.args[1]["$set"]
+    assert update_payload["max_age_seconds"] == SessionService.GUEST_SESSION_MAX_AGE_SECONDS
+    assert update_payload["expires_at"] - now > timedelta(days=364)
 
 
 @pytest.mark.asyncio

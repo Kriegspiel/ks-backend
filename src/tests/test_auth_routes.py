@@ -113,7 +113,9 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
         guest = client.post("/api/auth/guest")
         assert guest.status_code == 201
         assert guest.json()["username"] == "guest_adolf_adams"
-        assert "session_id=sess123" in guest.headers.get("set-cookie", "")
+        guest_cookie = guest.headers.get("set-cookie", "")
+        assert "session_id=sess123" in guest_cookie
+        assert f"Max-Age={SessionService.GUEST_SESSION_MAX_AGE_SECONDS}" in guest_cookie
 
         service.authenticate = AsyncMock(return_value=None)
         invalid = client.post("/api/auth/login", json={"username": "playerone", "password": "wrong"})

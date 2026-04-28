@@ -8,7 +8,8 @@ version changes.
 
 - **Guest Play**: added session-backed guest account creation via
   `/api/auth/guest`, using a 200-by-200 chess-player-inspired name pool and
-  collision-safe `guest_first_last` usernames.
+  collision-safe `guest_first_last` usernames. Guest sessions use a one-year
+  sliding lifetime so the same browser keeps its guest identity much longer.
 
 ## ks-backend v. 1.2.38
 

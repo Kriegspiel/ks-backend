@@ -22,8 +22,9 @@ logger = structlog.get_logger('app.auth')
 def _secure_cookie(request: Request) -> bool: return request.app.state.settings.ENVIRONMENT == 'production'
 def _client_ip(request: Request) -> str | None: return request.client.host if request.client else None
 
-def _set_session_cookie(request: Request, response: Response, session_id: str) -> None:
-    response.set_cookie(key=SessionService.COOKIE_NAME, value=session_id, httponly=True, secure=_secure_cookie(request), samesite='lax', max_age=SessionService.SESSION_MAX_AGE_SECONDS, path='/')
+def _set_session_cookie(request: Request, response: Response, session_id: str, user: UserModel | None = None) -> None:
+    max_age_seconds = SessionService.max_age_seconds_for_user(user) if user is not None else SessionService.SESSION_MAX_AGE_SECONDS
+    response.set_cookie(key=SessionService.COOKIE_NAME, value=session_id, httponly=True, secure=_secure_cookie(request), samesite='lax', max_age=max_age_seconds, path='/')
 
 def _clear_session_cookie(request: Request, response: Response) -> None:
     response.delete_cookie(key=SessionService.COOKIE_NAME, httponly=True, secure=_secure_cookie(request), samesite='lax', path='/')
@@ -35,7 +36,7 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     except UserConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={'field': exc.field, 'code': exc.code, 'message': str(exc)}) from exc
     session_id = await session_service.create_session(user=user, ip=_client_ip(request), user_agent=request.headers.get('user-agent'))
-    _set_session_cookie(request, response, session_id)
+    _set_session_cookie(request, response, session_id, user)
     logger.info('auth_register_success', user_id=user.id, username=user.username, source_ip=_client_ip(request))
     return RegisterResponse(user_id=user.id, username=user.username)
 
@@ -63,7 +64,7 @@ async def login(payload: LoginRequest, request: Request, response: Response, ses
         logger.warning('auth_login_failed', username=payload.username.strip(), source_ip=_client_ip(request))
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid username or password')
     session_id = await session_service.create_session(user=user, ip=_client_ip(request), user_agent=request.headers.get('user-agent'))
-    _set_session_cookie(request, response, session_id)
+    _set_session_cookie(request, response, session_id, user)
     return LoginResponse(user_id=user.id, username=user.username)
 
 @router.post('/guest', response_model=GuestLoginResponse, status_code=status.HTTP_201_CREATED)
@@ -80,7 +81,7 @@ async def login_as_guest(
             detail={'field': exc.field, 'code': exc.code, 'message': str(exc)},
         ) from exc
     session_id = await session_service.create_session(user=user, ip=_client_ip(request), user_agent=request.headers.get('user-agent'))
-    _set_session_cookie(request, response, session_id)
+    _set_session_cookie(request, response, session_id, user)
     logger.info('auth_guest_success', user_id=user.id, username=user.username, source_ip=_client_ip(request))
     return GuestLoginResponse(user_id=user.id, username=user.username)
 
@@ -98,5 +99,5 @@ async def me(user: UserModel = Depends(get_current_user)) -> dict[str, object]:
 @router.get('/session')
 async def session_status(request: Request, response: Response, user: UserModel = Depends(get_current_user)) -> dict[str, object]:
     session_id = request.cookies.get(SessionService.COOKIE_NAME)
-    if session_id: _set_session_cookie(request, response, session_id)
+    if session_id: _set_session_cookie(request, response, session_id, user)
     return {'authenticated': True, 'user_id': user.id, 'username': user.username, 'role': user.role, 'is_guest': user.role == 'guest'}
