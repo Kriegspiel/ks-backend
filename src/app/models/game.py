@@ -9,6 +9,7 @@ GameState = Literal["waiting", "active", "completed"]
 RuleVariant = Literal["berkeley", "berkeley_any", "cincinnati", "wild16"]
 PlayerColor = Literal["white", "black"]
 OpponentType = Literal["human", "bot"]
+PlayerRole = Literal["user", "bot", "guest"]
 
 
 class PlayerEmbed(BaseModel):
@@ -17,7 +18,7 @@ class PlayerEmbed(BaseModel):
     user_id: str
     username: str
     connected: bool = True
-    role: Literal["user", "bot"] = "user"
+    role: PlayerRole = "user"
 
 
 class GameDocument(BaseModel):
@@ -299,7 +300,7 @@ class PublicPlayer(BaseModel):
 
     username: str
     connected: bool
-    role: Literal["user", "bot"] = "user"
+    role: PlayerRole = "user"
     elo: int = 1200
     ratings: dict[str, dict[str, int]] = Field(default_factory=dict)
 
