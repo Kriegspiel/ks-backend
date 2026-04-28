@@ -104,6 +104,9 @@ def _matches(doc, query):
         elif isinstance(expected, dict) and "$ne" in expected:
             if val == expected["$ne"]:
                 return False
+        elif isinstance(expected, dict) and "$nin" in expected:
+            if val in expected["$nin"]:
+                return False
         elif not _same_id(val, expected):
             return False
     return True
@@ -192,6 +195,15 @@ def _build_app_and_db():
                 "username_display": "Newbie",
                 "role": "user",
                 "stats": {"games_played": 3, "games_won": 3, "elo": 1700},
+                "status": "active",
+                "settings": {},
+            },
+            {
+                "_id": ObjectId("507f1f77bcf86cd799439018"),
+                "username": "guest_adolf_adams",
+                "username_display": "guest_adolf_adams",
+                "role": "guest",
+                "stats": {"games_played": 20, "games_won": 20, "elo": 2200},
                 "status": "active",
                 "settings": {},
             },
@@ -321,6 +333,7 @@ def test_leaderboard_orders_by_elo_and_filters_min_games() -> None:
     assert leaderboard.status_code == 200
     players = leaderboard.json()["players"]
     assert [p["username"] for p in players] == ["alpha", "randobot", "playerone", "gptnano"]
+    assert "guest_adolf_adams" not in [p["username"] for p in players]
     assert all(p["games_played"] >= 5 for p in players if not p["is_bot"])
     assert players[1]["is_bot"] is True
     assert players[1]["display_name"] == "Random Bot"

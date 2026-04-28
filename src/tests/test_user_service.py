@@ -11,6 +11,8 @@ from pymongo.errors import DuplicateKeyError
 
 from app.models.auth import BotRegisterRequest, RegisterRequest
 from app.models.user import UserModel, default_user_stats_payload
+from app.services import user_service as user_service_module
+from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
 from app.services.user_service import UserConflictError, UserService
 
 
@@ -116,6 +118,8 @@ class FakeUsersCollection:
                     return False
                 if "$in" in expected and value not in expected["$in"]:
                     return False
+                if "$nin" in expected and value in expected["$nin"]:
+                    return False
                 if "$ne" in expected and value == expected["$ne"]:
                     return False
                 continue
@@ -200,6 +204,51 @@ async def test_create_user_stores_canonical_username_display_and_hashed_password
     assert service.verify_password("abc12345", stored["password_hash"])
     assert not service.verify_password("wrong-pass", stored["password_hash"])
     assert created.username == "playerone"
+
+
+def test_guest_name_pools_have_expected_size_and_safe_shape() -> None:
+    assert len(GUEST_FIRST_NAMES) == 200
+    assert len(GUEST_LAST_NAMES) == 200
+    assert UserService.guest_name_pool_size() == 40_000
+    assert len(set(GUEST_FIRST_NAMES)) == 200
+    assert len(set(GUEST_LAST_NAMES)) == 200
+    assert all(name.isascii() and name.isalnum() and name == name.lower() for name in GUEST_FIRST_NAMES)
+    assert all(name.isascii() and name.isalnum() and name == name.lower() for name in GUEST_LAST_NAMES)
+    assert all(len(UserService._guest_username_for_index(index)) <= 33 for index in range(UserService.guest_name_pool_size()))
+
+
+@pytest.mark.asyncio
+async def test_create_guest_user_stores_session_safe_guest_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(user_service_module.secrets, "randbelow", lambda _upper: 0)
+    users = FakeUsersCollection()
+    service = UserService(users)
+
+    guest = await service.create_guest_user()
+
+    stored = users.docs[0]
+    assert guest.username == "guest_adolf_adams"
+    assert stored["username"] == "guest_adolf_adams"
+    assert stored["username_display"] == "guest_adolf_adams"
+    assert stored["email"] == "guest_adolf_adams@guests.kriegspiel.local"
+    assert stored["email_verified"] is True
+    assert stored["auth_providers"] == ["guest"]
+    assert stored["role"] == "guest"
+    assert stored["status"] == "active"
+    assert stored["password_hash"] != ""
+
+
+@pytest.mark.asyncio
+async def test_create_guest_user_skips_existing_guest_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(user_service_module.secrets, "randbelow", lambda _upper: 0)
+    users = FakeUsersCollection()
+    service = UserService(users)
+
+    first = await service.create_guest_user()
+    second = await service.create_guest_user()
+
+    assert first.username == "guest_adolf_adams"
+    assert second.username == "guest_akiba_adams"
+    assert len({doc["username"] for doc in users.docs}) == 2
 
 
 @pytest.mark.asyncio

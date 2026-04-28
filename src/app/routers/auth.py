@@ -3,7 +3,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 import structlog
 from app.dependencies import get_current_user, get_session_service, require_db
-from app.models.auth import BotRegisterRequest, BotRegisterResponse, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse
+from app.models.auth import (
+    BotRegisterRequest,
+    BotRegisterResponse,
+    GuestLoginResponse,
+    LoginRequest,
+    LoginResponse,
+    RegisterRequest,
+    RegisterResponse,
+)
 from app.models.user import UserModel
 from app.services.session_service import SessionService
 from app.services.user_service import UserConflictError, UserService
@@ -58,6 +66,24 @@ async def login(payload: LoginRequest, request: Request, response: Response, ses
     _set_session_cookie(request, response, session_id)
     return LoginResponse(user_id=user.id, username=user.username)
 
+@router.post('/guest', response_model=GuestLoginResponse, status_code=status.HTTP_201_CREATED)
+async def login_as_guest(
+    request: Request,
+    response: Response,
+    session_service: SessionService = Depends(get_session_service),
+) -> GuestLoginResponse:
+    db = require_db(); user_service = UserService(db.users)
+    try: user = await user_service.create_guest_user()
+    except UserConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={'field': exc.field, 'code': exc.code, 'message': str(exc)},
+        ) from exc
+    session_id = await session_service.create_session(user=user, ip=_client_ip(request), user_agent=request.headers.get('user-agent'))
+    _set_session_cookie(request, response, session_id)
+    logger.info('auth_guest_success', user_id=user.id, username=user.username, source_ip=_client_ip(request))
+    return GuestLoginResponse(user_id=user.id, username=user.username)
+
 @router.post('/logout')
 async def logout(request: Request, response: Response, session_service: SessionService = Depends(get_session_service)) -> dict[str, str]:
     session_id = request.cookies.get(SessionService.COOKIE_NAME)
@@ -67,10 +93,10 @@ async def logout(request: Request, response: Response, session_service: SessionS
 
 @router.get('/me')
 async def me(user: UserModel = Depends(get_current_user)) -> dict[str, object]:
-    return {'user_id': user.id, 'username': user.username, 'email': user.email, 'role': user.role, 'bot_profile': user.bot_profile.model_dump() if user.bot_profile else None, 'stats': user.stats.model_dump(), 'settings': user.settings.model_dump()}
+    return {'user_id': user.id, 'username': user.username, 'email': user.email, 'role': user.role, 'is_guest': user.role == 'guest', 'bot_profile': user.bot_profile.model_dump() if user.bot_profile else None, 'stats': user.stats.model_dump(), 'settings': user.settings.model_dump()}
 
 @router.get('/session')
 async def session_status(request: Request, response: Response, user: UserModel = Depends(get_current_user)) -> dict[str, object]:
     session_id = request.cookies.get(SessionService.COOKIE_NAME)
     if session_id: _set_session_cookie(request, response, session_id)
-    return {'authenticated': True, 'user_id': user.id, 'username': user.username, 'role': user.role}
+    return {'authenticated': True, 'user_id': user.id, 'username': user.username, 'role': user.role, 'is_guest': user.role == 'guest'}
