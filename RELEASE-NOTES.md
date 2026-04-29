@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.1
+
+- **Guest Report API**: added `/api/tech/guests-report` with guest name,
+  start day, latest associated game time, and total archived/live game count.
+
 ## ks-backend v. 1.3.0
 
 - **Guest Play**: added session-backed guest account creation via

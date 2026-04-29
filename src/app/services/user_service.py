@@ -127,6 +127,21 @@ class UserService:
         return datetime.now(UTC)
 
     @staticmethod
+    def _optional_datetime(value: Any) -> datetime | None:
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
+    @classmethod
+    def _created_day(cls, doc: dict[str, Any]) -> str | None:
+        created_at = cls._optional_datetime(doc.get("created_at"))
+        if created_at is None:
+            created_at = cls._optional_datetime(getattr(doc.get("_id"), "generation_time", None))
+        return created_at.date().isoformat() if created_at is not None else None
+
+    @staticmethod
     def _find(collection: Any, query: dict[str, Any], projection: dict[str, Any] | None = None):
         if projection is None:
             return collection.find(query)
@@ -724,6 +739,90 @@ class UserService:
             rank += 1
 
         return players, total
+
+    async def get_guest_report(self, db: Any) -> dict[str, Any]:
+        guest_cursor = self._find(
+            db.users,
+            {"role": "guest"},
+            {
+                "_id": 1,
+                "username": 1,
+                "username_display": 1,
+                "created_at": 1,
+            },
+        ).sort([("created_at", -1), ("username", 1)])
+
+        guests_by_id: dict[str, dict[str, Any]] = {}
+        guest_ids: list[str] = []
+        async for user in guest_cursor:
+            user_id = user.get("_id")
+            username = user.get("username")
+            if user_id is None or not isinstance(username, str) or not username.strip():
+                continue
+            user_id_string = str(user_id)
+            display_name = user.get("username_display") if isinstance(user.get("username_display"), str) else username
+            guests_by_id[user_id_string] = {
+                "name": display_name,
+                "username": username,
+                "day_started": self._created_day(user),
+                "last_game": None,
+                "number_of_games": 0,
+                "_seen_games": set(),
+            }
+            guest_ids.append(user_id_string)
+
+        if not guest_ids:
+            return {"guests": [], "total": 0}
+
+        query = {
+            "$or": [
+                {"white.user_id": {"$in": guest_ids}},
+                {"black.user_id": {"$in": guest_ids}},
+            ]
+        }
+        projection = {
+            "_id": 1,
+            "game_code": 1,
+            "white": 1,
+            "black": 1,
+            "created_at": 1,
+            "updated_at": 1,
+        }
+
+        for collection_name in ("game_archives", "games"):
+            collection = getattr(db, collection_name, None)
+            if collection is None:
+                continue
+            async for game in self._find(collection, query, projection):
+                game_key = str(game.get("_id") or game.get("game_code") or id(game))
+                played_at = self._optional_datetime(game.get("updated_at")) or self._optional_datetime(game.get("created_at"))
+                for color in ("white", "black"):
+                    player = game.get(color) if isinstance(game.get(color), dict) else {}
+                    guest_row = guests_by_id.get(str(player.get("user_id") or ""))
+                    if guest_row is None:
+                        continue
+                    seen_games = guest_row["_seen_games"]
+                    if game_key not in seen_games:
+                        seen_games.add(game_key)
+                        guest_row["number_of_games"] += 1
+                    last_game = guest_row["last_game"]
+                    if played_at is not None and (last_game is None or played_at > last_game):
+                        guest_row["last_game"] = played_at
+
+        guests: list[dict[str, Any]] = []
+        for guest_row in guests_by_id.values():
+            last_game = guest_row["last_game"]
+            guests.append(
+                {
+                    "name": guest_row["name"],
+                    "username": guest_row["username"],
+                    "day_started": guest_row["day_started"],
+                    "last_game": last_game.isoformat() if isinstance(last_game, datetime) else None,
+                    "number_of_games": guest_row["number_of_games"],
+                }
+            )
+
+        return {"guests": guests, "total": len(guests)}
 
     async def get_listed_bot_daily_report(self, db: Any, *, days: int = 10, timezone_name: str = "America/New_York") -> dict[str, Any]:
         bounded_days = max(1, min(days, 31))
