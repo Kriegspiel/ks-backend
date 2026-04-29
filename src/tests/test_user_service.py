@@ -168,9 +168,15 @@ class FakeUsersCollection:
 
 
 class FakeDB:
-    def __init__(self, users: FakeUsersCollection, game_archives: FakeUsersCollection):
+    def __init__(
+        self,
+        users: FakeUsersCollection,
+        game_archives: FakeUsersCollection,
+        games: FakeUsersCollection | None = None,
+    ):
         self.users = users
         self.game_archives = game_archives
+        self.games = games
 
 
 def test_find_uses_single_argument_call_when_projection_is_omitted() -> None:
@@ -1189,6 +1195,96 @@ async def test_get_listed_bot_daily_report_returns_empty_when_no_bots_are_listed
     report = await UserService(users).get_listed_bot_daily_report(FakeDB(users=users, game_archives=FakeUsersCollection()), days=5)
 
     assert report == {"timezone": "America/New_York", "bots": []}
+
+
+@pytest.mark.asyncio
+async def test_get_guest_report_lists_guests_with_archive_and_live_game_counts() -> None:
+    guest_one_id = ObjectId()
+    guest_two_id = ObjectId()
+    human_id = ObjectId()
+    guest_one_started = datetime(2026, 4, 1, 9, tzinfo=UTC)
+    guest_two_started = datetime(2026, 4, 2, 9, tzinfo=UTC)
+    archived_at = datetime(2026, 4, 3, 12, tzinfo=UTC)
+    live_at = datetime(2026, 4, 4, 13, tzinfo=UTC)
+
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {
+                "_id": guest_one_id,
+                "username": "guest_mikhail_tal",
+                "username_display": "guest_mikhail_tal",
+                "role": "guest",
+                "created_at": guest_one_started,
+            },
+            {
+                "_id": guest_two_id,
+                "username": "guest_judit_polgar",
+                "username_display": "guest_judit_polgar",
+                "role": "guest",
+                "created_at": guest_two_started,
+            },
+            {"_id": human_id, "username": "fil", "role": "user", "created_at": guest_two_started},
+        ]
+    )
+
+    archives = FakeUsersCollection()
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "DONE01",
+                "white": {"user_id": str(guest_one_id), "username": "guest_mikhail_tal"},
+                "black": {"user_id": str(human_id), "username": "fil"},
+                "created_at": archived_at - timedelta(minutes=10),
+                "updated_at": archived_at,
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "DONE02",
+                "white": {"user_id": str(human_id), "username": "fil"},
+                "black": {"user_id": str(guest_two_id), "username": "guest_judit_polgar"},
+                "created_at": archived_at - timedelta(days=1),
+                "updated_at": archived_at - timedelta(days=1),
+            },
+        ]
+    )
+    games = FakeUsersCollection()
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "LIVE01",
+            "white": {"user_id": str(guest_one_id), "username": "guest_mikhail_tal"},
+            "black": {"user_id": str(guest_two_id), "username": "guest_judit_polgar"},
+            "created_at": live_at - timedelta(minutes=5),
+            "updated_at": live_at,
+        }
+    )
+
+    report = await UserService(users).get_guest_report(FakeDB(users=users, game_archives=archives, games=games))
+
+    assert report["total"] == 2
+    rows = {guest["username"]: guest for guest in report["guests"]}
+    assert rows["guest_mikhail_tal"] == {
+        "name": "guest_mikhail_tal",
+        "username": "guest_mikhail_tal",
+        "day_started": "2026-04-01",
+        "last_game": "2026-04-04T13:00:00+00:00",
+        "number_of_games": 2,
+    }
+    assert rows["guest_judit_polgar"]["day_started"] == "2026-04-02"
+    assert rows["guest_judit_polgar"]["last_game"] == "2026-04-04T13:00:00+00:00"
+    assert rows["guest_judit_polgar"]["number_of_games"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_guest_report_returns_empty_without_guest_accounts() -> None:
+    users = FakeUsersCollection()
+    users.docs.append({"_id": ObjectId(), "username": "human", "role": "user", "created_at": datetime(2026, 4, 1, tzinfo=UTC)})
+
+    report = await UserService(users).get_guest_report(FakeDB(users=users, game_archives=FakeUsersCollection()))
+
+    assert report == {"guests": [], "total": 0}
 
 
 @pytest.mark.asyncio

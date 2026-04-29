@@ -71,6 +71,20 @@ class StubService:
                 ],
             }
         )
+        self.get_guest_report = AsyncMock(
+            return_value={
+                "guests": [
+                    {
+                        "name": "guest_mikhail_tal",
+                        "username": "guest_mikhail_tal",
+                        "day_started": "2026-04-01",
+                        "last_game": "2026-04-04T13:00:00+00:00",
+                        "number_of_games": 2,
+                    }
+                ],
+                "total": 1,
+            }
+        )
         self.update_settings = AsyncMock(
             return_value={
                 "board_theme": "dark",
@@ -104,6 +118,7 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
         history = client.get("/api/user/playerone/games?page=1&per_page=20")
         leaderboard = client.get("/api/leaderboard?page=1&per_page=20")
         bots_report = client.get("/api/tech/bots-report?days=10")
+        guests_report = client.get("/api/tech/guests-report")
         unauth = client.patch("/api/user/settings", json={"board_theme": "dark"})
 
     assert profile.status_code == 200
@@ -117,6 +132,9 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
 
     assert bots_report.status_code == 200
     assert bots_report.json()["bots"][0]["username"] == "gptnano"
+
+    assert guests_report.status_code == 200
+    assert guests_report.json()["guests"][0]["username"] == "guest_mikhail_tal"
 
     assert unauth.status_code == 401
 
