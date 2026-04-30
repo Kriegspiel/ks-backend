@@ -12,14 +12,15 @@ class BotService:
 
     @staticmethod
     def _supported_rule_variants(doc: dict[str, Any]) -> list[str]:
+        supported_rulesets = {"berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"}
         profile = doc.get("bot_profile") or {}
         variants = profile.get("supported_rule_variants")
         if isinstance(variants, list) and variants:
-            return [str(item) for item in variants if str(item) in {"berkeley", "berkeley_any", "cincinnati", "wild16"}]
+            return [str(item) for item in variants if str(item) in supported_rulesets]
         username = str(doc.get("username") or "").strip().lower()
         if username == "randobotany":
             return ["berkeley_any"]
-        return ["berkeley", "berkeley_any"]
+        return ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
 
     async def list_bots(self) -> BotListResponse:
         cursor = self._users.find({"role": "bot", "status": "active"}).sort("username", 1)

@@ -474,7 +474,15 @@ async def test_user_service_can_issue_and_authenticate_bot_token() -> None:
     assert user.role == "bot"
     assert user.bot_profile is not None
     assert user.bot_profile.owner_email == "owner@example.com"
-    assert user.bot_profile.supported_rule_variants == ["berkeley", "berkeley_any"]
+    assert user.bot_profile.supported_rule_variants == [
+        "berkeley",
+        "berkeley_any",
+        "cincinnati",
+        "wild16",
+        "rand",
+        "english",
+        "crazykrieg",
+    ]
     authenticated = await service.authenticate_bot_token(token)
     assert authenticated is not None
     assert authenticated.username == "randobot"
@@ -734,7 +742,15 @@ async def test_bot_service_get_bot_by_id_rejects_invalid_and_filters_inactive() 
 
 def test_bot_service_supported_rule_variants_fallbacks_cover_randobotany() -> None:
     assert BotService._supported_rule_variants({"username": "randobotany", "bot_profile": {}}) == ["berkeley_any"]
-    assert BotService._supported_rule_variants({"username": "randobot", "bot_profile": {}}) == ["berkeley", "berkeley_any"]
+    assert BotService._supported_rule_variants({"username": "randobot", "bot_profile": {}}) == [
+        "berkeley",
+        "berkeley_any",
+        "cincinnati",
+        "wild16",
+        "rand",
+        "english",
+        "crazykrieg",
+    ]
 
 
 def test_bot_router_uses_db_users_and_lists_bots() -> None:

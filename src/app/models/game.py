@@ -6,9 +6,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 GameState = Literal["waiting", "active", "completed"]
-RuleVariant = Literal["berkeley", "berkeley_any", "cincinnati", "wild16"]
+RuleVariant = Literal["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
 PlayerColor = Literal["white", "black"]
 OpponentType = Literal["human", "bot"]
+PieceAnnouncement = Literal["PAWN", "PIECE", "KNIGHT", "BISHOP", "ROOK", "QUEEN"]
 
 
 class PlayerEmbed(BaseModel):
@@ -17,7 +18,7 @@ class PlayerEmbed(BaseModel):
     user_id: str
     username: str
     connected: bool = True
-    role: Literal["user", "bot"] = "user"
+    role: Literal["user", "guest", "bot"] = "user"
 
 
 class GameDocument(BaseModel):
@@ -118,9 +119,12 @@ class MoveResponse(BaseModel):
     announcement: str
     special_announcement: str | None = None
     capture_square: str | None = None
-    captured_piece_announcement: Literal["PAWN", "PIECE"] | None = None
+    captured_piece_announcement: PieceAnnouncement | None = None
+    dropped_piece_announcement: PieceAnnouncement | None = None
+    promotion_announced: bool | None = None
     next_turn_pawn_tries: int | None = Field(default=None, ge=0)
     next_turn_has_pawn_capture: bool | None = None
+    next_turn_pawn_try_squares: list[str] | None = None
     turn: PlayerColor | None = None
     game_over: bool
     clock: ClockState
@@ -199,6 +203,23 @@ class MaterialSummary(BaseModel):
     black: MaterialSideSummary
 
 
+class ReserveSideSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pawns: int = Field(default=0, ge=0)
+    knights: int = Field(default=0, ge=0)
+    bishops: int = Field(default=0, ge=0)
+    rooks: int = Field(default=0, ge=0)
+    queens: int = Field(default=0, ge=0)
+
+
+class ReserveSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    white: ReserveSideSummary
+    black: ReserveSideSummary
+
+
 class GameStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -210,6 +231,7 @@ class GameStateResponse(BaseModel):
     your_fen: str
     allowed_moves: list[str] = Field(default_factory=list)
     material_summary: MaterialSummary
+    reserve_summary: ReserveSummary
     scoresheet: ViewerScoresheet
     referee_log: list[RefereeLogItem]
     referee_turns: list[RefereeTurnEntry] = Field(default_factory=list)
@@ -248,10 +270,13 @@ class TranscriptAnswer(BaseModel):
 
     main: str
     capture_square: str | None = None
-    captured_piece_announcement: Literal["PAWN", "PIECE"] | None = None
+    captured_piece_announcement: PieceAnnouncement | None = None
+    dropped_piece_announcement: PieceAnnouncement | None = None
+    promotion_announced: bool | None = None
     special: str | None = None
     next_turn_pawn_tries: int | None = Field(default=None, ge=0)
     next_turn_has_pawn_capture: bool | None = None
+    next_turn_pawn_try_squares: list[str] | None = None
 
 
 class TranscriptMoveItem(BaseModel):

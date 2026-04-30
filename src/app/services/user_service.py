@@ -513,7 +513,7 @@ class UserService:
     def _default_supported_rule_variants(*, username: str) -> list[str]:
         if username == "randobotany":
             return ["berkeley_any"]
-        return ["berkeley", "berkeley_any"]
+        return ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
 
     async def create_bot(self, registration: BotRegisterRequest) -> tuple[UserModel, str]:
         username = self.canonical_username(registration.username)

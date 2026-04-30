@@ -33,6 +33,7 @@ from app.services.engine_adapter import (
     is_supported_canonical_engine_state,
     project_visible_board,
     public_material_summary,
+    public_reserve_summary,
     serialize_scoresheet,
     serialize_game_state,
 )
@@ -178,8 +179,11 @@ def test_invalid_uci_and_default_scoresheet_serialization_are_stable() -> None:
         "special_announcement": None,
         "capture_square": None,
         "captured_piece_announcement": None,
+        "dropped_piece_announcement": None,
+        "promotion_announced": None,
         "next_turn_pawn_tries": None,
         "next_turn_has_pawn_capture": None,
+        "next_turn_pawn_try_squares": None,
     }
     assert serialize_scoresheet(None) == {"color": None, "last_move_number": 0, "moves_own": [], "moves_opponent": []}
 
@@ -290,7 +294,13 @@ def test_answer_serializers_cover_named_checks_and_non_double_specials() -> None
 
 @pytest.mark.parametrize(
     ("rule_variant", "expected_ruleset_id"),
-    [("cincinnati", "cincinnati"), ("wild16", "wild16")],
+    [
+        ("cincinnati", "cincinnati"),
+        ("wild16", "wild16"),
+        ("rand", "rand"),
+        ("english", "english"),
+        ("crazykrieg", "crazykrieg"),
+    ],
 )
 def test_create_new_game_accepts_new_rulesets(rule_variant: str, expected_ruleset_id: str) -> None:
     game = create_new_game(rule_variant=rule_variant)
@@ -331,6 +341,24 @@ def test_attempt_move_surfaces_wild16_pawn_try_count_and_typed_capture() -> None
     assert capture["next_turn_pawn_tries"] == 0
 
 
+def test_attempt_move_surfaces_rand_and_crazykrieg_metadata() -> None:
+    rand = create_new_game(rule_variant="rand")
+    rand_result = attempt_move(rand, "e2e4")
+    assert rand_result["next_turn_pawn_try_squares"] == []
+
+    crazy = create_new_game(rule_variant="crazykrieg")
+    attempt_move(crazy, "e2e4")
+    attempt_move(crazy, "d7d5")
+    capture = attempt_move(crazy, "e4d5")
+    assert capture["captured_piece_announcement"] == "PAWN"
+    assert public_reserve_summary(crazy)["white"]["pawns"] == 1
+
+    attempt_move(crazy, "e7e6")
+    drop = attempt_move(crazy, "P@e4")
+    assert drop["dropped_piece_announcement"] == "PAWN"
+    assert public_reserve_summary(crazy)["white"]["pawns"] == 0
+
+
 @pytest.mark.parametrize("rule_variant", ["berkeley", "berkeley_any"])
 def test_public_material_summary_hides_pawn_counts_for_berkeley_family(rule_variant: str) -> None:
     game = create_new_game(rule_variant=rule_variant)
@@ -344,7 +372,7 @@ def test_public_material_summary_hides_pawn_counts_for_berkeley_family(rule_vari
     }
 
 
-@pytest.mark.parametrize("rule_variant", ["cincinnati", "wild16"])
+@pytest.mark.parametrize("rule_variant", ["cincinnati", "wild16", "rand", "crazykrieg"])
 def test_public_material_summary_includes_public_pawn_counts_for_typed_rulesets(rule_variant: str) -> None:
     game = create_new_game(rule_variant=rule_variant)
     attempt_move(game, "e2e4")
@@ -354,4 +382,11 @@ def test_public_material_summary_includes_public_pawn_counts_for_typed_rulesets(
     assert public_material_summary(game) == {
         "white": {"pieces_remaining": 16, "pawns_captured": 0},
         "black": {"pieces_remaining": 15, "pawns_captured": 1},
+    }
+
+
+def test_public_reserve_summary_defaults_to_zero_for_non_drop_rulesets() -> None:
+    assert public_reserve_summary(create_new_game(rule_variant="english")) == {
+        "white": {"pawns": 0, "knights": 0, "bishops": 0, "rooks": 0, "queens": 0},
+        "black": {"pawns": 0, "knights": 0, "bishops": 0, "rooks": 0, "queens": 0},
     }
