@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.2
+
+- **Guest Name Pool**: added `magnus` to the guest first-name pool, expanding
+  guest username combinations from 40,000 to 40,200.
+
 ## ks-backend v. 1.3.1
 
 - **Guest Report API**: added `/api/tech/guests-report` with guest name,

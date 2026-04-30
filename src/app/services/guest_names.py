@@ -25,7 +25,7 @@ GUEST_FIRST_NAMES = tuple(
     kateryna keti kirill klaus konstantin
     krishnan larry laurent leinier levon
     ludek luke maia mairbek marc
-    marcel maria marie mark maxime
+    magnus marcel maria marie mark maxime
     michael miguel mikhail milan milos
     mircea nancy nana natalia niaz
     nigel nikita nino nodirbek olga
