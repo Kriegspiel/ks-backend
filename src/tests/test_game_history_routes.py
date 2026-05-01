@@ -180,7 +180,7 @@ async def test_get_game_transcript_filters_nonsense_attempts_and_renumbers_ply()
                 "color": "white",
                 "question_type": "COMMON",
                 "uci": "f2a8q",
-                "announcement": "IMPOSSIBLE_TO_ASK",
+                "announcement": "NONSENSE",
                 "special_announcement": None,
                 "capture_square": None,
                 "move_done": False,

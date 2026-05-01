@@ -5,7 +5,7 @@ pydantic==2.11.7
 pydantic-settings==2.3.4
 bcrypt==4.3.0
 python-jose[cryptography]==3.4.0
-kriegspiel @ git+https://github.com/Kriegspiel/ks-game.git@dd0461c4a9ded69cba8511bb88451ea895ec4129
+kriegspiel @ git+https://github.com/Kriegspiel/ks-game.git@9118f8bfc64e1056d07ed9fad9c66c083a015fb0
 structlog==24.2.0
 sentry-sdk[fastapi]>=2.0.0
 python-multipart==0.0.22

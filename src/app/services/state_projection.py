@@ -11,7 +11,6 @@ _ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS = {
     'HAS_ANY',
     'NO_ANY',
     'ILLEGAL_MOVE',
-    'NONSENSE',
 }
 
 _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS = {
@@ -30,7 +29,6 @@ _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS = {
 
 _PUBLIC_ANNOUNCEMENT_TEXT = {
     'ILLEGAL_MOVE': 'Illegal move',
-    'NONSENSE': 'Nonsense',
     'REGULAR_MOVE': 'Move complete',
     'CAPTURE_DONE': 'Capture done',
     'HAS_ANY': 'Has pawn captures',
@@ -160,7 +158,7 @@ def _move_prompt_label(move: dict[str, Any], *, perspective: Literal['own', 'opp
 def _announcement_kind(question_type: str, main: str | None) -> str:
     if question_type == 'ASK_ANY':
         return 'ask_any'
-    if main in {'ILLEGAL_MOVE', 'NONSENSE'}:
+    if main == 'ILLEGAL_MOVE':
         return 'illegal_move'
     if main == 'CAPTURE_DONE':
         return 'capture'

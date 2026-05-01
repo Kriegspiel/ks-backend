@@ -4,6 +4,16 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.8
+
+- **CrazyKrieg Material**: consumed the engine-owned board-piece material
+  summary for CrazyKrieg, including reserve-drop counts above ordinary chess
+  material totals and no pawn-capture side count.
+- **Referee Display Data**: stopped projecting in-person-only `Nonsense`
+  attempts into public game history, scoresheets, or review payloads.
+- **Ruleset Actions**: kept `Any?` action discovery enabled for English and
+  CrazyKrieg, where the engine supports the one-try rule.
+
 ## ks-backend v. 1.3.7
 
 - **CrazyKrieg State**: allowed public material summaries to report repeated
