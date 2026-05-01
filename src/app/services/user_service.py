@@ -16,6 +16,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.config import get_settings
 from app.models.auth import BotRegisterRequest, RegisterRequest
+from app.models.bot import supported_rule_variants_for_bot
 from app.models.user import UserModel, default_user_stats_payload, normalize_user_stats_payload, utcnow
 from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
 
@@ -511,9 +512,7 @@ class UserService:
 
     @staticmethod
     def _default_supported_rule_variants(*, username: str) -> list[str]:
-        if username == "randobotany":
-            return ["berkeley_any"]
-        return ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
+        return supported_rule_variants_for_bot(username)
 
     async def create_bot(self, registration: BotRegisterRequest) -> tuple[UserModel, str]:
         username = self.canonical_username(registration.username)
@@ -531,7 +530,9 @@ class UserService:
             display_name=registration.display_name.strip(),
             description=registration.description.strip(),
         )
-        supported_rule_variants = getattr(registration, "supported_rule_variants", None) or self._default_supported_rule_variants(username=username)
+        supported_rule_variants = getattr(registration, "supported_rule_variants", None) or self._default_supported_rule_variants(
+            username=username
+        )
         payload = {
             "username": username,
             "username_display": registration.display_name.strip(),

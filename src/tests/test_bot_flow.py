@@ -751,6 +751,21 @@ def test_bot_service_supported_rule_variants_fallbacks_cover_randobotany() -> No
         "english",
         "crazykrieg",
     ]
+    assert BotService._supported_rule_variants({"username": "gptnano", "bot_profile": {}}) == [
+        "berkeley",
+        "berkeley_any",
+    ]
+    assert BotService._supported_rule_variants(
+        {"username": "custombot", "bot_profile": {"supported_rule_variants": ["crazykrieg"]}}
+    ) == [
+        "crazykrieg"
+    ]
+    assert BotService._supported_rule_variants(
+        {"username": "custombot", "bot_profile": {"supported_rule_variants": ["unknown"]}}
+    ) == [
+        "berkeley",
+        "berkeley_any",
+    ]
 
 
 def test_bot_router_uses_db_users_and_lists_bots() -> None:

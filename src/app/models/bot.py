@@ -5,7 +5,23 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 SupportedRuleVariant = str
-DEFAULT_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
+ALL_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
+DEFAULT_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any"]
+BOT_SPECIFIC_DEFAULT_RULE_VARIANTS: dict[str, list[SupportedRuleVariant]] = {
+    "randobot": ALL_SUPPORTED_RULE_VARIANTS,
+    "randobotany": ["berkeley_any"],
+}
+
+
+def supported_rule_variants_for_bot(username: str, variants: object = None) -> list[SupportedRuleVariant]:
+    supported_rulesets = set(ALL_SUPPORTED_RULE_VARIANTS)
+    if isinstance(variants, list) and variants:
+        filtered = [str(item) for item in variants if str(item) in supported_rulesets]
+        if filtered:
+            return filtered
+
+    normalized_username = username.strip().lower()
+    return BOT_SPECIFIC_DEFAULT_RULE_VARIANTS.get(normalized_username, DEFAULT_SUPPORTED_RULE_VARIANTS).copy()
 
 
 class BotProfile(BaseModel):

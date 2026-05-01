@@ -1049,6 +1049,15 @@ def test_result_scoresheet_and_bot_variant_helpers_cover_uncommon_branches() -> 
         "english",
         "crazykrieg",
     ]
+    assert GameService._bot_supported_rule_variants({"username": "gptnano", "bot_profile": {}}) == [
+        "berkeley",
+        "berkeley_any",
+    ]
+    assert GameService._bot_supported_rule_variants(
+        {"username": "custombot", "bot_profile": {"supported_rule_variants": ["wild16"]}}
+    ) == [
+        "wild16"
+    ]
 
 
 @pytest.mark.asyncio
