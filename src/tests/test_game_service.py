@@ -1043,6 +1043,11 @@ def test_result_scoresheet_and_bot_variant_helpers_cover_uncommon_branches() -> 
     assert GameService._bot_supported_rule_variants({"username": "randobot", "bot_profile": {}}) == [
         "berkeley",
         "berkeley_any",
+        "cincinnati",
+        "wild16",
+        "rand",
+        "english",
+        "crazykrieg",
     ]
 
 

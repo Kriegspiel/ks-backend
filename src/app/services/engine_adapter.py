@@ -6,6 +6,8 @@ import chess
 from kriegspiel import KriegspielGame
 from kriegspiel.berkeley import BerkeleyGame
 from kriegspiel.cincinnati import CincinnatiGame
+from kriegspiel.crazykrieg import CrazyKriegGame
+from kriegspiel.english import EnglishGame
 from kriegspiel.move import (
     CapturedPieceAnnouncement,
     KriegspielAnswer,
@@ -15,7 +17,11 @@ from kriegspiel.move import (
     QuestionAnnouncement,
     SpecialCaseAnnouncement,
 )
+from kriegspiel.rand import RandGame
 from kriegspiel.serialization import (
+    CINCINNATI_SERIALIZATION_SCHEMA_VERSION,
+    PREVIOUS_SERIALIZATION_SCHEMA_VERSION,
+    RAND_SERIALIZATION_SCHEMA_VERSION,
     SERIALIZATION_SCHEMA_VERSION as CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
     deserialize_berkeley_game,
     deserialize_kriegspiel_scoresheet,
@@ -24,8 +30,8 @@ from kriegspiel.serialization import (
 from kriegspiel.wild16 import Wild16Game
 
 PlayerColor = Literal["white", "black"]
-RuleVariant = Literal["berkeley", "berkeley_any", "cincinnati", "wild16"]
-SUPPORTED_RULE_VARIANTS = frozenset({"berkeley", "berkeley_any", "cincinnati", "wild16"})
+RuleVariant = Literal["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
+SUPPORTED_RULE_VARIANTS = frozenset({"berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"})
 
 PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION = 3
 INTERMEDIATE_CANONICAL_ENGINE_STATE_SCHEMA_VERSION = 4
@@ -33,6 +39,9 @@ SUPPORTED_CANONICAL_ENGINE_STATE_SCHEMA_VERSIONS = frozenset(
     {
         PREVIOUS_CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
         INTERMEDIATE_CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+        PREVIOUS_SERIALIZATION_SCHEMA_VERSION,
+        CINCINNATI_SERIALIZATION_SCHEMA_VERSION,
+        RAND_SERIALIZATION_SCHEMA_VERSION,
         CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
     }
 )
@@ -51,6 +60,12 @@ def create_new_game(*, any_rule: bool | None = None, rule_variant: RuleVariant |
         return CincinnatiGame()
     if rule_variant == "wild16":
         return Wild16Game()
+    if rule_variant == "rand":
+        return RandGame()
+    if rule_variant == "english":
+        return EnglishGame()
+    if rule_variant == "crazykrieg":
+        return CrazyKriegGame()
     raise ValueError(f"Unsupported rule variant: {rule_variant}")
 
 
@@ -83,10 +98,29 @@ def public_material_summary(game: KriegspielGame) -> dict[str, dict[str, int | N
     }
 
 
+def public_reserve_summary(game: KriegspielGame) -> dict[str, dict[str, int]]:
+    summary = game.public_reserve_summary
+
+    return {
+        "white": _reserve_side_payload(summary.white),
+        "black": _reserve_side_payload(summary.black),
+    }
+
+
 def _material_side_payload(side: Any) -> dict[str, int | None]:
     return {
         "pieces_remaining": int(getattr(side, "pieces_remaining", 16)),
         "pawns_captured": getattr(side, "pawns_captured", None),
+    }
+
+
+def _reserve_side_payload(side: Any) -> dict[str, int]:
+    return {
+        "pawns": int(getattr(side, "pawns", 0)),
+        "knights": int(getattr(side, "knights", 0)),
+        "bishops": int(getattr(side, "bishops", 0)),
+        "rooks": int(getattr(side, "rooks", 0)),
+        "queens": int(getattr(side, "queens", 0)),
     }
 
 
@@ -100,8 +134,11 @@ def attempt_move(game: KriegspielGame, move_uci: str) -> dict[str, Any]:
             "special_announcement": None,
             "capture_square": None,
             "captured_piece_announcement": None,
+            "dropped_piece_announcement": None,
+            "promotion_announced": None,
             "next_turn_pawn_tries": None,
             "next_turn_has_pawn_capture": None,
+            "next_turn_pawn_try_squares": None,
         }
 
     answer = game.ask_for(KriegspielMove(QuestionAnnouncement.COMMON, chess_move))
@@ -277,7 +314,9 @@ def _deserialize_ks_move(item: dict[str, Any]) -> KriegspielMove:
 def _answer_payload(game: KriegspielGame, answer: Any) -> dict[str, Any]:
     capture_square = chess.square_name(answer.capture_at_square) if answer.capture_at_square is not None else None
     captured_piece = answer.captured_piece_announcement
+    dropped_piece = answer.dropped_piece_announcement
     special = answer.special_announcement
+    pawn_try_squares = answer.next_turn_pawn_try_squares
 
     return {
         "move_done": bool(answer.move_done),
@@ -287,8 +326,15 @@ def _answer_payload(game: KriegspielGame, answer: Any) -> dict[str, Any]:
         "captured_piece_announcement": (
             captured_piece.name if isinstance(captured_piece, CapturedPieceAnnouncement) else None
         ),
+        "dropped_piece_announcement": (
+            dropped_piece.name if isinstance(dropped_piece, CapturedPieceAnnouncement) else None
+        ),
+        "promotion_announced": True if answer.promotion_announced else None,
         "next_turn_pawn_tries": answer.next_turn_pawn_tries,
         "next_turn_has_pawn_capture": answer.next_turn_has_pawn_capture,
+        "next_turn_pawn_try_squares": (
+            [chess.square_name(square) for square in pawn_try_squares] if pawn_try_squares is not None else None
+        ),
         "full_fen": game._board.fen(),  # noqa: SLF001
         "white_fen": visible_fen(game, "white"),
         "black_fen": visible_fen(game, "black"),
@@ -370,8 +416,11 @@ def _serialize_answer(answer: Any) -> dict[str, Any]:
             "special_announcement": None,
             "capture_square": None,
             "captured_piece_announcement": None,
+            "dropped_piece_announcement": None,
+            "promotion_announced": None,
             "next_turn_pawn_tries": None,
             "next_turn_has_pawn_capture": None,
+            "next_turn_pawn_try_squares": None,
             "checks": [],
             "move_done": False,
         }
@@ -389,8 +438,15 @@ def _serialize_answer(answer: Any) -> dict[str, Any]:
         "captured_piece_announcement": (
             answer.captured_piece_announcement.name if answer.captured_piece_announcement is not None else None
         ),
+        "dropped_piece_announcement": (
+            answer.dropped_piece_announcement.name if answer.dropped_piece_announcement is not None else None
+        ),
+        "promotion_announced": True if answer.promotion_announced else None,
         "next_turn_pawn_tries": answer.next_turn_pawn_tries,
         "next_turn_has_pawn_capture": answer.next_turn_has_pawn_capture,
+        "next_turn_pawn_try_squares": (
+            list(answer.next_turn_pawn_try_squares) if answer.next_turn_pawn_try_squares is not None else None
+        ),
         "checks": checks,
         "move_done": bool(answer.move_done),
     }
@@ -406,12 +462,21 @@ def _deserialize_answer(payload: Any) -> KriegspielAnswer:
     captured_piece = data.get("captured_piece_announcement")
     if isinstance(captured_piece, str):
         kwargs["captured_piece_announcement"] = CapturedPieceAnnouncement[captured_piece]
+    dropped_piece = data.get("dropped_piece_announcement")
+    if isinstance(dropped_piece, str):
+        kwargs["dropped_piece_announcement"] = CapturedPieceAnnouncement[dropped_piece]
+    promotion_announced = data.get("promotion_announced")
+    if isinstance(promotion_announced, bool):
+        kwargs["promotion_announced"] = promotion_announced
     next_turn_pawn_tries = data.get("next_turn_pawn_tries")
     if isinstance(next_turn_pawn_tries, int):
         kwargs["next_turn_pawn_tries"] = next_turn_pawn_tries
     next_turn_has_pawn_capture = data.get("next_turn_has_pawn_capture")
     if isinstance(next_turn_has_pawn_capture, bool):
         kwargs["next_turn_has_pawn_capture"] = next_turn_has_pawn_capture
+    next_turn_pawn_try_squares = data.get("next_turn_pawn_try_squares")
+    if isinstance(next_turn_pawn_try_squares, list):
+        kwargs["next_turn_pawn_try_squares"] = next_turn_pawn_try_squares
 
     special_name = data.get("special_announcement")
     if isinstance(special_name, str):

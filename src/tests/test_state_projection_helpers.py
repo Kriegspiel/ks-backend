@@ -9,9 +9,11 @@ def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_
     assert projection._format_public_announcement("UNKNOWN", None) == ""
     assert projection._format_public_announcement("CAPTURE_DONE", "d4") == "Capture done at D4"
     assert projection._format_public_announcement("CAPTURE_DONE", "d4", captured_piece_announcement="PAWN") == "Pawn captured at D4"
-    assert projection._next_turn_message(next_turn_pawn_tries=2, next_turn_has_pawn_capture=None) == "2 pawn tries"
-    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=True) == "Has pawn capture"
-    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=False) == "No pawn captures"
+    assert projection._format_public_announcement("CAPTURE_DONE", "d4", captured_piece_announcement="KNIGHT") == "Knight captured at D4"
+    assert projection._next_turn_message(next_turn_pawn_tries=2, next_turn_has_pawn_capture=None, next_turn_pawn_try_squares=None) == "2 pawn tries"
+    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=True, next_turn_pawn_try_squares=None) == "Has pawn capture"
+    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=False, next_turn_pawn_try_squares=None) == "No pawn captures"
+    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=None, next_turn_pawn_try_squares=["e4", "c2"]) == "Pawn tries from E4, C2"
     assert projection._scoresheet_answer_texts(
         {
             "main_announcement": "REGULAR_MOVE",
@@ -105,8 +107,10 @@ def test_state_projection_scoresheet_texts_include_rule_specific_announcements()
         {
             "main_announcement": "REGULAR_MOVE",
             "next_turn_pawn_tries": 2,
+            "dropped_piece_announcement": "KNIGHT",
+            "promotion_announced": True,
         }
-    ) == ["Move complete"]
+    ) == ["Move complete", "Knight dropped", "Promotion"]
 
     assert projection.build_viewer_scoresheet(
         viewer_color="white",
@@ -192,6 +196,13 @@ def test_state_projection_possible_actions_and_referee_log_cover_remaining_publi
         turn="white",
         rule_variant="cincinnati",
     ) == []
+    assert projection.compute_possible_actions(
+        engine=engine,
+        game_state="active",
+        viewer_color="white",
+        turn="white",
+        rule_variant="english",
+    ) == ["ask_any"]
     assert [item["announcement"] for item in referee_log] == ["REGULAR_MOVE", "CHECK_FILE", "CHECK_RANK"]
 
 

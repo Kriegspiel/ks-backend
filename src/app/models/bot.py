@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 SupportedRuleVariant = str
+DEFAULT_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
 
 
 class BotProfile(BaseModel):
@@ -19,7 +20,7 @@ class BotProfile(BaseModel):
     api_token_digest: str | None = None
     registered_at: datetime | None = None
     last_bot_game_joined_at: datetime | None = None
-    supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: ["berkeley", "berkeley_any"])
+    supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: DEFAULT_SUPPORTED_RULE_VARIANTS.copy())
 
 
 class BotListItem(BaseModel):
@@ -31,7 +32,7 @@ class BotListItem(BaseModel):
     description: str = ""
     elo: int = 1200
     ratings: dict[str, dict[str, int]] = Field(default_factory=dict)
-    supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: ["berkeley", "berkeley_any"])
+    supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: DEFAULT_SUPPORTED_RULE_VARIANTS.copy())
 
 
 class BotListResponse(BaseModel):

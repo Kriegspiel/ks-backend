@@ -79,7 +79,7 @@ def compute_possible_actions(
 
     has_move = False
     has_ask_any = False
-    allow_ask_any = (rule_variant or 'berkeley_any') == 'berkeley_any'
+    allow_ask_any = (rule_variant or 'berkeley_any') in {'berkeley_any', 'english', 'crazykrieg'}
     for option in engine.possible_to_ask:
         question_type = option.question_type.name
         has_move = has_move or question_type == 'COMMON'
@@ -103,15 +103,40 @@ def _format_public_announcement(
     if not text:
         return ''
     if code == 'CAPTURE_DONE' and capture_square:
-        if captured_piece_announcement == 'PAWN':
-            return f'Pawn captured at {capture_square.upper()}'
-        if captured_piece_announcement == 'PIECE':
-            return f'Piece captured at {capture_square.upper()}'
+        captured_piece_labels = {
+            'PAWN': 'Pawn',
+            'PIECE': 'Piece',
+            'KNIGHT': 'Knight',
+            'BISHOP': 'Bishop',
+            'ROOK': 'Rook',
+            'QUEEN': 'Queen',
+        }
+        label = captured_piece_labels.get(captured_piece_announcement or '')
+        if label:
+            return f'{label} captured at {capture_square.upper()}'
         return f'{text} at {capture_square.upper()}'
     return text
 
 
-def _next_turn_message(*, next_turn_pawn_tries: Any, next_turn_has_pawn_capture: Any) -> str:
+def _format_piece_announcement(value: Any) -> str:
+    labels = {
+        'PAWN': 'Pawn',
+        'KNIGHT': 'Knight',
+        'BISHOP': 'Bishop',
+        'ROOK': 'Rook',
+        'QUEEN': 'Queen',
+    }
+    return labels.get(str(value or '').upper(), '')
+
+
+def _next_turn_message(*, next_turn_pawn_tries: Any, next_turn_has_pawn_capture: Any, next_turn_pawn_try_squares: Any) -> str:
+    if isinstance(next_turn_pawn_try_squares, list):
+        squares = [str(square).upper() for square in next_turn_pawn_try_squares if isinstance(square, str)]
+        if not squares:
+            return 'No pawn captures'
+        if len(squares) == 1:
+            return f'Pawn try from {squares[0]}'
+        return 'Pawn tries from ' + ', '.join(squares)
     if isinstance(next_turn_pawn_tries, int):
         if next_turn_pawn_tries <= 0:
             return 'No pawn captures'
@@ -164,6 +189,7 @@ def _move_next_turn_message(move: dict[str, Any]) -> str:
     return _next_turn_message(
         next_turn_pawn_tries=move.get('next_turn_pawn_tries'),
         next_turn_has_pawn_capture=move.get('next_turn_has_pawn_capture'),
+        next_turn_pawn_try_squares=move.get('next_turn_pawn_try_squares'),
     )
 
 
@@ -171,6 +197,7 @@ def _answer_next_turn_message(answer: dict[str, Any]) -> str:
     return _next_turn_message(
         next_turn_pawn_tries=answer.get('next_turn_pawn_tries'),
         next_turn_has_pawn_capture=answer.get('next_turn_has_pawn_capture'),
+        next_turn_pawn_try_squares=answer.get('next_turn_pawn_try_squares'),
     )
 
 
@@ -180,6 +207,7 @@ def _move_messages(move: dict[str, Any]) -> list[str]:
     special_announcement = move.get('special_announcement')
     capture_square = move.get('capture_square')
     captured_piece_announcement = move.get('captured_piece_announcement')
+    dropped_piece_announcement = move.get('dropped_piece_announcement')
 
     if announcement in _ALLOWED_PUBLIC_MAIN_ANNOUNCEMENTS:
         out.append(
@@ -189,6 +217,13 @@ def _move_messages(move: dict[str, Any]) -> list[str]:
                 captured_piece_announcement=captured_piece_announcement,
             )
         )
+
+    dropped_piece = _format_piece_announcement(dropped_piece_announcement)
+    if dropped_piece:
+        out.append(f'{dropped_piece} dropped')
+
+    if move.get('promotion_announced') is True:
+        out.append('Promotion')
 
     if special_announcement in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
         out.append(_format_public_announcement(special_announcement, None))
@@ -415,8 +450,11 @@ def reconstruct_scoresheets_from_moves(moves: list[dict[str, Any]]) -> dict[str,
                 'special_announcement': move.get('special_announcement'),
                 'capture_square': move.get('capture_square'),
                 'captured_piece_announcement': move.get('captured_piece_announcement'),
+                'dropped_piece_announcement': move.get('dropped_piece_announcement'),
+                'promotion_announced': move.get('promotion_announced'),
                 'next_turn_pawn_tries': move.get('next_turn_pawn_tries'),
                 'next_turn_has_pawn_capture': move.get('next_turn_has_pawn_capture'),
+                'next_turn_pawn_try_squares': move.get('next_turn_pawn_try_squares'),
                 'checks': [],
                 'move_done': bool(move.get('move_done', False)),
             },
@@ -501,4 +539,9 @@ def _scoresheet_answer_texts(answer: dict[str, Any]) -> list[str]:
     special = answer.get('special_announcement')
     if isinstance(special, str) and special in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
         texts.append(_format_public_announcement(special, None))
+    dropped_piece = _format_piece_announcement(answer.get('dropped_piece_announcement'))
+    if dropped_piece:
+        texts.append(f'{dropped_piece} dropped')
+    if answer.get('promotion_announced') is True:
+        texts.append('Promotion')
     return [text for text in texts if text]

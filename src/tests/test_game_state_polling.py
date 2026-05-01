@@ -223,6 +223,10 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
         "white": {"pieces_remaining": 16, "pawns_captured": None},
         "black": {"pieces_remaining": 16, "pawns_captured": None},
     }
+    assert white_state.reserve_summary.model_dump() == {
+        "white": {"pawns": 0, "knights": 0, "bishops": 0, "rooks": 0, "queens": 0},
+        "black": {"pawns": 0, "knights": 0, "bishops": 0, "rooks": 0, "queens": 0},
+    }
     assert black_state.material_summary == white_state.material_summary
     assert white_state.scoresheet.viewer_color == "white"
     assert [entry.message for entry in white_state.scoresheet.turns[0].white] == ["Move attempt — Move complete"]
@@ -709,6 +713,10 @@ def app_with_state_service() -> tuple:
                 "material_summary": {
                     "white": {"pieces_remaining": 16, "pawns_captured": None},
                     "black": {"pieces_remaining": 16, "pawns_captured": None},
+                },
+                "reserve_summary": {
+                    "white": {"pawns": 0, "knights": 0, "bishops": 0, "rooks": 0, "queens": 0},
+                    "black": {"pawns": 0, "knights": 0, "bishops": 0, "rooks": 0, "queens": 0},
                 },
                 "scoresheet": {"viewer_color": "white", "last_move_number": 1, "turns": [{"turn": 1, "white": ["Move attempt — Move complete", "Ask any pawn captures — Has pawn captures"], "black": []}]},
                 "referee_log": [{"ply": 1, "announcement": "REGULAR_MOVE", "timestamp": None}, {"ply": 1, "announcement": "HAS_ANY", "timestamp": None}],

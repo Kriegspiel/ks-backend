@@ -4,6 +4,15 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.3
+
+- **Rulesets**: added backend game-state, move, review, bot-registration, and
+  transcript support for RAND, English, and CrazyKrieg.
+- **CrazyKrieg Reserves**: exposed public reserve counts for both players and
+  surfaced exact capture/drop announcements from the engine.
+- **RAND Announcements**: exposed pawn-try source squares and promotion notices
+  in live scoresheets and reviews.
+
 ## ks-backend v. 1.3.2
 
 - **Guest Name Pool**: added `magnus` to the guest first-name pool, expanding

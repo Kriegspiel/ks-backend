@@ -36,6 +36,7 @@ from app.services.engine_adapter import (
     deserialize_game_state,
     extract_stored_scoresheets,
     public_material_summary,
+    public_reserve_summary,
     serialize_game_state,
 )
 from app.services.state_projection import (
@@ -457,8 +458,11 @@ class GameService:
             "special_announcement": answer.get("special_announcement"),
             "capture_square": answer.get("capture_square"),
             "captured_piece_announcement": answer.get("captured_piece_announcement"),
+            "dropped_piece_announcement": answer.get("dropped_piece_announcement"),
+            "promotion_announced": answer.get("promotion_announced"),
             "next_turn_pawn_tries": answer.get("next_turn_pawn_tries"),
             "next_turn_has_pawn_capture": answer.get("next_turn_has_pawn_capture"),
+            "next_turn_pawn_try_squares": answer.get("next_turn_pawn_try_squares"),
             "move_done": bool(answer.get("move_done", False)),
         }
 
@@ -908,9 +912,12 @@ class GameService:
                 "main": move.get("announcement", ""),
                 "capture_square": move.get("capture_square"),
                 "captured_piece_announcement": move.get("captured_piece_announcement"),
+                "dropped_piece_announcement": move.get("dropped_piece_announcement"),
+                "promotion_announced": move.get("promotion_announced"),
                 "special": move.get("special_announcement"),
                 "next_turn_pawn_tries": move.get("next_turn_pawn_tries"),
                 "next_turn_has_pawn_capture": move.get("next_turn_has_pawn_capture"),
+                "next_turn_pawn_try_squares": move.get("next_turn_pawn_try_squares"),
             },
             "move_done": bool(move.get("move_done", False)),
             "timestamp": move.get("timestamp"),
@@ -1219,14 +1226,15 @@ class GameService:
 
     @staticmethod
     def _bot_supported_rule_variants(bot: dict[str, Any]) -> list[str]:
+        supported_rulesets = {"berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"}
         profile = bot.get("bot_profile") or {}
         variants = profile.get("supported_rule_variants")
         if isinstance(variants, list) and variants:
-            return [str(item) for item in variants if str(item) in {"berkeley", "berkeley_any", "cincinnati", "wild16"}]
+            return [str(item) for item in variants if str(item) in supported_rulesets]
         username = str(bot.get("username") or "").strip().lower()
         if username == "randobotany":
             return ["berkeley_any"]
-        return ["berkeley", "berkeley_any"]
+        return ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
 
     @staticmethod
     def _player_embed(*, user_id: str, username: str, role: str = "user") -> dict[str, Any]:
@@ -1561,6 +1569,7 @@ class GameService:
                 turn=game.get("turn"),
             ),
             material_summary=public_material_summary(engine),
+            reserve_summary=public_reserve_summary(engine),
             scoresheet=viewer_scoresheet,
             referee_log=build_viewer_referee_log(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
             referee_turns=build_viewer_referee_turns(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
@@ -1612,8 +1621,11 @@ class GameService:
                 "special_announcement": outcome["special_announcement"],
                 "capture_square": outcome["capture_square"],
                 "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+                "dropped_piece_announcement": outcome.get("dropped_piece_announcement"),
+                "promotion_announced": outcome.get("promotion_announced"),
                 "next_turn_pawn_tries": outcome.get("next_turn_pawn_tries"),
                 "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
+                "next_turn_pawn_try_squares": outcome.get("next_turn_pawn_try_squares"),
                 "move_done": outcome["move_done"],
                 "timestamp": now,
                 "replay_fen": self._outcome_replay_fen(outcome),
@@ -1670,8 +1682,11 @@ class GameService:
             "special_announcement": outcome["special_announcement"],
             "capture_square": outcome["capture_square"],
             "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+            "dropped_piece_announcement": outcome.get("dropped_piece_announcement"),
+            "promotion_announced": outcome.get("promotion_announced"),
             "next_turn_pawn_tries": outcome.get("next_turn_pawn_tries"),
             "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
+            "next_turn_pawn_try_squares": outcome.get("next_turn_pawn_try_squares"),
             "turn": game.get("turn"),
             "game_over": bool(game_over),
             "clock": clock_payload,
@@ -1726,8 +1741,11 @@ class GameService:
                 "special_announcement": outcome["special_announcement"],
                 "capture_square": outcome["capture_square"],
                 "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+                "dropped_piece_announcement": outcome.get("dropped_piece_announcement"),
+                "promotion_announced": outcome.get("promotion_announced"),
                 "next_turn_pawn_tries": outcome.get("next_turn_pawn_tries"),
                 "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
+                "next_turn_pawn_try_squares": outcome.get("next_turn_pawn_try_squares"),
                 "move_done": outcome["move_done"],
                 "timestamp": now,
                 "replay_fen": self._outcome_replay_fen(outcome),
@@ -1778,8 +1796,11 @@ class GameService:
             "special_announcement": outcome["special_announcement"],
             "capture_square": outcome["capture_square"],
             "captured_piece_announcement": outcome.get("captured_piece_announcement"),
+            "dropped_piece_announcement": outcome.get("dropped_piece_announcement"),
+            "promotion_announced": outcome.get("promotion_announced"),
             "next_turn_pawn_tries": outcome.get("next_turn_pawn_tries"),
             "next_turn_has_pawn_capture": outcome.get("next_turn_has_pawn_capture"),
+            "next_turn_pawn_try_squares": outcome.get("next_turn_pawn_try_squares"),
             "turn": game.get("turn"),
             "game_over": bool(game_over),
             "has_any": outcome["has_any"],

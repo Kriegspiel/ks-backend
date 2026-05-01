@@ -14,6 +14,8 @@ from app.models.game import (
     MaterialSideSummary,
     MaterialSummary,
     OpenGamesResponse,
+    ReserveSideSummary,
+    ReserveSummary,
 )
 
 
@@ -94,7 +96,7 @@ def test_create_game_request_defaults() -> None:
     assert req.time_control == "rapid"
 
 
-@pytest.mark.parametrize("rule_variant", ["berkeley", "berkeley_any", "cincinnati", "wild16"])
+@pytest.mark.parametrize("rule_variant", ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"])
 def test_create_game_request_accepts_supported_rule_variants(rule_variant: str) -> None:
     req = CreateGameRequest(rule_variant=rule_variant)
 
@@ -170,6 +172,18 @@ def test_material_summary_rejects_impossible_counts() -> None:
                 "black": {"pieces_remaining": 16, "pawns_captured": 9},
             }
         )
+
+
+def test_reserve_summary_contract_shape() -> None:
+    response = ReserveSummary.model_validate(
+        {
+            "white": {"pawns": 2, "knights": 1, "bishops": 0, "rooks": 0, "queens": 0},
+            "black": {"pawns": 0, "knights": 0, "bishops": 1, "rooks": 1, "queens": 0},
+        }
+    )
+
+    assert response.white == ReserveSideSummary(pawns=2, knights=1, bishops=0, rooks=0, queens=0)
+    assert response.black == ReserveSideSummary(pawns=0, knights=0, bishops=1, rooks=1, queens=0)
 
 
 def test_open_games_response_contract_shape() -> None:
