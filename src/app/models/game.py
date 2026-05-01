@@ -193,8 +193,8 @@ class ViewerScoresheet(BaseModel):
 class MaterialSideSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    pieces_remaining: int = Field(ge=0, le=16)
-    pawns_captured: int | None = Field(default=None, ge=0, le=8)
+    pieces_remaining: int = Field(ge=0)
+    pawns_captured: int | None = Field(default=None, ge=0)
 
 
 class MaterialSummary(BaseModel):

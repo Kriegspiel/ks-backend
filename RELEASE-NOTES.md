@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.7
+
+- **CrazyKrieg State**: allowed public material summaries to report repeated
+  CrazyKrieg pawn captures and reserve-drop material counts without failing
+  response validation.
+
 ## ks-backend v. 1.3.6
 
 - **Tech Reports**: added available guest-account capacity to the guest report
