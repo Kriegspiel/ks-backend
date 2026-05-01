@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.4
+
+- **Guest Metadata**: allowed guest roles in public player metadata responses,
+  matching guest-backed games already produced by the live service.
+
 ## ks-backend v. 1.3.3
 
 - **Rulesets**: added backend game-state, move, review, bot-registration, and
