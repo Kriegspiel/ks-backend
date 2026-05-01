@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.6
+
+- **Tech Reports**: added available guest-account capacity to the guest report
+  and introduced `/api/tech/users-report` with DAU, WAU, MAU, and recent
+  user-game activity data.
+
 ## ks-backend v. 1.3.5
 
 - **Bot Rulesets**: narrowed legacy bot ruleset fallbacks to Berkeley variants

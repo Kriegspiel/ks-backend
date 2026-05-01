@@ -116,3 +116,11 @@ async def get_guests_report(
 ) -> dict[str, Any]:
     db = require_db()
     return await user_service.get_guest_report(db)
+
+
+@router.get("/tech/users-report")
+async def get_users_report(
+    user_service: UserService = Depends(get_user_service),
+) -> dict[str, Any]:
+    db = require_db()
+    return await user_service.get_user_activity_report(db)

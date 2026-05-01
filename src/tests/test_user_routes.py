@@ -83,6 +83,27 @@ class StubService:
                     }
                 ],
                 "total": 1,
+                "available_guest_accounts": 39999,
+            }
+        )
+        self.get_user_activity_report = AsyncMock(
+            return_value={
+                "timezone": "America/New_York",
+                "sections": [
+                    {
+                        "key": "dau",
+                        "title": "DAU",
+                        "rows": [
+                            {
+                                "label": "2026-05-01",
+                                "active_users": 2,
+                                "active_bots": 1,
+                                "total_games": 3,
+                            }
+                        ],
+                    }
+                ],
+                "last_games": [{"game_code": "USER01"}],
             }
         )
         self.update_settings = AsyncMock(
@@ -119,6 +140,7 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
         leaderboard = client.get("/api/leaderboard?page=1&per_page=20")
         bots_report = client.get("/api/tech/bots-report?days=10")
         guests_report = client.get("/api/tech/guests-report")
+        users_report = client.get("/api/tech/users-report")
         unauth = client.patch("/api/user/settings", json={"board_theme": "dark"})
 
     assert profile.status_code == 200
@@ -135,6 +157,11 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
 
     assert guests_report.status_code == 200
     assert guests_report.json()["guests"][0]["username"] == "guest_mikhail_tal"
+    assert guests_report.json()["available_guest_accounts"] == 39999
+
+    assert users_report.status_code == 200
+    assert users_report.json()["sections"][0]["key"] == "dau"
+    assert users_report.json()["last_games"][0]["game_code"] == "USER01"
 
     assert unauth.status_code == 401
 

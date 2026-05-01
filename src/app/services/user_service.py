@@ -773,7 +773,7 @@ class UserService:
             guest_ids.append(user_id_string)
 
         if not guest_ids:
-            return {"guests": [], "total": 0}
+            return {"guests": [], "total": 0, "available_guest_accounts": self.guest_name_pool_size()}
 
         query = {
             "$or": [
@@ -823,7 +823,238 @@ class UserService:
                 }
             )
 
-        return {"guests": guests, "total": len(guests)}
+        total_guests = len(guests)
+        return {
+            "guests": guests,
+            "total": total_guests,
+            "available_guest_accounts": max(self.guest_name_pool_size() - total_guests, 0),
+        }
+
+    @staticmethod
+    def _activity_time(game: dict[str, Any]) -> datetime | None:
+        return UserService._optional_datetime(game.get("updated_at")) or UserService._optional_datetime(game.get("created_at"))
+
+    @staticmethod
+    def _activity_player_role(player: dict[str, Any], bot_usernames: set[str]) -> str:
+        role = str(player.get("role") or "").strip().lower()
+        username = str(player.get("username") or "").strip().lower()
+        if role == "bot" or username in bot_usernames:
+            return "bot"
+        if role == "guest":
+            return "guest"
+        return "user"
+
+    @staticmethod
+    def _activity_player_key(player: dict[str, Any]) -> str | None:
+        user_id = str(player.get("user_id") or "").strip()
+        username = str(player.get("username") or "").strip().lower()
+        if user_id:
+            return f"id:{user_id}"
+        if username:
+            return f"username:{username}"
+        return None
+
+    @staticmethod
+    def _month_start(value: datetime) -> datetime:
+        return value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    @classmethod
+    def _shift_months(cls, value: datetime, months: int) -> datetime:
+        month_index = value.year * 12 + (value.month - 1) + months
+        year = month_index // 12
+        month = (month_index % 12) + 1
+        return value.replace(year=year, month=month)
+
+    @classmethod
+    def _activity_period_rows(cls, *, key: str, now_local: datetime) -> list[dict[str, Any]]:
+        if key == "dau":
+            count = 14
+            start = now_local.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=count - 1)
+            return [
+                {
+                    "label": (start + timedelta(days=index)).date().isoformat(),
+                    "start": start + timedelta(days=index),
+                    "end": start + timedelta(days=index + 1),
+                }
+                for index in range(count)
+            ]
+        if key == "wau":
+            count = 12
+            week_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now_local.weekday())
+            start = week_start - timedelta(weeks=count - 1)
+            return [
+                {
+                    "label": (start + timedelta(weeks=index)).date().isoformat(),
+                    "start": start + timedelta(weeks=index),
+                    "end": start + timedelta(weeks=index + 1),
+                }
+                for index in range(count)
+            ]
+
+        count = 12
+        start = cls._shift_months(cls._month_start(now_local), -(count - 1))
+        return [
+            {
+                "label": cls._shift_months(start, index).strftime("%Y-%m"),
+                "start": cls._shift_months(start, index),
+                "end": cls._shift_months(start, index + 1),
+            }
+            for index in range(count)
+        ]
+
+    async def get_user_activity_report(
+        self,
+        db: Any,
+        *,
+        timezone_name: str = "America/New_York",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        tz = ZoneInfo(timezone_name)
+        now_local = (now or datetime.now(tz)).astimezone(tz)
+        section_specs = [
+            ("dau", "DAU"),
+            ("wau", "WAU"),
+            ("mau", "MAU"),
+        ]
+        sections = [
+            {"key": key, "title": title, "rows": self._activity_period_rows(key=key, now_local=now_local)}
+            for key, title in section_specs
+        ]
+        earliest_start = min(row["start"].astimezone(UTC) for section in sections for row in section["rows"])
+
+        bot_usernames = {
+            user["username"].strip().lower()
+            async for user in self._find(db.users, {"role": "bot"}, {"username": 1, "_id": 0})
+            if isinstance(user.get("username"), str) and user["username"].strip()
+        }
+
+        query = {
+            "$or": [
+                {"updated_at": {"$gte": earliest_start}},
+                {"created_at": {"$gte": earliest_start}},
+            ]
+        }
+        projection = {
+            "_id": 1,
+            "game_code": 1,
+            "rule_variant": 1,
+            "state": 1,
+            "white": 1,
+            "black": 1,
+            "result": 1,
+            "created_at": 1,
+            "updated_at": 1,
+            "turn_count": 1,
+            "move_count": 1,
+        }
+        games_by_key: dict[str, dict[str, Any]] = {}
+        for collection_name in ("game_archives", "games"):
+            collection = getattr(db, collection_name, None)
+            if collection is None:
+                continue
+            async for game in self._find(collection, query, projection):
+                played_at = self._activity_time(game)
+                if played_at is None:
+                    continue
+                played_at = played_at.astimezone(UTC)
+                if played_at < earliest_start:
+                    continue
+                game_key = str(game.get("game_code") or game.get("_id") or id(game))
+                previous = games_by_key.get(game_key)
+                previous_played_at = self._activity_time(previous) if previous else None
+                if previous_played_at is None or played_at >= previous_played_at.astimezone(UTC):
+                    game["_activity_at"] = played_at
+                    games_by_key[game_key] = game
+
+        for section in sections:
+            for row in section["rows"]:
+                row["_game_keys"] = set()
+                row["_active_users"] = set()
+                row["_active_bots"] = set()
+
+        for game_key, game in games_by_key.items():
+            played_at = game["_activity_at"]
+            players = [
+                game.get("white") if isinstance(game.get("white"), dict) else {},
+                game.get("black") if isinstance(game.get("black"), dict) else {},
+            ]
+            for section in sections:
+                for row in section["rows"]:
+                    start_utc = row["start"].astimezone(UTC)
+                    end_utc = row["end"].astimezone(UTC)
+                    if not (start_utc <= played_at < end_utc):
+                        continue
+                    row["_game_keys"].add(game_key)
+                    for player in players:
+                        player_key = self._activity_player_key(player)
+                        if player_key is None:
+                            continue
+                        if self._activity_player_role(player, bot_usernames) == "bot":
+                            row["_active_bots"].add(player_key)
+                        else:
+                            row["_active_users"].add(player_key)
+
+        public_sections: list[dict[str, Any]] = []
+        for section in sections:
+            rows = []
+            for row in section["rows"]:
+                rows.append(
+                    {
+                        "label": row["label"],
+                        "start": row["start"].date().isoformat(),
+                        "end": row["end"].date().isoformat(),
+                        "active_users": len(row["_active_users"]),
+                        "active_bots": len(row["_active_bots"]),
+                        "total_games": len(row["_game_keys"]),
+                    }
+                )
+            public_sections.append({"key": section["key"], "title": section["title"], "rows": rows})
+
+        recent_games_by_key: dict[str, dict[str, Any]] = {}
+        for collection_name in ("game_archives", "games"):
+            collection = getattr(db, collection_name, None)
+            if collection is None:
+                continue
+            async for game in self._find(collection, {}, projection).sort("updated_at", -1).limit(500):
+                played_at = self._activity_time(game)
+                if played_at is None:
+                    continue
+                game_key = str(game.get("game_code") or game.get("_id") or id(game))
+                previous = recent_games_by_key.get(game_key)
+                previous_played_at = self._activity_time(previous) if previous else None
+                played_at = played_at.astimezone(UTC)
+                if previous_played_at is None or played_at >= previous_played_at.astimezone(UTC):
+                    game["_activity_at"] = played_at
+                    recent_games_by_key[game_key] = game
+
+        user_games: list[dict[str, Any]] = []
+        for game in sorted(recent_games_by_key.values(), key=lambda item: item["_activity_at"], reverse=True):
+            white = game.get("white") if isinstance(game.get("white"), dict) else {}
+            black = game.get("black") if isinstance(game.get("black"), dict) else {}
+            white_role = self._activity_player_role(white, bot_usernames)
+            black_role = self._activity_player_role(black, bot_usernames)
+            if white_role == "bot" and black_role == "bot":
+                continue
+            game_code = str(game.get("game_code") or "").strip()
+            user_games.append(
+                {
+                    "game_id": str(game.get("_id") or ""),
+                    "game_code": game_code,
+                    "rule_variant": game.get("rule_variant") or "berkeley_any",
+                    "state": game.get("state") or "completed",
+                    "white": {"username": white.get("username"), "role": white_role},
+                    "black": {"username": black.get("username"), "role": black_role},
+                    "result": game.get("result") or {},
+                    "turn_count": game.get("turn_count"),
+                    "move_count": game.get("move_count"),
+                    "played_at": game["_activity_at"].isoformat(),
+                    "review_path": f"/game/{game_code}/review" if game_code else None,
+                }
+            )
+            if len(user_games) >= 100:
+                break
+
+        return {"timezone": timezone_name, "sections": public_sections, "last_games": user_games}
 
     async def get_listed_bot_daily_report(self, db: Any, *, days: int = 10, timezone_name: str = "America/New_York") -> dict[str, Any]:
         bounded_days = max(1, min(days, 31))

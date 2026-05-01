@@ -1265,6 +1265,7 @@ async def test_get_guest_report_lists_guests_with_archive_and_live_game_counts()
     report = await UserService(users).get_guest_report(FakeDB(users=users, game_archives=archives, games=games))
 
     assert report["total"] == 2
+    assert report["available_guest_accounts"] == UserService.guest_name_pool_size() - 2
     rows = {guest["username"]: guest for guest in report["guests"]}
     assert rows["guest_mikhail_tal"] == {
         "name": "guest_mikhail_tal",
@@ -1285,7 +1286,89 @@ async def test_get_guest_report_returns_empty_without_guest_accounts() -> None:
 
     report = await UserService(users).get_guest_report(FakeDB(users=users, game_archives=FakeUsersCollection()))
 
-    assert report == {"guests": [], "total": 0}
+    assert report == {"guests": [], "total": 0, "available_guest_accounts": UserService.guest_name_pool_size()}
+
+
+@pytest.mark.asyncio
+async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
+    human_id = ObjectId()
+    guest_id = ObjectId()
+    bot_id = ObjectId()
+    other_bot_id = ObjectId()
+    now = datetime(2026, 5, 1, 12, tzinfo=UTC)
+
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {"_id": human_id, "username": "fil", "role": "user"},
+            {"_id": guest_id, "username": "guest_judit_polgar", "role": "guest"},
+            {"_id": bot_id, "username": "gptnano", "role": "bot"},
+            {"_id": other_bot_id, "username": "haiku", "role": "bot"},
+        ]
+    )
+    archives = FakeUsersCollection()
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "USER01",
+                "rule_variant": "crazykrieg",
+                "state": "completed",
+                "white": {"user_id": str(human_id), "username": "fil", "role": "user"},
+                "black": {"user_id": str(bot_id), "username": "gptnano"},
+                "result": {"winner": "white", "reason": "checkmate"},
+                "updated_at": datetime(2026, 5, 1, 10, tzinfo=UTC),
+                "turn_count": 12,
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "BOTBOT",
+                "white": {"user_id": str(bot_id), "username": "gptnano", "role": "bot"},
+                "black": {"user_id": str(other_bot_id), "username": "haiku", "role": "bot"},
+                "result": {"winner": "black"},
+                "updated_at": datetime(2026, 4, 30, 15, tzinfo=UTC),
+            },
+        ]
+    )
+    games = FakeUsersCollection()
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "LIVE02",
+            "rule_variant": "wild16",
+            "state": "active",
+            "white": {"user_id": str(guest_id), "username": "guest_judit_polgar", "role": "guest"},
+            "black": {"user_id": str(bot_id), "username": "gptnano"},
+            "created_at": datetime(2026, 5, 1, 10, 30, tzinfo=UTC),
+            "updated_at": datetime(2026, 5, 1, 11, tzinfo=UTC),
+        }
+    )
+
+    report = await UserService(users).get_user_activity_report(
+        FakeDB(users=users, game_archives=archives, games=games),
+        now=now,
+    )
+
+    assert report["timezone"] == "America/New_York"
+    sections = {section["key"]: section for section in report["sections"]}
+    assert set(sections) == {"dau", "wau", "mau"}
+    current_day = sections["dau"]["rows"][-1]
+    assert current_day["label"] == "2026-05-01"
+    assert current_day["active_users"] == 2
+    assert current_day["active_bots"] == 1
+    assert current_day["total_games"] == 2
+    previous_day = sections["dau"]["rows"][-2]
+    assert previous_day["active_users"] == 0
+    assert previous_day["active_bots"] == 2
+    assert previous_day["total_games"] == 1
+    current_week = sections["wau"]["rows"][-1]
+    assert current_week["active_users"] == 2
+    assert current_week["active_bots"] == 2
+    assert current_week["total_games"] == 3
+
+    assert [game["game_code"] for game in report["last_games"]] == ["LIVE02", "USER01"]
+    assert report["last_games"][0]["white"] == {"username": "guest_judit_polgar", "role": "guest"}
+    assert report["last_games"][0]["review_path"] == "/game/LIVE02/review"
 
 
 @pytest.mark.asyncio
