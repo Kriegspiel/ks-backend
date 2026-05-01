@@ -12,6 +12,7 @@ import chess
 from pymongo import ReturnDocument
 import structlog
 
+from app.models.bot import supported_rule_variants_for_bot
 from app.models.game import (
     CreateGameRequest,
     CreateGameResponse,
@@ -1226,15 +1227,8 @@ class GameService:
 
     @staticmethod
     def _bot_supported_rule_variants(bot: dict[str, Any]) -> list[str]:
-        supported_rulesets = {"berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"}
         profile = bot.get("bot_profile") or {}
-        variants = profile.get("supported_rule_variants")
-        if isinstance(variants, list) and variants:
-            return [str(item) for item in variants if str(item) in supported_rulesets]
-        username = str(bot.get("username") or "").strip().lower()
-        if username == "randobotany":
-            return ["berkeley_any"]
-        return ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
+        return supported_rule_variants_for_bot(str(bot.get("username") or ""), profile.get("supported_rule_variants"))
 
     @staticmethod
     def _player_embed(*, user_id: str, username: str, role: str = "user") -> dict[str, Any]:

@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.5
+
+- **Bot Rulesets**: narrowed legacy bot ruleset fallbacks to Berkeley variants
+  by default, while keeping `randobot` as the all-rules bot and
+  `randobotany` as Berkeley+Any-only.
+
 ## ks-backend v. 1.3.4
 
 - **Guest Metadata**: allowed guest roles in public player metadata responses,
