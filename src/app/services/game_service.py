@@ -61,7 +61,7 @@ BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
 FLUSH_LOOP_INTERVAL_SECONDS = 1.0
 TIMEOUT_SWEEP_INTERVAL = timedelta(minutes=25)
 WAITING_GAME_SWEEP_INTERVAL = timedelta(seconds=5)
-NONSENSE_HISTORY_ANNOUNCEMENTS = frozenset({"IMPOSSIBLE_TO_ASK", "INVALID_UCI"})
+NONSENSE_HISTORY_ANNOUNCEMENTS = frozenset({"IMPOSSIBLE_TO_ASK", "INVALID_UCI", "NONSENSE"})
 
 
 def _log_debug(event: str, **kwargs: Any) -> None:

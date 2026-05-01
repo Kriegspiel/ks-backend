@@ -203,6 +203,14 @@ def test_state_projection_possible_actions_and_referee_log_cover_remaining_publi
         turn="white",
         rule_variant="english",
     ) == ["ask_any"]
+    assert projection.compute_possible_actions(
+        engine=engine,
+        game_state="active",
+        viewer_color="white",
+        turn="white",
+        rule_variant="crazykrieg",
+    ) == ["ask_any"]
+    assert projection._build_turn_announcement({"announcement": "NONSENSE"}, perspective="own") is None
     assert [item["announcement"] for item in referee_log] == ["REGULAR_MOVE", "CHECK_FILE", "CHECK_RANK"]
 
 

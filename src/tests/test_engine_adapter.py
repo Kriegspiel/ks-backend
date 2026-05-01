@@ -372,7 +372,7 @@ def test_public_material_summary_hides_pawn_counts_for_berkeley_family(rule_vari
     }
 
 
-@pytest.mark.parametrize("rule_variant", ["cincinnati", "wild16", "rand", "crazykrieg"])
+@pytest.mark.parametrize("rule_variant", ["cincinnati", "wild16", "rand"])
 def test_public_material_summary_includes_public_pawn_counts_for_typed_rulesets(rule_variant: str) -> None:
     game = create_new_game(rule_variant=rule_variant)
     attempt_move(game, "e2e4")
@@ -382,6 +382,26 @@ def test_public_material_summary_includes_public_pawn_counts_for_typed_rulesets(
     assert public_material_summary(game) == {
         "white": {"pieces_remaining": 16, "pawns_captured": 0},
         "black": {"pieces_remaining": 15, "pawns_captured": 1},
+    }
+
+
+def test_public_material_summary_uses_crazykrieg_board_counts_without_pawn_counts() -> None:
+    game = create_new_game(rule_variant="crazykrieg")
+    attempt_move(game, "e2e4")
+    attempt_move(game, "d7d5")
+    attempt_move(game, "e4d5")
+
+    assert public_material_summary(game) == {
+        "white": {"pieces_remaining": 16, "pawns_captured": None},
+        "black": {"pieces_remaining": 15, "pawns_captured": None},
+    }
+
+    attempt_move(game, "g8f6")
+    attempt_move(game, "P@e3")
+
+    assert public_material_summary(game) == {
+        "white": {"pieces_remaining": 17, "pawns_captured": None},
+        "black": {"pieces_remaining": 15, "pawns_captured": None},
     }
 
 

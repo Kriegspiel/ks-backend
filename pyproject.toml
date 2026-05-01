@@ -1,6 +1,6 @@
 [project]
 name = "backend"
-version = "1.3.7"
+version = "1.3.8"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,7 +13,7 @@ dependencies = [
     "pytest>=8.0.0",
     "httpx>=0.27.0",
     "peewee>=3.18.1",
-    "kriegspiel @ git+https://github.com/Kriegspiel/ks-game.git@dd0461c4a9ded69cba8511bb88451ea895ec4129",
+    "kriegspiel @ git+https://github.com/Kriegspiel/ks-game.git@9118f8bfc64e1056d07ed9fad9c66c083a015fb0",
     "bcrypt>=4.3.0",
     "pydantic-settings>=2.3.4",
     "motor>=3.6.0",
