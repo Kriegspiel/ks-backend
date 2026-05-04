@@ -817,7 +817,9 @@ class GameService:
         return await self._archives.find_one({"_id": oid})
 
     def _is_participant(self, *, game: dict[str, Any], user_id: str) -> bool:
-        return bool(game.get("white", {}).get("user_id") == user_id or game.get("black", {}).get("user_id") == user_id)
+        white = game.get("white") or {}
+        black = game.get("black") or {}
+        return bool(white.get("user_id") == user_id or black.get("user_id") == user_id)
 
     @staticmethod
     def _matches_query(doc: dict[str, Any], query: dict[str, Any]) -> bool:
@@ -1011,16 +1013,6 @@ class GameService:
                 raise GameNotFoundError()
             return game["_id"]
 
-    @staticmethod
-    def _resolve_players(doc: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        creator_color: PlayerColor = doc.get("creator_color", "white")
-        white = doc.get("white")
-        black = doc.get("black")
-
-        if doc.get("state") == "waiting" and creator_color == "black" and white and black is None:
-            return None, white
-        return white, black
-
     async def _public_player(self, player: dict[str, Any] | None) -> dict[str, Any] | None:
         if not player:
             return None
@@ -1045,9 +1037,6 @@ class GameService:
         }
 
     async def _to_metadata(self, doc: dict[str, Any]) -> GameMetadataResponse:
-        white, black = self._resolve_players(doc)
-        white_payload = await self._public_player(white) or {"username": "", "connected": False, "role": "user", "elo": 1200}
-        black_payload = await self._public_player(black)
         return GameMetadataResponse.model_validate(
             {
                 "game_id": str(doc["_id"]),
@@ -1055,8 +1044,8 @@ class GameService:
                 "rule_variant": doc["rule_variant"],
                 "state": doc["state"],
                 "opponent_type": doc.get("opponent_type", "human"),
-                "white": white_payload,
-                "black": black_payload,
+                "white": await self._public_player(doc.get("white")),
+                "black": await self._public_player(doc.get("black")),
                 "turn": doc.get("turn"),
                 "move_number": doc.get("move_number", 1),
                 "created_at": doc["created_at"],
@@ -1068,9 +1057,11 @@ class GameService:
 
     @staticmethod
     def _player_color_for_user(game: dict[str, Any], user_id: str) -> PlayerColor | None:
-        if game.get("white", {}).get("user_id") == user_id:
+        white = game.get("white") or {}
+        black = game.get("black") or {}
+        if white.get("user_id") == user_id:
             return "white"
-        if game.get("black", {}).get("user_id") == user_id:
+        if black.get("user_id") == user_id:
             return "black"
         return None
 
@@ -1264,6 +1255,8 @@ class GameService:
     async def _find_waiting_game_for_creator(self, *, user_id: str) -> dict[str, Any] | None:
         waiting = await self._games.find_one({"state": "waiting", "white.user_id": user_id})
         if waiting is None:
+            waiting = await self._games.find_one({"state": "waiting", "black.user_id": user_id})
+        if waiting is None:
             return None
         now = self.utcnow()
         if self._is_waiting_game_expired(game=waiting, now=now):
@@ -1273,6 +1266,11 @@ class GameService:
                 await self._evict_cached_game(game_id)
             return None
         return waiting
+
+    @staticmethod
+    def _creator_player(game: dict[str, Any]) -> dict[str, Any] | None:
+        creator_color: PlayerColor = game.get("creator_color", "white")
+        return game.get(creator_color)
 
     async def _set_bot_join_cooldown(self, *, user_id: str, now: datetime) -> None:
         if self._users is None:
@@ -1290,7 +1288,9 @@ class GameService:
         await self._users.find_one_and_update({"_id": oid}, update, return_document=ReturnDocument.AFTER)
 
     async def _enforce_bot_join_rules(self, *, user_id: str, game: dict[str, Any], now: datetime) -> None:
-        creator = game["white"]
+        creator = self._creator_player(game)
+        if creator is None:
+            raise GameConflictError(code="GAME_NOT_JOINABLE", message="Game creator is missing")
         if creator["user_id"] == user_id:
             raise GameConflictError(code="CANNOT_JOIN_OWN_GAME", message="Cannot join your own game")
 
@@ -1325,14 +1325,16 @@ class GameService:
                 raise GameConflictError(code="BOT_ALREADY_HAS_OPEN_GAME", message="A bot can only have one open lobby game at a time")
 
         creator = self._player_embed(user_id=user_id, username=username, role=role)
+        white_player = creator if color == "white" else None
+        black_player = creator if color == "black" else None
         document: dict[str, Any] = {
             "game_code": code,
             "rule_variant": request.rule_variant,
             "creator_color": color,
             "opponent_type": request.opponent_type,
             "selected_bot_id": request.bot_id,
-            "white": creator,
-            "black": None,
+            "white": white_player,
+            "black": black_player,
             "state": "waiting",
             "turn": None,
             "move_number": 1,
@@ -1410,7 +1412,9 @@ class GameService:
                 await self._evict_cached_game(game_id)
             raise GameNotFoundError(f"No game with code {normalized} exists.")
 
-        creator = game["white"]
+        creator = self._creator_player(game)
+        if creator is None:
+            raise GameConflictError(code="GAME_NOT_JOINABLE", message="Game creator is missing")
         if creator["user_id"] == user_id:
             raise GameConflictError(code="CANNOT_JOIN_OWN_GAME", message="Cannot join your own game")
 
@@ -1479,11 +1483,14 @@ class GameService:
             if self._is_waiting_game_expired(game=doc, now=now):
                 continue
             creator_color: PlayerColor = doc.get("creator_color", "white")
+            creator = self._creator_player(doc)
+            if creator is None:
+                continue
             items.append(
                 OpenGameItem(
                     game_code=doc["game_code"],
                     rule_variant=doc["rule_variant"],
-                    created_by=doc["white"]["username"],
+                    created_by=creator["username"],
                     created_at=doc["created_at"],
                     available_color="black" if creator_color == "white" else "white",
                 )
@@ -1507,23 +1514,7 @@ class GameService:
         if game is None:
             raise GameNotFoundError()
 
-        white, black = self._resolve_players(game)
-        payload = {
-            "game_id": str(game["_id"]),
-            "game_code": game["game_code"],
-            "rule_variant": game["rule_variant"],
-            "state": game["state"],
-            "opponent_type": game.get("opponent_type", "human"),
-            "white": await self._public_player(white),
-            "black": await self._public_player(black),
-            "turn": game.get("turn"),
-            "move_number": game.get("move_number", 1),
-            "created_at": game["created_at"],
-            "updated_at": game.get("updated_at", game["created_at"]),
-            "result": self._normalized_result(result=game.get("result"), moves=game.get("moves")),
-            "rating_snapshot": game.get("rating_snapshot"),
-        }
-        return GameMetadataResponse.model_validate(payload)
+        return await self._to_metadata(game)
 
     async def get_game_state(self, *, game_id: str, user_id: str) -> GameStateResponse:
         game, entry = await self._get_game_for_runtime(game_id=game_id)
@@ -1871,10 +1862,12 @@ class GameService:
         if game["state"] != "waiting":
             raise GameConflictError(code="GAME_NOT_WAITING", message="Only waiting games can be deleted")
 
-        if game["white"]["user_id"] != user_id:
+        creator_color: PlayerColor = game.get("creator_color", "white")
+        creator = self._creator_player(game)
+        if creator is None or creator["user_id"] != user_id:
             raise GameForbiddenError(code="FORBIDDEN", message="Only the creator can delete this waiting game")
 
-        result = await self._games.delete_one({"_id": oid, "state": "waiting", "white.user_id": user_id})
+        result = await self._games.delete_one({"_id": oid, "state": "waiting", f"{creator_color}.user_id": user_id})
         if result.deleted_count != 1:
             raise GameConflictError(code="GAME_NOT_WAITING", message="Game is no longer deletable")
 

@@ -31,7 +31,7 @@ class GameDocument(BaseModel):
     creator_color: PlayerColor = "white"
     opponent_type: OpponentType = "human"
     selected_bot_id: str | None = None
-    white: PlayerEmbed
+    white: PlayerEmbed | None = None
     black: PlayerEmbed | None = None
     state: GameState = "waiting"
     turn: PlayerColor | None = None
@@ -338,7 +338,7 @@ class GameMetadataResponse(BaseModel):
     rule_variant: RuleVariant
     state: GameState
     opponent_type: OpponentType = "human"
-    white: PublicPlayer
+    white: PublicPlayer | None = None
     black: PublicPlayer | None = None
     turn: PlayerColor | None = None
     move_number: int = Field(ge=1)

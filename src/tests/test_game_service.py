@@ -216,6 +216,8 @@ async def test_create_game_assigns_black_when_requested() -> None:
     saved = games.docs[0]
     assert saved["state"] == "waiting"
     assert saved["creator_color"] == "black"
+    assert saved["white"] is None
+    assert saved["black"] == {"user_id": "u1", "username": "creator", "connected": True, "role": "user"}
     assert saved["expires_at"] - saved["created_at"] == timedelta(minutes=10)
 
 
@@ -244,8 +246,8 @@ async def test_join_game_transitions_waiting_to_active_and_assigns_opposite_colo
             "game_code": "A7K2M9",
             "rule_variant": "berkeley_any",
             "creator_color": "black",
-            "white": {"user_id": "u1", "username": "creator", "connected": True},
-            "black": None,
+            "white": None,
+            "black": {"user_id": "u1", "username": "creator", "connected": True},
             "state": "waiting",
             "turn": None,
             "move_number": 1,
@@ -775,8 +777,8 @@ async def test_hydrate_document_and_waiting_black_player_mapping() -> None:
             "game_code": "K7K2M9",
             "rule_variant": "berkeley_any",
             "creator_color": "black",
-            "white": {"user_id": "u1", "username": "creator", "connected": True},
-            "black": None,
+            "white": None,
+            "black": {"user_id": "u1", "username": "creator", "connected": True},
             "state": "waiting",
             "turn": None,
             "move_number": 1,
@@ -790,6 +792,9 @@ async def test_hydrate_document_and_waiting_black_player_mapping() -> None:
     mine = await service.get_my_games(user_id="u1")
 
     assert hydrated.game_code == "K7K2M9"
+    assert hydrated.white is None
+    assert hydrated.black and hydrated.black.username == "creator"
+    assert mine[0].white is None
     assert mine[0].black and mine[0].black.username == "creator"
 
 

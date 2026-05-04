@@ -652,8 +652,8 @@ async def test_service_additional_branches_for_join_delete_and_metadata() -> Non
             "game_code": "K7K2M9",
             "rule_variant": "berkeley_any",
             "creator_color": "black",
-            "white": {"user_id": "u1", "username": "creator", "connected": True},
-            "black": None,
+            "white": None,
+            "black": {"user_id": "u1", "username": "creator", "connected": True},
             "state": "waiting",
             "turn": None,
             "move_number": 1,
@@ -663,8 +663,8 @@ async def test_service_additional_branches_for_join_delete_and_metadata() -> Non
     )
     service = GameService(games)
 
-    # waiting+creator black branch in _resolve_players
     mine = await service.get_my_games(user_id="u1")
+    assert mine[0].white is None
     assert mine[0].black and mine[0].black.username == "creator"
 
     # joiner gets white when creator picked black
@@ -683,7 +683,7 @@ async def test_service_additional_branches_for_join_delete_and_metadata() -> Non
 
     games.delete_one = zero_delete  # type: ignore[method-assign]
     with pytest.raises(GameConflictError):
-        await service.delete_waiting_game(game_id=str(gid), user_id="u2")
+        await service.delete_waiting_game(game_id=str(gid), user_id="u1")
 
 
 @pytest.mark.asyncio

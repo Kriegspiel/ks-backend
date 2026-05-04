@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.9
+
+- **Waiting Game Seats**: stored waiting-game players in their actual color
+  seats, allowing either `white` or `black` to be open until another player
+  joins and preventing metadata validation errors for black-created open games.
+
 ## ks-backend v. 1.3.8
 
 - **CrazyKrieg Material**: consumed the engine-owned board-piece material
