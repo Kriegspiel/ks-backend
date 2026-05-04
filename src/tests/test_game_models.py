@@ -224,9 +224,30 @@ def test_game_metadata_response_contract_shape() -> None:
         }
     )
 
-    assert response.white.username == "alexfil"
+    assert response.white and response.white.username == "alexfil"
     assert response.black and response.black.username == "opponent1"
     assert response.result == {"winner": "white", "reason": "checkmate"}
+
+
+def test_game_metadata_response_allows_open_white_seat() -> None:
+    now = datetime(2026, 5, 4, 3, 50, tzinfo=UTC)
+    response = GameMetadataResponse.model_validate(
+        {
+            "game_id": "664b2c",
+            "game_code": "A7K2M9",
+            "rule_variant": "berkeley_any",
+            "state": "waiting",
+            "white": None,
+            "black": {"username": "creator", "connected": True},
+            "turn": None,
+            "move_number": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+
+    assert response.white is None
+    assert response.black and response.black.username == "creator"
 
 
 def test_game_metadata_response_allows_guest_player_role() -> None:
