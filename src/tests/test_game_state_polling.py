@@ -288,6 +288,7 @@ async def test_get_game_state_repairs_missing_forced_pawn_captures(corrupted_has
     ("rule_variant", "expected_message"),
     [
         ("cincinnati", "Has pawn capture"),
+        ("rand", "Pawn try from E4"),
         ("wild16", "1 pawn try"),
     ],
 )

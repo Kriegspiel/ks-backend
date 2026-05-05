@@ -14,6 +14,7 @@ def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_
     assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=True, next_turn_pawn_try_squares=None) == "Has pawn capture"
     assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=False, next_turn_pawn_try_squares=None) == "No pawn captures"
     assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=None, next_turn_pawn_try_squares=["e4", "c2"]) == "Pawn tries from E4, C2"
+    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=None, next_turn_pawn_try_squares=[44]) == "Pawn try from E6"
     assert projection._scoresheet_answer_texts(
         {
             "main_announcement": "REGULAR_MOVE",
@@ -152,6 +153,36 @@ def test_state_projection_scoresheet_texts_include_rule_specific_announcements()
                     "question_type": None,
                 }
             ],
+        }
+    ]
+
+    rand_scoresheet = projection.build_viewer_scoresheet(
+        viewer_color="white",
+        stored_scoresheet={
+            "color": "white",
+            "last_move_number": 3,
+            "moves_own": [[], [], []],
+            "moves_opponent": [
+                [],
+                [],
+                [
+                    {
+                        "question": {"question_type": "COMMON"},
+                        "answer": {"main_announcement": "REGULAR_MOVE", "next_turn_pawn_try_squares": [44]},
+                    }
+                ],
+            ],
+        },
+    )
+    assert next(turn for turn in rand_scoresheet["turns"] if turn["turn"] == 4)["white"] == [
+        {
+            "kind": "status",
+            "actor": "self",
+            "prompt": None,
+            "message": "Pawn try from E6",
+            "messages": ["Pawn try from E6"],
+            "move_uci": None,
+            "question_type": None,
         }
     ]
 
