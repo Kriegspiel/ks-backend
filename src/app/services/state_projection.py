@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+import chess
+
 from app.services.engine_adapter import full_fen, serialize_scoresheet, visible_fen
 
 PlayerColor = Literal['white', 'black']
@@ -127,9 +129,19 @@ def _format_piece_announcement(value: Any) -> str:
     return labels.get(str(value or '').upper(), '')
 
 
+def _format_pawn_try_square(value: Any) -> str:
+    if isinstance(value, int) and chess.A1 <= value <= chess.H8:
+        return chess.square_name(value).upper()
+    if isinstance(value, str):
+        square = value.strip()
+        if len(square) == 2 and square[0].lower() in 'abcdefgh' and square[1] in '12345678':
+            return square.upper()
+    return ''
+
+
 def _next_turn_message(*, next_turn_pawn_tries: Any, next_turn_has_pawn_capture: Any, next_turn_pawn_try_squares: Any) -> str:
     if isinstance(next_turn_pawn_try_squares, list):
-        squares = [str(square).upper() for square in next_turn_pawn_try_squares if isinstance(square, str)]
+        squares = [square for square in (_format_pawn_try_square(square) for square in next_turn_pawn_try_squares) if square]
         if not squares:
             return 'No pawn captures'
         if len(squares) == 1:

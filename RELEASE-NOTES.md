@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.10
+
+- **RAND Referee Messages**: correctly projected RAND pawn-try source squares
+  from serialized engine scoresheets, avoiding false "No pawn captures"
+  announcements when the engine reports legal pawn tries.
+
 ## ks-backend v. 1.3.9
 
 - **Waiting Game Seats**: stored waiting-game players in their actual color
