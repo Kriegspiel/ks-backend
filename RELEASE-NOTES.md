@@ -4,6 +4,13 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.11
+
+- **Guest Conversion**: added an authenticated guest-account conversion endpoint
+  that claims the existing guest account as a regular user, keeps game history,
+  updates active/archive game player labels, and changes the current session to
+  regular-user lifetime.
+
 ## ks-backend v. 1.3.10
 
 - **RAND Referee Messages**: correctly projected RAND pawn-try source squares

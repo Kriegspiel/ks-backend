@@ -6,6 +6,8 @@ from app.dependencies import get_current_user, get_session_service, require_db
 from app.models.auth import (
     BotRegisterRequest,
     BotRegisterResponse,
+    ConvertGuestRequest,
+    ConvertGuestResponse,
     GuestLoginResponse,
     LoginRequest,
     LoginResponse,
@@ -84,6 +86,30 @@ async def login_as_guest(
     _set_session_cookie(request, response, session_id, user)
     logger.info('auth_guest_success', user_id=user.id, username=user.username, source_ip=_client_ip(request))
     return GuestLoginResponse(user_id=user.id, username=user.username)
+
+@router.post('/guest/convert', response_model=ConvertGuestResponse)
+async def convert_guest(
+    payload: ConvertGuestRequest,
+    request: Request,
+    response: Response,
+    user: UserModel = Depends(get_current_user),
+    session_service: SessionService = Depends(get_session_service),
+) -> ConvertGuestResponse:
+    if user.role != 'guest':
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only guest accounts can be converted')
+    db = require_db(); user_service = UserService(db.users)
+    try:
+        converted = await user_service.convert_guest_to_user(db, user, payload)
+    except UserConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={'field': exc.field, 'code': exc.code, 'message': str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    session_id = request.cookies.get(SessionService.COOKIE_NAME)
+    if session_id:
+        await session_service.update_session_for_user(session_id, converted)
+        _set_session_cookie(request, response, session_id, converted)
+    logger.info('auth_guest_convert_success', user_id=converted.id, username=converted.username, source_ip=_client_ip(request))
+    return ConvertGuestResponse(user_id=converted.id, username=converted.username)
 
 @router.post('/logout')
 async def logout(request: Request, response: Response, session_service: SessionService = Depends(get_session_service)) -> dict[str, str]:

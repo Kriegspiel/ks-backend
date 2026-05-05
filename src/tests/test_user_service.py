@@ -9,7 +9,7 @@ import pytest
 from bson import ObjectId
 from pymongo.errors import DuplicateKeyError
 
-from app.models.auth import BotRegisterRequest, RegisterRequest
+from app.models.auth import BotRegisterRequest, ConvertGuestRequest, RegisterRequest
 from app.models.user import UserModel, default_user_stats_payload
 from app.services import user_service as user_service_module
 from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
@@ -90,6 +90,18 @@ class FakeUsersCollection:
                 self.docs[idx] = doc
                 return dict(doc)
         return None
+
+    async def update_many(self, query: dict, update: dict):
+        matched_count = 0
+        for idx, doc in enumerate(self.docs):
+            if self._matches(doc, query):
+                matched_count += 1
+                for key, value in update.get("$set", {}).items():
+                    self._set_nested(doc, key, value)
+                for key in update.get("$unset", {}):
+                    self._unset_nested(doc, key)
+                self.docs[idx] = doc
+        return type("UpdateResult", (), {"matched_count": matched_count, "modified_count": matched_count})()
 
     async def count_documents(self, query: dict):
         return len([d for d in self.docs if self._matches(d, query)])
@@ -256,6 +268,76 @@ async def test_create_guest_user_skips_existing_guest_name(monkeypatch: pytest.M
     assert first.username == "guest_adolf_adams"
     assert second.username == "guest_akiba_adams"
     assert len({doc["username"] for doc in users.docs}) == 2
+
+
+@pytest.mark.asyncio
+async def test_convert_guest_to_user_claims_account_and_updates_player_refs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(user_service_module.secrets, "randbelow", lambda _upper: 0)
+    users = FakeUsersCollection()
+    games = FakeUsersCollection()
+    game_archives = FakeUsersCollection()
+    service = UserService(users)
+    guest = await service.create_guest_user()
+    user_id = guest.id
+    games.docs.append({"white": {"user_id": user_id, "username": guest.username, "role": "guest"}, "black": {"user_id": "other", "username": "other", "role": "user"}})
+    game_archives.docs.append({"white": {"user_id": "other", "username": "other", "role": "user"}, "black": {"user_id": user_id, "username": guest.username, "role": "guest"}})
+
+    converted = await service.convert_guest_to_user(
+        FakeDB(users=users, games=games, game_archives=game_archives),
+        guest,
+        ConvertGuestRequest(email="Player@One.Example", password="abc12345"),
+    )
+
+    stored = users.docs[0]
+    assert converted.username == "adolf_adams"
+    assert stored["username"] == "adolf_adams"
+    assert stored["username_display"] == "adolf_adams"
+    assert stored["email"] == "player@one.example"
+    assert stored["email_verified"] is False
+    assert stored["auth_providers"] == ["local"]
+    assert stored["role"] == "user"
+    assert stored["profile"]["bio"] == ""
+    assert service.verify_password("abc12345", stored["password_hash"])
+    assert games.docs[0]["white"]["username"] == "adolf_adams"
+    assert games.docs[0]["white"]["role"] == "user"
+    assert game_archives.docs[0]["black"]["username"] == "adolf_adams"
+    assert game_archives.docs[0]["black"]["role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_convert_guest_to_user_rejects_duplicate_regular_username(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(user_service_module.secrets, "randbelow", lambda _upper: 0)
+    users = FakeUsersCollection()
+    service = UserService(users)
+    guest = await service.create_guest_user()
+    await service.create_user(RegisterRequest(username="adolf_adams", email="existing@example.com", password="abc12345"))
+
+    with pytest.raises(UserConflictError) as exc:
+        await service.convert_guest_to_user(
+            FakeDB(users=users, games=FakeUsersCollection(), game_archives=FakeUsersCollection()),
+            guest,
+            ConvertGuestRequest(email="new@example.com", password="abc12345"),
+        )
+
+    assert exc.value.code == "USERNAME_TAKEN"
+
+
+@pytest.mark.asyncio
+async def test_convert_guest_to_user_rejects_duplicate_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(user_service_module.secrets, "randbelow", lambda _upper: 0)
+    users = FakeUsersCollection()
+    service = UserService(users)
+    guest = await service.create_guest_user()
+    await service.create_user(RegisterRequest(username="playerone", email="taken@example.com", password="abc12345"))
+
+    with pytest.raises(UserConflictError) as exc:
+        await service.convert_guest_to_user(
+            FakeDB(users=users, games=FakeUsersCollection(), game_archives=FakeUsersCollection()),
+            guest,
+            ConvertGuestRequest(email="Taken@Example.com", password="abc12345"),
+        )
+
+    assert exc.value.code == "EMAIL_TAKEN"
 
 
 @pytest.mark.asyncio

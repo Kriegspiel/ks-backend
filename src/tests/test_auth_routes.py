@@ -75,6 +75,7 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
     service = SimpleNamespace(
         create_user=AsyncMock(return_value=created_user),
         create_guest_user=AsyncMock(return_value=guest_user),
+        convert_guest_to_user=AsyncMock(return_value=created_user),
         authenticate=AsyncMock(return_value=created_user),
     )
 
@@ -88,6 +89,9 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
         async def create_guest_user(self):
             return await service.create_guest_user()
 
+        async def convert_guest_to_user(self, db, user, payload):
+            return await service.convert_guest_to_user(db, user, payload)
+
         async def authenticate(self, username, password):
             return await service.authenticate(username, password)
 
@@ -96,6 +100,7 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
     session_service = SimpleNamespace(
         create_session=AsyncMock(return_value="sess123"),
         delete_session=AsyncMock(),
+        update_session_for_user=AsyncMock(),
     )
 
     app.dependency_overrides[get_session_service] = lambda: session_service
@@ -116,6 +121,14 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
         guest_cookie = guest.headers.get("set-cookie", "")
         assert "session_id=sess123" in guest_cookie
         assert f"Max-Age={SessionService.GUEST_SESSION_MAX_AGE_SECONDS}" in guest_cookie
+
+        app.dependency_overrides[get_current_user] = lambda: guest_user
+        client.cookies.set(SessionService.COOKIE_NAME, "sess123")
+        convert = client.post("/api/auth/guest/convert", json={"email": "player@example.com", "password": "abc12345"})
+        assert convert.status_code == 200
+        assert convert.json()["username"] == "playerone"
+        service.convert_guest_to_user.assert_awaited_once()
+        session_service.update_session_for_user.assert_awaited_once_with("sess123", created_user)
 
         service.authenticate = AsyncMock(return_value=None)
         invalid = client.post("/api/auth/login", json={"username": "playerone", "password": "wrong"})
@@ -146,6 +159,17 @@ def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
     assert body["username"] == "playerone"
     assert body["email"] == "player@example.com"
     assert body["is_guest"] is False
+
+
+def test_convert_guest_rejects_regular_users(app_no_db) -> None:
+    app, _ = app_no_db
+    app.dependency_overrides[get_current_user] = lambda: UserModel.from_mongo(_user_doc())
+
+    with TestClient(app) as client:
+        response = client.post("/api/auth/guest/convert", json={"email": "player@example.com", "password": "abc12345"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Only guest accounts can be converted"
 
 
 def test_cookie_secure_flag_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
