@@ -94,7 +94,9 @@ def test_session_endpoint_reissues_cookie_with_flags(monkeypatch) -> None:
     from app.dependencies import get_current_user
 
     app = create_app(Settings(ENVIRONMENT="testing"))
+    session_service = SimpleNamespace(update_session_for_user=AsyncMock())
     app.dependency_overrides[get_current_user] = lambda: UserModel.from_mongo(_user_doc())
+    app.dependency_overrides[get_session_service] = lambda: session_service
 
     with TestClient(app) as client:
         client.cookies.set("session_id", "sid-refresh")
@@ -106,6 +108,7 @@ def test_session_endpoint_reissues_cookie_with_flags(monkeypatch) -> None:
     assert "session_id=sid-refresh" in cookie
     assert "HttpOnly" in cookie
     assert "SameSite=lax" in cookie
+    session_service.update_session_for_user.assert_awaited_once()
 
 
 def test_session_endpoint_reissues_long_lived_guest_cookie(monkeypatch) -> None:
@@ -116,7 +119,9 @@ def test_session_endpoint_reissues_long_lived_guest_cookie(monkeypatch) -> None:
     guest_doc["username"] = "guest_adolf_adams"
     guest_doc["username_display"] = "guest_adolf_adams"
     app = create_app(Settings(ENVIRONMENT="testing"))
+    session_service = SimpleNamespace(update_session_for_user=AsyncMock())
     app.dependency_overrides[get_current_user] = lambda: UserModel.from_mongo(guest_doc)
+    app.dependency_overrides[get_session_service] = lambda: session_service
 
     with TestClient(app) as client:
         client.cookies.set("session_id", "sid-refresh")
@@ -125,4 +130,5 @@ def test_session_endpoint_reissues_long_lived_guest_cookie(monkeypatch) -> None:
     assert response.status_code == 200
     cookie = response.headers.get("set-cookie", "")
     assert "session_id=sid-refresh" in cookie
-    assert f"Max-Age={SessionService.GUEST_SESSION_MAX_AGE_SECONDS}" in cookie
+    assert f"Max-Age={SessionService.GUEST_COOKIE_MAX_AGE_SECONDS}" in cookie
+    session_service.update_session_for_user.assert_awaited_once()

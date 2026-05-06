@@ -120,7 +120,7 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
         assert guest.json()["username"] == "guest_adolf_adams"
         guest_cookie = guest.headers.get("set-cookie", "")
         assert "session_id=sess123" in guest_cookie
-        assert f"Max-Age={SessionService.GUEST_SESSION_MAX_AGE_SECONDS}" in guest_cookie
+        assert f"Max-Age={SessionService.GUEST_COOKIE_MAX_AGE_SECONDS}" in guest_cookie
 
         app.dependency_overrides[get_current_user] = lambda: guest_user
         client.cookies.set(SessionService.COOKIE_NAME, "sess123")
@@ -150,6 +150,7 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
 def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
     app, _ = app_no_db
     app.dependency_overrides[get_current_user] = lambda: UserModel.from_mongo(_user_doc())
+    app.dependency_overrides[get_session_service] = lambda: SimpleNamespace(update_session_for_user=AsyncMock())
 
     with TestClient(app) as client:
         me = client.get("/api/auth/me")
@@ -159,6 +160,25 @@ def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
     assert body["username"] == "playerone"
     assert body["email"] == "player@example.com"
     assert body["is_guest"] is False
+
+
+def test_me_endpoint_reissues_guest_cookie_and_refreshes_session(app_no_db) -> None:
+    app, _ = app_no_db
+    guest_user = UserModel.from_mongo(_guest_doc())
+    session_service = SimpleNamespace(update_session_for_user=AsyncMock())
+    app.dependency_overrides[get_current_user] = lambda: guest_user
+    app.dependency_overrides[get_session_service] = lambda: session_service
+
+    with TestClient(app) as client:
+        client.cookies.set(SessionService.COOKIE_NAME, "guest-session")
+        me = client.get("/api/auth/me")
+
+    assert me.status_code == 200
+    assert me.json()["is_guest"] is True
+    session_service.update_session_for_user.assert_awaited_once_with("guest-session", guest_user)
+    cookie = me.headers.get("set-cookie", "")
+    assert "session_id=guest-session" in cookie
+    assert f"Max-Age={SessionService.GUEST_COOKIE_MAX_AGE_SECONDS}" in cookie
 
 
 def test_convert_guest_rejects_regular_users(app_no_db) -> None:

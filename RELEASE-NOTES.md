@@ -4,6 +4,13 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.12
+
+- **Guest Sessions**: changed guest auth to use browser-safe 400-day sliding
+  cookies with five-year sliding server sessions, and reissue the cookie on
+  authenticated session checks so active guests can keep the same browser
+  identity over time.
+
 ## ks-backend v. 1.3.11
 
 - **Guest Conversion**: added an authenticated guest-account conversion endpoint
