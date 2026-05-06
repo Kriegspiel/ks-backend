@@ -93,7 +93,7 @@ def test_api_health_mirrors_health_endpoint():
     assert api_response.json()["version"] == APP_VERSION
 
 
-def test_openapi_uses_prefixless_canonical_paths_and_hides_legacy_api_prefix():
+def test_openapi_uses_prefixless_canonical_paths_and_hides_app_api_ingress_prefix():
     app = create_app(Settings())
 
     paths = app.openapi()["paths"]
@@ -112,28 +112,45 @@ def test_openapi_uses_prefixless_canonical_paths_and_hides_legacy_api_prefix():
     assert "/api/health" not in paths
 
 
-def test_canonical_and_legacy_api_routes_are_both_available():
+def test_canonical_routes_and_app_host_api_ingress_are_both_available():
     app = create_app(Settings())
 
     with TestClient(app) as client:
         canonical_health = client.get("/health")
-        legacy_health = client.get("/api/health")
+        app_ingress_health = client.get("/api/health", headers={"host": "app.kriegspiel.org"})
         canonical_me = client.get("/auth/me")
-        legacy_me = client.get("/api/auth/me")
+        app_ingress_me = client.get("/api/auth/me", headers={"host": "app.kriegspiel.org"})
         canonical_game = client.get("/game/open")
-        legacy_game = client.get("/api/game/open")
+        app_ingress_game = client.get("/api/game/open", headers={"host": "app.kriegspiel.org"})
         canonical_bots = client.get("/bots")
-        legacy_bots = client.get("/api/bots")
+        app_ingress_bots = client.get("/api/bots", headers={"host": "app.kriegspiel.org"})
 
     assert canonical_health.status_code in (200, 503)
-    assert legacy_health.status_code == canonical_health.status_code
-    assert legacy_health.json() == canonical_health.json()
+    assert app_ingress_health.status_code == canonical_health.status_code
+    assert app_ingress_health.json() == canonical_health.json()
     assert canonical_me.status_code in (401, 503)
-    assert legacy_me.status_code == canonical_me.status_code
+    assert app_ingress_me.status_code == canonical_me.status_code
     assert canonical_game.status_code in (401, 503)
-    assert legacy_game.status_code == canonical_game.status_code
+    assert app_ingress_game.status_code == canonical_game.status_code
     assert canonical_bots.status_code in (401, 503)
-    assert legacy_bots.status_code == canonical_bots.status_code
+    assert app_ingress_bots.status_code == canonical_bots.status_code
+
+
+def test_public_api_host_rejects_api_prefixed_ingress_paths():
+    app = create_app(Settings())
+
+    with TestClient(app) as client:
+        canonical_health = client.get("/health", headers={"host": "api.kriegspiel.org"})
+        api_health = client.get("/api/health", headers={"host": "api.kriegspiel.org"})
+        api_me = client.get("/api/auth/me", headers={"host": "api.kriegspiel.org"})
+        api_game = client.get("/api/game/open", headers={"host": "api.kriegspiel.org"})
+        api_bots = client.get("/api/bots", headers={"host": "api.kriegspiel.org"})
+
+    assert canonical_health.status_code in (200, 503)
+    assert api_health.status_code == 404
+    assert api_me.status_code == 404
+    assert api_game.status_code == 404
+    assert api_bots.status_code == 404
 
 
 def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:

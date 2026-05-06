@@ -4,6 +4,13 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.14
+
+- **API Ingress Boundary**: stopped exposing `/api/...` as a public compatibility
+  surface on `api.kriegspiel.org`; the hidden `/api` mount is now only accepted
+  for the browser app host so `app.kriegspiel.org/api/...` can keep same-origin
+  cookies while bots and external clients use prefix-free canonical paths.
+
 ## ks-backend v. 1.3.13
 
 - **Canonical API Paths**: exposed prefix-free API routes such as `/auth/login`,
