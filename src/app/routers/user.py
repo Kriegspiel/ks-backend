@@ -9,7 +9,7 @@ from app.dependencies import get_current_user, require_db
 from app.models.user import UserModel
 from app.services.user_service import UserService
 
-router = APIRouter(prefix="/api", tags=["user"])
+router = APIRouter(tags=["user"])
 
 
 class SettingsPatch(dict):

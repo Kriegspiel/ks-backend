@@ -93,6 +93,49 @@ def test_api_health_mirrors_health_endpoint():
     assert api_response.json()["version"] == APP_VERSION
 
 
+def test_openapi_uses_prefixless_canonical_paths_and_hides_legacy_api_prefix():
+    app = create_app(Settings())
+
+    paths = app.openapi()["paths"]
+
+    assert "/auth/login" in paths
+    assert "/game/stats" in paths
+    assert "/bots" in paths
+    assert "/user/{username}" in paths
+    assert "/tech/users-report" in paths
+    assert "/health" in paths
+    assert "/api/auth/login" not in paths
+    assert "/api/game/stats" not in paths
+    assert "/api/bots" not in paths
+    assert "/api/user/{username}" not in paths
+    assert "/api/tech/users-report" not in paths
+    assert "/api/health" not in paths
+
+
+def test_canonical_and_legacy_api_routes_are_both_available():
+    app = create_app(Settings())
+
+    with TestClient(app) as client:
+        canonical_health = client.get("/health")
+        legacy_health = client.get("/api/health")
+        canonical_me = client.get("/auth/me")
+        legacy_me = client.get("/api/auth/me")
+        canonical_game = client.get("/game/open")
+        legacy_game = client.get("/api/game/open")
+        canonical_bots = client.get("/bots")
+        legacy_bots = client.get("/api/bots")
+
+    assert canonical_health.status_code in (200, 503)
+    assert legacy_health.status_code == canonical_health.status_code
+    assert legacy_health.json() == canonical_health.json()
+    assert canonical_me.status_code == 401
+    assert legacy_me.status_code == 401
+    assert canonical_game.status_code == 401
+    assert legacy_game.status_code == 401
+    assert canonical_bots.status_code == 401
+    assert legacy_bots.status_code == 401
+
+
 def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
     import app.main as main_module
 

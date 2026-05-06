@@ -4,6 +4,13 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.13
+
+- **Canonical API Paths**: exposed prefix-free API routes such as `/auth/login`,
+  `/game/stats`, and `/tech/users-report` in OpenAPI docs while keeping the
+  existing `/api/...` routes mounted as hidden compatibility endpoints for the
+  web app, bots, and older clients.
+
 ## ks-backend v. 1.3.12
 
 - **Guest Sessions**: changed guest auth to use browser-safe 400-day sliding
