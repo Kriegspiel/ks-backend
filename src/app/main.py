@@ -82,10 +82,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(auth_router)
-    app.include_router(bot_router)
-    app.include_router(game_router)
-    app.include_router(user_router)
+    canonical_routers = (auth_router, bot_router, game_router, user_router)
+    for router in canonical_routers:
+        app.include_router(router)
+        app.include_router(router, prefix="/api", include_in_schema=False)
 
     shared_favicon_url = "https://kriegspiel.org/favicon-32x32.png"
 
@@ -123,7 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             redoc_favicon_url=shared_favicon_url,
         )
 
-    @app.get("/api/health")
+    @app.get("/api/health", include_in_schema=False)
     async def api_health(response: Response) -> dict[str, str]:
         return await health(response)
 

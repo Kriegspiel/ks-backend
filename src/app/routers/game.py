@@ -9,7 +9,7 @@ from app.models.game import AskAnyResponse, CreateGameRequest, CreateGameRespons
 from app.models.user import UserModel
 from app.services.game_service import GameConflictError, GameForbiddenError, GameNotFoundError, GameService, GameServiceError, GameValidationError
 
-router = APIRouter(prefix='/api/game', tags=['game'])
+router = APIRouter(prefix='/game', tags=['game'])
 class MyGamesResponse(OpenGamesResponse): games: list[GameMetadataResponse]
 
 def _error_response(*, status_code: int, code: str, message: str, details: dict[str, Any] | None = None) -> JSONResponse:

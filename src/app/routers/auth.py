@@ -18,7 +18,7 @@ from app.models.user import UserModel
 from app.services.session_service import SessionService
 from app.services.user_service import UserConflictError, UserService
 
-router = APIRouter(prefix='/api/auth', tags=['auth'])
+router = APIRouter(prefix='/auth', tags=['auth'])
 logger = structlog.get_logger('app.auth')
 
 def _secure_cookie(request: Request) -> bool: return request.app.state.settings.ENVIRONMENT == 'production'

@@ -8,7 +8,7 @@ from app.models.bot import BotListResponse
 from app.models.user import UserModel
 from app.services.bot_service import BotService
 
-router = APIRouter(prefix='/api/bots', tags=['bots'])
+router = APIRouter(prefix='/bots', tags=['bots'])
 
 def get_bot_service() -> BotService:
     db = get_db()
