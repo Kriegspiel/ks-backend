@@ -46,6 +46,24 @@ class GuestLoginResponse(BaseModel):
     message: str = "Guest account created. You are now logged in."
 
 
+class ConvertGuestRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=512)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email_format(cls, value: str) -> str:
+        return RegisterRequest.validate_email_format(value)
+
+
+class ConvertGuestResponse(BaseModel):
+    user_id: str
+    username: str
+    message: str = "Guest account converted. You can now log in with your email and password."
+
+
 class BotRegisterRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

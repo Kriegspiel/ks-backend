@@ -100,6 +100,20 @@ async def test_delete_session_deletes_by_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_session_for_user_rewrites_username_and_regular_lifetime() -> None:
+    sessions = SimpleNamespace(update_one=AsyncMock())
+    service = SessionService(sessions)
+    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="adolf_adams", role="user")
+
+    await service.update_session_for_user("sid", user)
+
+    query, update = sessions.update_one.await_args.args
+    assert query == {"_id": "sid"}
+    assert update["$set"]["username"] == "adolf_adams"
+    assert update["$set"]["max_age_seconds"] == SessionService.SESSION_MAX_AGE_SECONDS
+
+
+@pytest.mark.asyncio
 async def test_get_active_session_supports_naive_datetime_from_mongo() -> None:
     now_naive = datetime.utcnow()
     session = {"_id": "sid", "expires_at": now_naive + timedelta(minutes=5)}

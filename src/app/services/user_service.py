@@ -15,7 +15,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from app.config import get_settings
-from app.models.auth import BotRegisterRequest, RegisterRequest
+from app.models.auth import BotRegisterRequest, ConvertGuestRequest, RegisterRequest
 from app.models.bot import supported_rule_variants_for_bot
 from app.models.user import UserModel, default_user_stats_payload, normalize_user_stats_payload, utcnow
 from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
@@ -503,6 +503,73 @@ class UserService:
             code="GUEST_NAME_POOL_EXHAUSTED",
             message="No guest names are available right now",
         )
+
+    @staticmethod
+    def guest_username_to_regular(username: str) -> str:
+        return username.removeprefix("guest_")
+
+    @classmethod
+    def _guest_conversion_side_updates(cls, *, side: str, user_id: str, username: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        return {f"{side}.user_id": user_id}, {"$set": {f"{side}.username": username, f"{side}.role": "user"}}
+
+    async def _update_guest_player_references(self, db: Any, *, user_id: str, username: str) -> None:
+        for collection_name in ("games", "game_archives"):
+            collection = getattr(db, collection_name, None)
+            if collection is None:
+                continue
+            for side in ("white", "black"):
+                query, update = self._guest_conversion_side_updates(side=side, user_id=user_id, username=username)
+                await collection.update_many(query, update)
+
+    async def convert_guest_to_user(self, db: Any, user: UserModel, payload: ConvertGuestRequest) -> UserModel:
+        if user.role != "guest":
+            raise ValueError("Only guest accounts can be converted")
+
+        username = self.guest_username_to_regular(user.username)
+        if username == user.username or not username:
+            raise ValueError("Guest username cannot be converted")
+
+        email = self.canonical_email(payload.email)
+        user_id = self._to_object_id(user.id)
+        existing = await self._users.find_one({"$or": [{"username": username}, {"email": email}], "_id": {"$ne": user_id}})
+        if existing:
+            if existing.get("username") == username:
+                raise UserConflictError(field="username", code="USERNAME_TAKEN", message="Username already exists")
+            raise UserConflictError(field="email", code="EMAIL_TAKEN", message="Email already registered")
+
+        now = utcnow()
+        try:
+            updated = await self._users.find_one_and_update(
+                {"_id": user_id, "role": "guest"},
+                {
+                    "$set": {
+                        "username": username,
+                        "username_display": username,
+                        "email": email,
+                        "email_verified": False,
+                        "email_verification_sent_at": None,
+                        "email_verified_at": None,
+                        "password_hash": self.hash_password(payload.password),
+                        "auth_providers": ["local"],
+                        "profile.bio": "",
+                        "role": "user",
+                        "last_active_at": now,
+                        "updated_at": now,
+                    }
+                },
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError as exc:
+            details = str(exc)
+            if "username" in details:
+                raise UserConflictError(field="username", code="USERNAME_TAKEN", message="Username already exists") from exc
+            raise UserConflictError(field="email", code="EMAIL_TAKEN", message="Email already registered") from exc
+
+        if updated is None:
+            raise ValueError("Only guest accounts can be converted")
+
+        await self._update_guest_player_references(db, user_id=user.id, username=username)
+        return UserModel.from_mongo(updated)
 
     @staticmethod
     def _default_bot_listed(*, username: str, display_name: str, description: str) -> bool:

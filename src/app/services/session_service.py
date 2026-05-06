@@ -60,6 +60,20 @@ class SessionService:
     async def delete_session(self, session_id: str) -> None:
         await self._sessions.delete_one({"_id": session_id})
 
+    async def update_session_for_user(self, session_id: str, user: UserModel) -> None:
+        max_age_seconds = self.max_age_seconds_for_user(user)
+        await self._sessions.update_one(
+            {"_id": session_id},
+            {
+                "$set": {
+                    "user_id": ObjectId(user.id),
+                    "username": user.username,
+                    "expires_at": self.expires_at(max_age_seconds=max_age_seconds),
+                    "max_age_seconds": max_age_seconds,
+                }
+            },
+        )
+
     async def get_active_session(self, session_id: str) -> dict[str, Any] | None:
         session = await self._sessions.find_one({"_id": session_id})
         if session is None:
