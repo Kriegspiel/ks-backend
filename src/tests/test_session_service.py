@@ -26,6 +26,7 @@ async def test_create_session_inserts_expected_document() -> None:
     assert payload["ip"] == "127.0.0.1"
     assert payload["user_agent"] == "pytest"
     assert payload["max_age_seconds"] == SessionService.SESSION_MAX_AGE_SECONDS
+    assert payload["cookie_max_age_seconds"] == SessionService.SESSION_MAX_AGE_SECONDS
     assert payload["expires_at"] - payload["created_at"] == timedelta(seconds=SessionService.SESSION_MAX_AGE_SECONDS)
 
 
@@ -39,7 +40,10 @@ async def test_create_guest_session_uses_long_lived_expiry() -> None:
 
     payload = sessions.insert_one.await_args.args[0]
     assert payload["max_age_seconds"] == SessionService.GUEST_SESSION_MAX_AGE_SECONDS
+    assert payload["cookie_max_age_seconds"] == SessionService.GUEST_COOKIE_MAX_AGE_SECONDS
     assert payload["expires_at"] - payload["created_at"] == timedelta(seconds=SessionService.GUEST_SESSION_MAX_AGE_SECONDS)
+    assert payload["expires_at"] - payload["created_at"] > timedelta(days=365 * 4)
+    assert SessionService.GUEST_COOKIE_MAX_AGE_SECONDS == 60 * 60 * 24 * 400
 
 
 @pytest.mark.asyncio
@@ -60,7 +64,7 @@ async def test_get_active_session_extends_expiry() -> None:
     assert sessions.delete_one.await_count == 0
     update_payload = sessions.update_one.await_args.args[1]["$set"]
     assert update_payload["max_age_seconds"] == SessionService.GUEST_SESSION_MAX_AGE_SECONDS
-    assert update_payload["expires_at"] - now > timedelta(days=364)
+    assert update_payload["expires_at"] - now > timedelta(days=(365 * 5) - 1)
 
 
 @pytest.mark.asyncio
@@ -111,6 +115,21 @@ async def test_update_session_for_user_rewrites_username_and_regular_lifetime() 
     assert query == {"_id": "sid"}
     assert update["$set"]["username"] == "adolf_adams"
     assert update["$set"]["max_age_seconds"] == SessionService.SESSION_MAX_AGE_SECONDS
+    assert update["$set"]["cookie_max_age_seconds"] == SessionService.SESSION_MAX_AGE_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_update_session_for_guest_uses_long_server_lifetime_and_browser_safe_cookie_lifetime() -> None:
+    sessions = SimpleNamespace(update_one=AsyncMock())
+    service = SessionService(sessions)
+    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="guest_adolf_adams", role="guest")
+
+    await service.update_session_for_user("sid", user)
+
+    update = sessions.update_one.await_args.args[1]
+    assert update["$set"]["username"] == "guest_adolf_adams"
+    assert update["$set"]["max_age_seconds"] == SessionService.GUEST_SESSION_MAX_AGE_SECONDS
+    assert update["$set"]["cookie_max_age_seconds"] == SessionService.GUEST_COOKIE_MAX_AGE_SECONDS
 
 
 @pytest.mark.asyncio

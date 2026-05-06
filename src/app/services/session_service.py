@@ -12,7 +12,8 @@ from app.models.user import UserModel
 class SessionService:
     COOKIE_NAME = "session_id"
     SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
-    GUEST_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365
+    GUEST_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 400
+    GUEST_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 5
 
     def __init__(self, sessions_collection: Any):
         self._sessions = sessions_collection
@@ -35,6 +36,10 @@ class SessionService:
         return cls.GUEST_SESSION_MAX_AGE_SECONDS if user.role == "guest" else cls.SESSION_MAX_AGE_SECONDS
 
     @classmethod
+    def cookie_max_age_seconds_for_user(cls, user: UserModel) -> int:
+        return cls.GUEST_COOKIE_MAX_AGE_SECONDS if user.role == "guest" else cls.SESSION_MAX_AGE_SECONDS
+
+    @classmethod
     def max_age_seconds_for_session(cls, session: dict[str, Any]) -> int:
         value = session.get("max_age_seconds")
         return value if isinstance(value, int) and value > 0 else cls.SESSION_MAX_AGE_SECONDS
@@ -53,6 +58,7 @@ class SessionService:
                 "created_at": now,
                 "expires_at": self.expires_at(now, max_age_seconds=max_age_seconds),
                 "max_age_seconds": max_age_seconds,
+                "cookie_max_age_seconds": self.cookie_max_age_seconds_for_user(user),
             }
         )
         return session_id
@@ -70,6 +76,7 @@ class SessionService:
                     "username": user.username,
                     "expires_at": self.expires_at(max_age_seconds=max_age_seconds),
                     "max_age_seconds": max_age_seconds,
+                    "cookie_max_age_seconds": self.cookie_max_age_seconds_for_user(user),
                 }
             },
         )
