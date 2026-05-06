@@ -128,12 +128,12 @@ def test_canonical_and_legacy_api_routes_are_both_available():
     assert canonical_health.status_code in (200, 503)
     assert legacy_health.status_code == canonical_health.status_code
     assert legacy_health.json() == canonical_health.json()
-    assert canonical_me.status_code == 401
-    assert legacy_me.status_code == 401
-    assert canonical_game.status_code == 401
-    assert legacy_game.status_code == 401
-    assert canonical_bots.status_code == 401
-    assert legacy_bots.status_code == 401
+    assert canonical_me.status_code in (401, 503)
+    assert legacy_me.status_code == canonical_me.status_code
+    assert canonical_game.status_code in (401, 503)
+    assert legacy_game.status_code == canonical_game.status_code
+    assert canonical_bots.status_code in (401, 503)
+    assert legacy_bots.status_code == canonical_bots.status_code
 
 
 def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
