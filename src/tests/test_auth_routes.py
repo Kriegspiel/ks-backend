@@ -164,6 +164,7 @@ def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
 def test_convert_guest_rejects_regular_users(app_no_db) -> None:
     app, _ = app_no_db
     app.dependency_overrides[get_current_user] = lambda: UserModel.from_mongo(_user_doc())
+    app.dependency_overrides[get_session_service] = lambda: SimpleNamespace(update_session_for_user=AsyncMock())
 
     with TestClient(app) as client:
         response = client.post("/api/auth/guest/convert", json={"email": "player@example.com", "password": "abc12345"})
