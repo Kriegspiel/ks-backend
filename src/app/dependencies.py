@@ -18,7 +18,10 @@ def require_db():
         ) from exc
 
 
-async def get_session_service() -> SessionService:
+async def get_session_service(request: Request) -> SessionService:
+    session_service = getattr(request.app.state, "session_service", None)
+    if session_service is not None:
+        return session_service
     db = require_db()
     return SessionService(db.sessions)
 
