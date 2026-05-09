@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 from fastapi import APIRouter, Depends, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from app.db import get_db
 from app.dependencies import get_current_user
 from app.models.game import AskAnyResponse, CreateGameRequest, CreateGameResponse, GameMetadataResponse, GameStateResponse, GameTranscriptResponse, JoinGameResponse, LobbyStatsResponse, MoveRequest, MoveResponse, OpenGamesResponse, RecentGamesResponse
@@ -21,6 +23,11 @@ def _map_game_error(exc: GameServiceError) -> JSONResponse:
     if isinstance(exc, GameForbiddenError): return _error_response(status_code=status.HTTP_403_FORBIDDEN, code=exc.code, message=str(exc))
     if isinstance(exc, GameValidationError): return _error_response(status_code=status.HTTP_400_BAD_REQUEST, code=exc.code, message=str(exc))
     return _error_response(status_code=status.HTTP_400_BAD_REQUEST, code=exc.code, message=str(exc))
+
+def _sse_frame(event: dict[str, Any]) -> str:
+    event_type = str(event.get("type") or "message")
+    payload = json.dumps(event, separators=(",", ":"), default=str)
+    return f"event: {event_type}\ndata: {payload}\n\n"
 
 def get_game_service(request: Request) -> GameService:
     game_service = getattr(request.app.state, "game_service", None)
@@ -53,6 +60,37 @@ async def get_game_state(game_id: str, user: UserModel = Depends(get_current_use
 async def ask_any_game(game_id: str, user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:
     try: return await game_service.execute_ask_any(game_id=game_id, user_id=user.id)
     except GameServiceError as exc: return _map_game_error(exc)
+
+@router.get('/{game_id}/events')
+async def game_events(request: Request, game_id: str, user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:
+    try:
+        subscription = await game_service.subscribe_game_events(game_id=game_id, user_id=user.id)
+    except GameServiceError as exc:
+        return _map_game_error(exc)
+
+    async def stream():
+        try:
+            while not await request.is_disconnected():
+                try:
+                    event = await asyncio.wait_for(subscription.queue.get(), timeout=15.0)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield _sse_frame(event)
+                if event.get("type") == "shutdown":
+                    break
+        finally:
+            await game_service.unsubscribe_game_events(subscription)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 @router.get('/open', response_model=OpenGamesResponse)
 async def get_open_games(_: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:

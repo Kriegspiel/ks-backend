@@ -213,6 +213,19 @@ def test_game_router_get_game_and_resign_and_delete_success(app_with_game_servic
     assert delete.status_code == 204
 
 
+def test_game_events_route_maps_subscribe_errors(app_with_game_service) -> None:
+    app, service = app_with_game_service
+    service.subscribe_game_events = AsyncMock(
+        side_effect=GameForbiddenError(code="FORBIDDEN", message="Only participants can subscribe to this game")
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/game/gid1/events")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
 @pytest.mark.parametrize(
     "endpoint,method,error,status_code,code",
     [

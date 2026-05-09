@@ -104,6 +104,12 @@ class CachedGameEntry:
     flush_task: asyncio.Task[None] | None = None
 
 
+@dataclass(frozen=True)
+class GameEventSubscription:
+    game_id: ObjectId
+    queue: asyncio.Queue[dict[str, Any]]
+
+
 class GameService:
     def __init__(
         self,
@@ -122,6 +128,8 @@ class GameService:
         self._clock = ClockService()
         self._cache: dict[ObjectId, CachedGameEntry] = {}
         self._cache_lock = asyncio.Lock()
+        self._event_subscribers: dict[ObjectId, set[asyncio.Queue[dict[str, Any]]]] = {}
+        self._event_lock = asyncio.Lock()
         self._flush_loop_task: asyncio.Task[None] | None = None
         self._shutdown = False
         self._last_timeout_sweep_at: datetime | None = None
@@ -136,6 +144,7 @@ class GameService:
 
     async def shutdown(self) -> None:
         self._shutdown = True
+        await self._close_event_subscribers()
         if self._flush_loop_task is not None:
             self._flush_loop_task.cancel()
             try:
@@ -160,6 +169,13 @@ class GameService:
                 await self._maybe_sweep_timeouts()
         except asyncio.CancelledError:
             raise
+
+    async def _close_event_subscribers(self) -> None:
+        async with self._event_lock:
+            subscribers = [queue for queues in self._event_subscribers.values() for queue in queues]
+            self._event_subscribers.clear()
+        for queue in subscribers:
+            self._queue_game_event(queue, {"type": "shutdown"})
 
     async def _maybe_expire_waiting_games(self) -> None:
         now = self.utcnow()
@@ -243,6 +259,7 @@ class GameService:
         async with self._cache_lock:
             cached_entries = list(self._cache.values())
 
+        timed_out_cached_games: list[dict[str, Any]] = []
         for entry in cached_entries:
             async with entry.lock:
                 game = entry.game
@@ -255,10 +272,15 @@ class GameService:
                 self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
                 self._mark_entry_dirty_locked(entry, now=now)
                 self._schedule_flush(entry, reason="timeout_sweep")
+                timed_out_cached_games.append(dict(game))
+
+        for game in timed_out_cached_games:
+            await self._publish_game_event(game, event_type="game_changed")
 
         for game in await self._active_games_not_in_cache():
             updated = await self._adjudicate_timeout_if_needed(game=game, now=now)
             if updated.get("state") == "completed":
+                await self._publish_game_event(updated, event_type="game_changed")
                 logger.info("game_timeout_swept", game_id=str(updated.get("_id")))
 
     async def _should_flush_entry(self, entry: CachedGameEntry) -> bool:
@@ -279,6 +301,67 @@ class GameService:
         if entry.flush_task is not None and not entry.flush_task.done():
             return
         entry.flush_task = asyncio.create_task(self._flush_entry(entry, reason=reason), name=f"game-flush-{reason}")
+
+    @staticmethod
+    def _game_event_payload(game: dict[str, Any], *, event_type: str) -> dict[str, Any]:
+        updated_at = game.get("updated_at")
+        if isinstance(updated_at, datetime):
+            updated_at_value = updated_at.isoformat()
+        else:
+            updated_at_value = str(updated_at) if updated_at is not None else None
+        return {
+            "type": event_type,
+            "game_id": str(game.get("_id")),
+            "game_code": game.get("game_code"),
+            "state": game.get("state"),
+            "turn": game.get("turn"),
+            "move_number": game.get("move_number"),
+            "updated_at": updated_at_value,
+        }
+
+    @staticmethod
+    def _queue_game_event(queue: asyncio.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
+        while True:
+            try:
+                queue.put_nowait(event)
+                return
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+
+    async def subscribe_game_events(self, *, game_id: str, user_id: str) -> GameEventSubscription:
+        game, _entry = await self._get_game_for_runtime(game_id=game_id)
+        color = self._player_color_for_user(game, user_id)
+        if color is None:
+            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can subscribe to this game")
+
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=16)
+        subscription = GameEventSubscription(game_id=game["_id"], queue=queue)
+        async with self._event_lock:
+            self._event_subscribers.setdefault(game["_id"], set()).add(queue)
+        self._queue_game_event(queue, self._game_event_payload(game, event_type="connected"))
+        return subscription
+
+    async def unsubscribe_game_events(self, subscription: GameEventSubscription) -> None:
+        async with self._event_lock:
+            queues = self._event_subscribers.get(subscription.game_id)
+            if queues is None:
+                return
+            queues.discard(subscription.queue)
+            if not queues:
+                self._event_subscribers.pop(subscription.game_id, None)
+
+    async def _publish_game_event(self, game: dict[str, Any], *, event_type: str = "game_changed") -> None:
+        game_id = game.get("_id")
+        if not isinstance(game_id, ObjectId):
+            return
+        event = self._game_event_payload(game, event_type=event_type)
+        async with self._event_lock:
+            queues = tuple(self._event_subscribers.get(game_id, ()))
+        for queue in queues:
+            self._queue_game_event(queue, event)
 
     async def _flush_entry(self, entry: CachedGameEntry, *, reason: str) -> None:
         persisted_snapshot: dict[str, Any] | None = None
@@ -1463,6 +1546,7 @@ class GameService:
             await self._set_bot_join_cooldown(user_id=user_id, now=now)
 
         await self._prime_cache(updated, persisted=True)
+        await self._publish_game_event(updated, event_type="game_changed")
 
         logger.info("game_joined", game_id=str(updated["_id"]), user_id=user_id, side=joiner_color, game_code=normalized)
         return JoinGameResponse(
@@ -1519,6 +1603,7 @@ class GameService:
     async def get_game_state(self, *, game_id: str, user_id: str) -> GameStateResponse:
         game, entry = await self._get_game_for_runtime(game_id=game_id)
         now = self.utcnow()
+        timed_out = False
         if entry is not None:
             async with entry.lock:
                 time_control = self._active_time_control(game=game, now=now)
@@ -1527,10 +1612,15 @@ class GameService:
                     self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
                     self._mark_entry_dirty_locked(entry, now=now)
                     self._schedule_flush(entry, reason="timeout")
+                    timed_out = True
         else:
             game = await self._adjudicate_timeout_if_needed(game=game, now=now)
             if game.get("state") == "completed":
                 game = await self._finalize_completed_game(game)
+                timed_out = True
+
+        if timed_out:
+            await self._publish_game_event(game, event_type="game_changed")
 
         color = self._player_color_for_user(game, user_id)
         if color is None:
@@ -1651,6 +1741,7 @@ class GameService:
             self._schedule_flush(entry, reason="human")
         elif game_over:
             self._schedule_flush(entry, reason="completion")
+        await self._publish_game_event(game, event_type="game_changed")
 
         logger.info(
             "move_submitted",
@@ -1765,6 +1856,7 @@ class GameService:
             self._schedule_flush(entry, reason="human")
         elif game_over:
             self._schedule_flush(entry, reason="completion")
+        await self._publish_game_event(game, event_type="game_changed")
 
         logger.info(
             "move_submitted",
@@ -1823,6 +1915,7 @@ class GameService:
             self._mark_entry_dirty_locked(entry, now=now)
 
         self._schedule_flush(entry, reason="completion")
+        await self._publish_game_event(game, event_type="game_changed")
 
         logger.info("game_resigned", game_id=game_id, user_id=user_id, winner=winner)
         return {"result": {"winner": winner, "reason": "resignation"}}

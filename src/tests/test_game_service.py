@@ -815,6 +815,77 @@ async def test_human_visible_action_stays_in_cache_until_flushed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_game_event_subscribers_receive_initial_and_mutation_events() -> None:
+    games = FakeGamesCollection()
+    game = active_game_doc()
+    games.docs.append(game)
+    service = GameService(games)
+
+    subscription = await service.subscribe_game_events(game_id=str(game["_id"]), user_id="u1")
+    try:
+        connected = await asyncio.wait_for(subscription.queue.get(), timeout=0.1)
+        assert connected["type"] == "connected"
+        assert connected["game_id"] == str(game["_id"])
+        assert connected["state"] == "active"
+
+        await service.execute_move(game_id=str(game["_id"]), user_id="u1", uci="e2e4")
+
+        changed = await asyncio.wait_for(subscription.queue.get(), timeout=0.1)
+        assert changed["type"] == "game_changed"
+        assert changed["turn"] == "black"
+        assert changed["move_number"] == 2
+    finally:
+        await service.unsubscribe_game_events(subscription)
+
+    assert service._event_subscribers == {}
+
+
+@pytest.mark.asyncio
+async def test_game_event_subscribers_receive_join_events() -> None:
+    games = FakeGamesCollection()
+    now = datetime.now(UTC)
+    game = {
+        "_id": ObjectId(),
+        "game_code": "A7K2M9",
+        "rule_variant": "berkeley_any",
+        "creator_color": "black",
+        "white": None,
+        "black": {"user_id": "u1", "username": "creator", "connected": True},
+        "state": "waiting",
+        "turn": None,
+        "move_number": 1,
+        "created_at": now,
+        "updated_at": now,
+    }
+    games.docs.append(game)
+    service = GameService(games)
+
+    subscription = await service.subscribe_game_events(game_id=str(game["_id"]), user_id="u1")
+    try:
+        await asyncio.wait_for(subscription.queue.get(), timeout=0.1)
+
+        await service.join_game(user_id="u2", username="joiner", game_code="a7k2m9")
+
+        changed = await asyncio.wait_for(subscription.queue.get(), timeout=0.1)
+        assert changed["type"] == "game_changed"
+        assert changed["state"] == "active"
+        assert changed["turn"] == "white"
+    finally:
+        await service.unsubscribe_game_events(subscription)
+
+
+@pytest.mark.asyncio
+async def test_game_event_subscription_rejects_non_participants() -> None:
+    games = FakeGamesCollection()
+    game = active_game_doc()
+    games.docs.append(game)
+    service = GameService(games)
+
+    with pytest.raises(GameForbiddenError):
+        await service.subscribe_game_events(game_id=str(game["_id"]), user_id="u3")
+
+
+@pytest.mark.asyncio
 async def test_shutdown_flushes_dirty_cached_games() -> None:
     games = FakeGamesCollection()
     game = active_game_doc(white_role="bot", black_role="bot")

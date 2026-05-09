@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.14
+
+- **Live Game Events**: added authenticated server-sent event streams for active
+  games so clients can refresh on game changes instead of polling every 500 ms.
+
 ## ks-backend v. 1.3.13
 
 - **Canonical API Paths**: exposed prefix-free API routes such as `/auth/login`,
