@@ -9,6 +9,14 @@ import pytest
 from app.services.session_service import SessionService
 
 
+class FrozenSessionService(SessionService):
+    now = datetime(2026, 5, 9, tzinfo=UTC)
+
+    @classmethod
+    def utcnow(cls) -> datetime:
+        return cls.now
+
+
 @pytest.mark.asyncio
 async def test_create_session_inserts_expected_document() -> None:
     sessions = SimpleNamespace(insert_one=AsyncMock())
@@ -27,6 +35,7 @@ async def test_create_session_inserts_expected_document() -> None:
     assert payload["user_agent"] == "pytest"
     assert payload["max_age_seconds"] == SessionService.SESSION_MAX_AGE_SECONDS
     assert payload["cookie_max_age_seconds"] == SessionService.SESSION_MAX_AGE_SECONDS
+    assert payload["last_touched_at"] == payload["created_at"]
     assert payload["expires_at"] - payload["created_at"] == timedelta(seconds=SessionService.SESSION_MAX_AGE_SECONDS)
 
 
@@ -64,7 +73,125 @@ async def test_get_active_session_extends_expiry() -> None:
     assert sessions.delete_one.await_count == 0
     update_payload = sessions.update_one.await_args.args[1]["$set"]
     assert update_payload["max_age_seconds"] == SessionService.GUEST_SESSION_MAX_AGE_SECONDS
+    assert update_payload["last_touched_at"] >= now
     assert update_payload["expires_at"] - now > timedelta(days=(365 * 5) - 1)
+
+
+@pytest.mark.asyncio
+async def test_get_active_session_uses_warmed_cache_without_mongo_read_or_touch() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    sessions = SimpleNamespace(
+        insert_one=AsyncMock(),
+        find_one=AsyncMock(return_value=None),
+        update_one=AsyncMock(),
+        delete_one=AsyncMock(),
+    )
+    service = FrozenSessionService(sessions)
+    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="playerone", role="user")
+
+    session_id = await service.create_session(user=user, ip="127.0.0.1", user_agent="pytest")
+    active = await service.get_active_session(session_id)
+
+    assert active is not None
+    assert active["username"] == "playerone"
+    assert sessions.find_one.await_count == 0
+    assert sessions.update_one.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_active_session_caches_db_reads_and_throttles_expiry_touch() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    session = {
+        "_id": "sid",
+        "expires_at": FrozenSessionService.now + timedelta(minutes=30),
+        "last_touched_at": FrozenSessionService.now,
+        "max_age_seconds": SessionService.SESSION_MAX_AGE_SECONDS,
+    }
+    sessions = SimpleNamespace(find_one=AsyncMock(return_value=session), update_one=AsyncMock(), delete_one=AsyncMock())
+    service = FrozenSessionService(sessions)
+
+    first = await service.get_active_session("sid")
+    second = await service.get_active_session("sid")
+
+    assert first is not None
+    assert second is not None
+    assert sessions.find_one.await_count == 1
+    assert sessions.update_one.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_active_session_touches_cached_session_after_touch_interval() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    session = {
+        "_id": "sid",
+        "expires_at": FrozenSessionService.now + timedelta(hours=1),
+        "last_touched_at": FrozenSessionService.now,
+        "max_age_seconds": SessionService.SESSION_MAX_AGE_SECONDS,
+    }
+    sessions = SimpleNamespace(find_one=AsyncMock(return_value=session), update_one=AsyncMock(), delete_one=AsyncMock())
+    service = FrozenSessionService(sessions, cache_ttl_seconds=600)
+
+    await service.get_active_session("sid")
+    FrozenSessionService.now = FrozenSessionService.now + timedelta(seconds=SessionService.SESSION_TOUCH_INTERVAL_SECONDS + 1)
+    touched = await service.get_active_session("sid")
+
+    assert touched is not None
+    assert sessions.find_one.await_count == 1
+    assert sessions.update_one.await_count == 1
+    update_payload = sessions.update_one.await_args.args[1]["$set"]
+    assert update_payload["last_touched_at"] == FrozenSessionService.now
+
+
+@pytest.mark.asyncio
+async def test_get_active_session_caches_missing_sessions_briefly() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    sessions = SimpleNamespace(find_one=AsyncMock(return_value=None), update_one=AsyncMock(), delete_one=AsyncMock())
+    service = FrozenSessionService(sessions)
+
+    first = await service.get_active_session("missing")
+    second = await service.get_active_session("missing")
+
+    assert first is None
+    assert second is None
+    assert sessions.find_one.await_count == 1
+    assert sessions.update_one.await_count == 0
+    assert sessions.delete_one.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_session_evicts_cached_session() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    sessions = SimpleNamespace(
+        insert_one=AsyncMock(),
+        find_one=AsyncMock(return_value=None),
+        update_one=AsyncMock(),
+        delete_one=AsyncMock(),
+    )
+    service = FrozenSessionService(sessions)
+    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="playerone", role="user")
+    session_id = await service.create_session(user=user, ip=None, user_agent=None)
+
+    await service.delete_session(session_id)
+    active = await service.get_active_session(session_id)
+
+    assert active is None
+    sessions.delete_one.assert_awaited_once_with({"_id": session_id})
+    assert sessions.find_one.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_update_session_for_user_refreshes_cached_identity() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    sessions = SimpleNamespace(find_one=AsyncMock(return_value=None), update_one=AsyncMock(), delete_one=AsyncMock())
+    service = FrozenSessionService(sessions)
+    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="converted", role="user")
+
+    await service.update_session_for_user("sid", user)
+    active = await service.get_active_session("sid")
+
+    assert active is not None
+    assert active["username"] == "converted"
+    assert sessions.find_one.await_count == 0
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from app.routers.bot import router as bot_router
 from app.routers.game import router as game_router
 from app.routers.user import router as user_router
 from app.services.game_service import GameService
+from app.services.session_service import SessionService
 
 logger = structlog.get_logger("app.main")
 
@@ -37,11 +38,13 @@ async def lifespan(app: FastAPI):
     app.state.db = None
     app.state.db_ready = False
     app.state.game_service = None
+    app.state.session_service = None
 
     try:
         db = await init_db(app.state.settings)
         app.state.db = db
         app.state.db_ready = True
+        app.state.session_service = SessionService(db.sessions)
         app.state.game_service = GameService(
             db.games,
             users_collection=db.users,
@@ -56,6 +59,7 @@ async def lifespan(app: FastAPI):
         sentry_sdk.capture_exception(exc)
         app.state.db = None
         app.state.db_ready = False
+        app.state.session_service = None
 
     try:
         yield
@@ -63,6 +67,9 @@ async def lifespan(app: FastAPI):
         game_service = getattr(app.state, "game_service", None)
         if game_service is not None:
             await game_service.shutdown()
+        session_service = getattr(app.state, "session_service", None)
+        if session_service is not None:
+            await session_service.clear_cache()
         await close_db()
 
 
@@ -70,7 +77,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings if settings is not None else get_settings()
     configure_logging(resolved_settings.ENVIRONMENT)
     sentry_enabled = configure_sentry(resolved_settings)
-    app = FastAPI(title="Kriegspiel Chess API", description="API for playing Kriegspiel chess", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app = FastAPI(
+        title="Kriegspiel Chess API",
+        description="API for playing Kriegspiel chess",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+    )
     app.state.settings = resolved_settings
     logger.info("app_bootstrap", environment=resolved_settings.ENVIRONMENT, sentry_enabled=sentry_enabled)
 

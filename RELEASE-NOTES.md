@@ -4,6 +4,15 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.15
+
+- **Session Cache**: added an app-scoped read-through session cache that keeps
+  MongoDB as the canonical store while avoiding repeated session lookups for
+  active polling or event-stream clients.
+- **Session Touch Throttling**: added `last_touched_at` tracking so sliding
+  session expiry is refreshed periodically instead of on every authenticated
+  request.
+
 ## ks-backend v. 1.3.14
 
 - **Live Game Events**: added authenticated server-sent event streams for active

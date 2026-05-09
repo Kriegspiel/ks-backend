@@ -101,12 +101,24 @@ def test_require_db_translates_runtime_error_to_503(monkeypatch: pytest.MonkeyPa
 @pytest.mark.asyncio
 async def test_get_session_service_uses_sessions_collection(monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = object()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(session_service=None)))
     monkeypatch.setattr(deps, "get_db", lambda: SimpleNamespace(sessions=sessions))
 
-    service = await get_session_service()
+    service = await get_session_service(request)
 
     assert isinstance(service, SessionService)
     assert service._sessions is sessions  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_get_session_service_prefers_app_state_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    session_service = object()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(session_service=session_service)))
+    monkeypatch.setattr(deps, "get_db", lambda: (_ for _ in ()).throw(AssertionError("db should not be loaded")))
+
+    service = await get_session_service(request)
+
+    assert service is session_service
 
 
 def test_bearer_token_parses_and_rejects_invalid_headers() -> None:
