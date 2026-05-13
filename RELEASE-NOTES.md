@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.16
+
+- **DB Performance**: added indexes for user activity reports and game lists,
+  and trimmed `/game/mine` metadata reads so large game documents do not slow
+  list responses.
+
 ## ks-backend v. 1.3.15
 
 - **Session Cache**: added an app-scoped read-through session cache that keeps

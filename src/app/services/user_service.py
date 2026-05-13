@@ -995,12 +995,7 @@ class UserService:
             if isinstance(user.get("username"), str) and user["username"].strip()
         }
 
-        query = {
-            "$or": [
-                {"updated_at": {"$gte": earliest_start}},
-                {"created_at": {"$gte": earliest_start}},
-            ]
-        }
+        query = {"updated_at": {"$gte": earliest_start}}
         projection = {
             "_id": 1,
             "game_code": 1,
