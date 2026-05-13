@@ -1469,8 +1469,9 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
     }
     expected_activity_query = {"updated_at": {"$gte": datetime(2025, 6, 1, 4, tzinfo=UTC)}}
     assert archives.find_calls[0][0] == expected_activity_query
-    assert games.find_calls[0][0] == expected_activity_query
+    assert games.find_calls[0][0] == {**expected_activity_query, "state": {"$ne": "completed"}}
     assert "$or" not in archives.find_calls[0][0]
+    assert games.find_calls[1][0] == {"state": {"$ne": "completed"}}
 
 
 @pytest.mark.asyncio
