@@ -102,6 +102,18 @@ async def get_lobby_stats(_: UserModel = Depends(get_current_user), game_service
     try: return await game_service.get_lobby_stats()
     except GameServiceError as exc: return _map_game_error(exc)
 
+@router.get('/mine/active', response_model=MyGamesResponse)
+@router.get('/mine-active', response_model=MyGamesResponse, include_in_schema=False)
+async def get_my_active_games(user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:
+    try: return MyGamesResponse(games=await game_service.get_my_active_games(user_id=user.id))
+    except GameServiceError as exc: return _map_game_error(exc)
+
+@router.get('/mine/archived', response_model=MyGamesResponse)
+@router.get('/mine-archived', response_model=MyGamesResponse, include_in_schema=False)
+async def get_my_archived_games(user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:
+    try: return MyGamesResponse(games=await game_service.get_my_archived_games(user_id=user.id))
+    except GameServiceError as exc: return _map_game_error(exc)
+
 @router.get('/mine', response_model=MyGamesResponse)
 async def get_my_games(user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:
     try: return MyGamesResponse(games=await game_service.get_my_games(user_id=user.id))
