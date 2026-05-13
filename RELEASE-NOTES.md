@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.25
+
+- **Bot Availability**: let model-backed bots report OpenAI/Anthropic
+  preflight status, hide stale or quota-limited GPT/Haiku bots from the bot
+  picker, and reject direct game creation against unavailable model bots.
+
 ## ks-backend v. 1.3.24
 
 - **Completed Game Archiving**: also normalize tuples to arrays during archive

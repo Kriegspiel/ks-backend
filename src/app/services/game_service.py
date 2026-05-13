@@ -28,6 +28,7 @@ from app.models.game import (
     RecentGameItem,
     RecentGamesResponse,
 )
+from app.services.bot_service import BotService
 from app.services.clock_service import ClockService
 from app.services.code_generator import generate_game_code
 from app.services.engine_adapter import (
@@ -1406,6 +1407,8 @@ class GameService:
         bot = await self._users.find_one({"_id": oid, "role": "bot", "status": "active"})
         if bot is None:
             raise GameValidationError(code="BOT_NOT_FOUND", message="Selected bot was not found")
+        if not BotService.bot_can_start_games(bot, now=self.utcnow()):
+            raise GameValidationError(code="BOT_UNAVAILABLE", message="Selected bot is temporarily unavailable")
         return bot
 
     @staticmethod

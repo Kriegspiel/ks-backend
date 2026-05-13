@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,6 +25,15 @@ def supported_rule_variants_for_bot(username: str, variants: object = None) -> l
     return BOT_SPECIFIC_DEFAULT_RULE_VARIANTS.get(normalized_username, DEFAULT_SUPPORTED_RULE_VARIANTS).copy()
 
 
+class BotModelAvailability(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["openai", "anthropic"]
+    ready: bool = False
+    reason: str = ""
+    checked_at: datetime
+
+
 class BotProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -37,6 +47,7 @@ class BotProfile(BaseModel):
     registered_at: datetime | None = None
     last_bot_game_joined_at: datetime | None = None
     supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: DEFAULT_SUPPORTED_RULE_VARIANTS.copy())
+    model_availability: BotModelAvailability | None = None
 
 
 class BotListItem(BaseModel):
@@ -55,3 +66,17 @@ class BotListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bots: list[BotListItem]
+
+
+class BotAvailabilityReportRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    provider: Literal["openai", "anthropic"]
+    ready: bool
+    reason: str = Field(default="", max_length=500)
+
+
+class BotAvailabilityReportResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool = True
