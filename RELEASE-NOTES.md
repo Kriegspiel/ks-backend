@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.20
+
+- **Completed Game Archiving**: prevent background cache flushes from
+  reintroducing completed games into the live `games` collection.
+
 ## ks-backend v. 1.3.19
 
 - **Game List Performance**: cache repeated player lookups while building
