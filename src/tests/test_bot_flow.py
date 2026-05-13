@@ -531,6 +531,98 @@ async def test_bot_service_lists_active_bots() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bot_service_hides_model_bots_without_fresh_ready_status() -> None:
+    now = datetime(2026, 5, 13, 12, tzinfo=UTC)
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "username": "gptnano",
+                "username_display": "GPT Nano",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {
+                    "display_name": "GPT Nano",
+                    "description": "OpenAI bot",
+                    "listed": True,
+                    "model_availability": {
+                        "provider": "openai",
+                        "ready": True,
+                        "reason": "ok",
+                        "checked_at": now - timedelta(seconds=30),
+                    },
+                },
+            },
+            {
+                "_id": ObjectId(),
+                "username": "haiku",
+                "username_display": "Haiku",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {
+                    "display_name": "Haiku",
+                    "description": "Anthropic bot",
+                    "listed": True,
+                    "model_availability": {
+                        "provider": "anthropic",
+                        "ready": True,
+                        "reason": "ok",
+                        "checked_at": now - timedelta(minutes=5),
+                    },
+                },
+            },
+            {
+                "_id": ObjectId(),
+                "username": "randobot",
+                "username_display": "Random Bot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Random Bot", "description": "ready", "listed": True},
+            },
+        ]
+    )
+    service = BotService(users, now_factory=lambda: now)
+
+    listed = await service.list_bots()
+
+    assert [bot.username for bot in listed.bots] == ["gptnano", "randobot"]
+
+
+@pytest.mark.asyncio
+async def test_bot_service_records_model_availability_for_authenticated_bot() -> None:
+    now = datetime(2026, 5, 13, 12, tzinfo=UTC)
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "gptnano",
+            "username_display": "GPT Nano",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {"display_name": "GPT Nano", "description": "OpenAI bot", "listed": True},
+        }
+    )
+    service = BotService(users, now_factory=lambda: now)
+
+    updated = await service.report_model_availability(
+        user_id=str(bot_id),
+        provider="openai",
+        ready=False,
+        reason="http_429: insufficient_quota",
+    )
+
+    assert updated is users.docs[0]
+    assert users.docs[0]["bot_profile"]["model_availability"] == {
+        "provider": "openai",
+        "ready": False,
+        "reason": "http_429: insufficient_quota",
+        "checked_at": now,
+    }
+
+
+@pytest.mark.asyncio
 async def test_bot_service_hides_unlisted_bots() -> None:
     users = FakeUsersCollection()
     users.docs.extend(
@@ -740,6 +832,50 @@ async def test_bot_service_get_bot_by_id_rejects_invalid_and_filters_inactive() 
     assert (await service.get_bot_by_id(str(active_id)))["username"] == "randobot"
 
 
+@pytest.mark.asyncio
+async def test_create_game_rejects_unavailable_model_bot() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    now = datetime(2026, 5, 13, 12, tzinfo=UTC)
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "haiku",
+            "username_display": "Haiku",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "Haiku",
+                "supported_rule_variants": ["berkeley_any"],
+                "model_availability": {
+                    "provider": "anthropic",
+                    "ready": False,
+                    "reason": "quota",
+                    "checked_at": now,
+                },
+            },
+        }
+    )
+    service = GameService(games, users_collection=users)
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    with pytest.raises(GameValidationError) as exc:
+        await service.create_game(
+            user_id="u1",
+            username="fil",
+            request=CreateGameRequest(
+                opponent_type="bot",
+                bot_id=str(bot_id),
+                rule_variant="berkeley_any",
+                play_as="white",
+                time_control="rapid",
+            ),
+        )
+
+    assert exc.value.code == "BOT_UNAVAILABLE"
+
+
 def test_bot_service_supported_rule_variants_fallbacks_cover_randobotany() -> None:
     assert BotService._supported_rule_variants({"username": "randobotany", "bot_profile": {}}) == ["berkeley_any"]
     assert BotService._supported_rule_variants({"username": "randobot", "bot_profile": {}}) == [
@@ -799,3 +935,37 @@ def test_bot_router_uses_db_users_and_lists_bots() -> None:
 
     assert response.status_code == 200
     assert response.json()["bots"][0]["username"] == "randobot"
+
+
+def test_bot_router_records_model_availability_for_authenticated_bot() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "gptnano",
+            "username_display": "GPT Nano",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {"display_name": "GPT Nano", "description": "OpenAI bot", "listed": True},
+        }
+    )
+
+    from app.routers import bot as bot_router_module
+
+    bot_router_module.get_db = lambda: type("Db", (), {"users": users})()
+    app.dependency_overrides[bot_router_module.get_current_user] = lambda: type(
+        "User", (), {"id": str(bot_id), "role": "bot"}
+    )()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/bots/availability",
+            json={"provider": "openai", "ready": False, "reason": "http_429: insufficient_quota"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert users.docs[0]["bot_profile"]["model_availability"]["provider"] == "openai"
+    assert users.docs[0]["bot_profile"]["model_availability"]["ready"] is False
