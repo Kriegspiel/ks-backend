@@ -995,7 +995,7 @@ class UserService:
             if isinstance(user.get("username"), str) and user["username"].strip()
         }
 
-        query = {"updated_at": {"$gte": earliest_start}}
+        activity_query = {"updated_at": {"$gte": earliest_start}}
         projection = {
             "_id": 1,
             "game_code": 1,
@@ -1014,6 +1014,9 @@ class UserService:
             collection = getattr(db, collection_name, None)
             if collection is None:
                 continue
+            query = dict(activity_query)
+            if collection_name == "games":
+                query["state"] = {"$ne": "completed"}
             async for game in self._find(collection, query, projection):
                 played_at = self._activity_time(game)
                 if played_at is None:
@@ -1077,7 +1080,8 @@ class UserService:
             collection = getattr(db, collection_name, None)
             if collection is None:
                 continue
-            async for game in self._find(collection, {}, projection).sort("updated_at", -1).limit(500):
+            query = {"state": {"$ne": "completed"}} if collection_name == "games" else {}
+            async for game in self._find(collection, query, projection).sort("updated_at", -1).limit(500):
                 played_at = self._activity_time(game)
                 if played_at is None:
                     continue
