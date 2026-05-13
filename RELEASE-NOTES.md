@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.21
+
+- **Game List Performance**: add active-only and archived-only `mine`
+  endpoints so clients that only need current games avoid scanning archives.
+
 ## ks-backend v. 1.3.20
 
 - **Completed Game Archiving**: prevent background cache flushes from

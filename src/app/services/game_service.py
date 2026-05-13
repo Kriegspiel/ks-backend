@@ -1682,15 +1682,20 @@ class GameService:
                 break
         return OpenGamesResponse(games=items)
 
-    async def get_my_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:
+    async def _get_my_games_from_sources(
+        self,
+        *,
+        user_id: str,
+        sources: list[Any],
+        limit: int = 20,
+        base_query: dict[str, Any] | None = None,
+    ) -> list[GameMetadataResponse]:
         bounded = max(1, min(limit, 100))
         docs_by_key: dict[str, dict[str, Any]] = {}
-        sources = [self._games]
-        if self._archives is not None:
-            sources.append(self._archives)
         for collection in sources:
             for player_path in ("white.user_id", "black.user_id"):
-                query = {player_path: user_id}
+                query = dict(base_query or {})
+                query[player_path] = user_id
                 cursor = (
                     self._find_with_projection(collection, query, GAME_METADATA_PROJECTION)
                     .sort("created_at", -1)
@@ -1707,6 +1712,25 @@ class GameService:
         for doc in sorted(docs_by_key.values(), key=self._metadata_created_at, reverse=True)[:bounded]:
             out.append(await self._to_metadata(doc, user_doc_cache=user_doc_cache))
         return out
+
+    async def get_my_active_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:
+        return await self._get_my_games_from_sources(
+            user_id=user_id,
+            sources=[self._games],
+            limit=limit,
+            base_query={"state": {"$ne": "completed"}},
+        )
+
+    async def get_my_archived_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:
+        if self._archives is None:
+            return []
+        return await self._get_my_games_from_sources(user_id=user_id, sources=[self._archives], limit=limit)
+
+    async def get_my_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:
+        sources = [self._games]
+        if self._archives is not None:
+            sources.append(self._archives)
+        return await self._get_my_games_from_sources(user_id=user_id, sources=sources, limit=limit)
 
     async def get_game(self, *, game_id: str) -> GameMetadataResponse:
         game: dict[str, Any] | None

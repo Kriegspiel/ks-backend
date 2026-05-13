@@ -108,6 +108,23 @@ def app_with_game_service() -> tuple:
                 }
             ]
         ),
+        get_my_active_games=AsyncMock(
+            return_value=[
+                {
+                    "game_id": "gid1",
+                    "game_code": "A7K2M9",
+                    "rule_variant": "berkeley_any",
+                    "state": "active",
+                    "white": {"username": "playerone", "connected": True},
+                    "black": {"username": "opponent", "connected": True},
+                    "turn": "white",
+                    "move_number": 1,
+                    "created_at": datetime.now(UTC),
+                    "updated_at": datetime.now(UTC),
+                }
+            ]
+        ),
+        get_my_archived_games=AsyncMock(return_value=[]),
         get_game=AsyncMock(
             return_value={
                 "game_id": "gid1",
@@ -138,6 +155,8 @@ def app_with_game_service() -> tuple:
         ("post", "/api/game/join/A7K2M9", None),
         ("get", "/api/game/open", None),
         ("get", "/api/game/mine", None),
+        ("get", "/api/game/mine/active", None),
+        ("get", "/api/game/mine/archived", None),
         ("get", "/api/game/gid1", None),
         ("post", "/api/game/gid1/resign", None),
         ("delete", "/api/game/gid1", None),
@@ -168,6 +187,10 @@ def test_game_router_happy_path_shapes(app_with_game_service) -> None:
         join = client.post("/api/game/join/A7K2M9")
         open_games = client.get("/api/game/open")
         mine = client.get("/api/game/mine")
+        active_mine = client.get("/api/game/mine/active")
+        archived_mine = client.get("/api/game/mine/archived")
+        active_alias = client.get("/api/game/mine-active")
+        archived_alias = client.get("/api/game/mine-archived")
 
     assert create.status_code == 201
     assert create.json()["game_code"] == "A7K2M9"
@@ -177,6 +200,12 @@ def test_game_router_happy_path_shapes(app_with_game_service) -> None:
     assert isinstance(open_games.json()["games"], list)
     assert mine.status_code == 200
     assert isinstance(mine.json()["games"], list)
+    assert active_mine.status_code == 200
+    assert isinstance(active_mine.json()["games"], list)
+    assert archived_mine.status_code == 200
+    assert isinstance(archived_mine.json()["games"], list)
+    assert active_alias.status_code == 200
+    assert archived_alias.status_code == 200
 
 
 def test_game_router_maps_domain_errors_to_standard_envelope(app_with_game_service) -> None:
@@ -289,15 +318,23 @@ def test_game_router_open_and_mine_error_paths(app_with_game_service) -> None:
     app, service = app_with_game_service
     service.get_open_games = AsyncMock(side_effect=GameConflictError(code="GAME_FULL", message="Game is not joinable"))
     service.get_my_games = AsyncMock(side_effect=GameNotFoundError("No game found"))
+    service.get_my_active_games = AsyncMock(side_effect=GameConflictError(code="CONFLICT", message="conflict"))
+    service.get_my_archived_games = AsyncMock(side_effect=GameForbiddenError(code="FORBIDDEN", message="forbidden"))
 
     with TestClient(app) as client:
         open_games = client.get("/api/game/open")
         mine = client.get("/api/game/mine")
+        active_mine = client.get("/api/game/mine/active")
+        archived_mine = client.get("/api/game/mine/archived")
 
     assert open_games.status_code == 409
     assert open_games.json()["error"]["code"] == "GAME_FULL"
     assert mine.status_code == 404
     assert mine.json()["error"]["code"] == "GAME_NOT_FOUND"
+    assert active_mine.status_code == 409
+    assert active_mine.json()["error"]["code"] == "CONFLICT"
+    assert archived_mine.status_code == 403
+    assert archived_mine.json()["error"]["code"] == "FORBIDDEN"
 
 
 def test_get_game_service_prefers_app_state_and_falls_back_to_database(monkeypatch: pytest.MonkeyPatch) -> None:
