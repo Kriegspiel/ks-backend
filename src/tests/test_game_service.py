@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -627,6 +628,58 @@ async def test_get_my_games_uses_metadata_projection_and_merges_player_branches(
 
 
 @pytest.mark.asyncio
+async def test_get_my_games_includes_archived_completed_games_with_metadata_projection() -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    now = datetime.now(UTC)
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "K7K2M9",
+            "rule_variant": "berkeley_any",
+            "white": {"user_id": "u1", "username": "white", "connected": True, "role": "user"},
+            "black": {"user_id": "u2", "username": "black", "connected": True, "role": "user"},
+            "state": "active",
+            "turn": "white",
+            "move_number": 3,
+            "created_at": now,
+            "updated_at": now,
+            "moves": [{"ply": index} for index in range(1000)],
+        }
+    )
+    archives.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "ARCH23",
+            "rule_variant": "berkeley_any",
+            "white": {"user_id": "u3", "username": "white", "connected": True, "role": "user"},
+            "black": {"user_id": "u1", "username": "black", "connected": True, "role": "user"},
+            "state": "completed",
+            "turn": None,
+            "move_number": 9,
+            "created_at": now + timedelta(minutes=1),
+            "updated_at": now + timedelta(minutes=1),
+            "result": {"winner": "black", "reason": "resignation"},
+            "moves": [{"ply": index} for index in range(2000)],
+            "engine_state": {"large": "ignored"},
+        }
+    )
+    service = GameService(games, archives_collection=archives)
+
+    mine = await service.get_my_games(user_id="u1", limit=10)
+
+    assert [item.game_code for item in mine] == ["ARCH23", "K7K2M9"]
+    assert games.find_calls == [
+        ({"white.user_id": "u1"}, GAME_METADATA_PROJECTION),
+        ({"black.user_id": "u1"}, GAME_METADATA_PROJECTION),
+    ]
+    assert archives.find_calls == [
+        ({"white.user_id": "u1"}, GAME_METADATA_PROJECTION),
+        ({"black.user_id": "u1"}, GAME_METADATA_PROJECTION),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_game_uses_live_user_elo_over_stale_embedded_elo() -> None:
     games = FakeGamesCollection()
     users = FakeUsersCollection(
@@ -1041,7 +1094,8 @@ async def test_finalize_completed_game_updates_stats_and_archive_for_all_outcome
     assert finalized["stats_recorded_at"] is not None
     assert finalized["rating_snapshot"]["white_track"] == "vs_bots"
     assert finalized["rating_snapshot"]["black_track"] == "vs_humans"
-    assert archives.docs[0]["_id"] == game["_id"]
+    assert archives.docs[0] == finalized
+    assert games.docs == []
 
     white_stats = users.docs[0]["stats"]
     black_stats = users.docs[1]["stats"]
@@ -1071,9 +1125,44 @@ async def test_finalize_completed_game_short_circuits_when_not_completed_or_alre
     }
 
     assert await service._finalize_completed_game(waiting_game) is waiting_game
+    games.docs.append(recorded_game)
     await service._finalize_completed_game(recorded_game)
 
-    assert archives.docs[0]["_id"] == recorded_game["_id"]
+    assert archives.docs[0] == recorded_game
+    assert games.docs == []
+
+
+@pytest.mark.asyncio
+async def test_finalize_completed_game_keeps_live_doc_when_archive_verify_fails() -> None:
+    class CorruptingArchiveCollection(FakeGamesCollection):
+        async def find_one(self, query: dict, projection: dict | None = None):
+            doc = await super().find_one(query, projection)
+            if doc is None:
+                return None
+            corrupted = deepcopy(doc)
+            corrupted["updated_at"] = datetime(2030, 1, 1, tzinfo=UTC)
+            return corrupted
+
+    games = FakeGamesCollection()
+    archives = CorruptingArchiveCollection()
+    game = {
+        "_id": ObjectId(),
+        "game_code": "MISMT1",
+        "state": "completed",
+        "stats_recorded_at": datetime(2026, 4, 8, tzinfo=UTC),
+        "white": {"user_id": "u1", "username": "white"},
+        "black": {"user_id": "u2", "username": "black"},
+        "result": {"winner": "white", "reason": "checkmate"},
+        "updated_at": datetime(2026, 4, 8, tzinfo=UTC),
+    }
+    games.docs.append(deepcopy(game))
+    service = GameService(games, archives_collection=archives)
+
+    with pytest.raises(GameConflictError) as exc:
+        await service._finalize_completed_game(game)
+
+    assert exc.value.code == "ARCHIVE_WRITE_MISMATCH"
+    assert games.docs[0]["_id"] == game["_id"]
 
 
 @pytest.mark.asyncio
@@ -1152,10 +1241,12 @@ async def test_count_documents_and_game_id_resolution_cover_fallback_paths() -> 
     archives.docs.append({"_id": archive_id, "game_code": "ARCH1"})
     resolving_service = GameService(games, archives_collection=archives)
 
-    assert await resolving_service._resolve_game_object_id("local1") == local_id
-    assert await resolving_service._resolve_game_object_id("arch1") == archive_id
+    assert await resolving_service._resolve_live_game_object_id("local1") == local_id
     with pytest.raises(GameNotFoundError):
-        await resolving_service._resolve_game_object_id("   ")
+        await resolving_service._resolve_live_game_object_id("arch1")
+    assert await resolving_service._resolve_archived_game_object_id("arch1") == archive_id
+    with pytest.raises(GameNotFoundError):
+        await resolving_service._resolve_live_game_object_id("   ")
 
 
 def test_result_scoresheet_and_bot_variant_helpers_cover_uncommon_branches() -> None:
@@ -1312,7 +1403,7 @@ async def test_create_game_with_bot_as_black_places_bot_on_white_side() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_game_or_archive_removes_expired_waiting_games_from_cache_and_db() -> None:
+async def test_get_live_game_document_removes_expired_waiting_games_from_cache_and_db() -> None:
     now = datetime(2026, 4, 10, tzinfo=UTC)
 
     class FrozenGameService(GameService):
@@ -1344,8 +1435,8 @@ async def test_get_game_or_archive_removes_expired_waiting_games_from_cache_and_
     service = FrozenGameService(games)
     await service._prime_cache(games.docs[0], persisted=True)
 
-    assert await service.get_game_or_archive(game_id=str(cached_id)) is None
-    assert await service.get_game_or_archive(game_id=str(uncached_id)) is None
+    assert await service._get_live_game_document(game_id=str(cached_id)) is None
+    assert await service._get_live_game_document(game_id=str(uncached_id)) is None
     assert games.docs == []
 
 
@@ -1794,7 +1885,8 @@ async def test_branch_helpers_cover_user_noops_finalize_and_cache_scan_paths() -
     finalized = await finalize_service._finalize_completed_game(completed)
     assert finalized["stats_recorded_at"] is not None
     assert "rating_snapshot" not in finalized
-    assert finalize_archives.docs[0]["_id"] == completed["_id"]
+    assert finalize_archives.docs[0] == finalized
+    assert finalize_games.docs == []
 
     list_only_games = type(
         "ListOnlyGames",

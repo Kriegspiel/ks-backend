@@ -132,7 +132,7 @@ def game_docs() -> tuple[dict, dict, dict]:
 
 
 @pytest.mark.asyncio
-async def test_get_game_transcript_access_matrix_and_archive_fallback(game_docs) -> None:
+async def test_get_game_transcript_access_matrix_for_live_and_archived_games(game_docs) -> None:
     active, archived, _older = game_docs
     games = FakeCollection([active])
     archives = FakeCollection([archived])
