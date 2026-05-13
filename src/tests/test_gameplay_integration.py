@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -8,7 +7,7 @@ from bson import ObjectId
 
 from app.services.clock_service import ClockService
 from app.services.engine_adapter import create_new_game, serialize_game_state
-from app.services.game_service import GameForbiddenError, GameService, GameValidationError
+from app.services.game_service import GameForbiddenError, GameNotFoundError, GameService, GameValidationError
 
 
 class FakeCursor:
@@ -189,25 +188,22 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
     assert resigned["result"] == {"winner": "white", "reason": "resignation"}
     await service.flush_all()
 
-    participant_state = await service.get_game_state(game_id=str(gid), user_id="u1")
-    assert participant_state.state == "completed"
-    assert participant_state.possible_actions == []
-    assert participant_state.allowed_moves == []
-    assert games.docs[0]["rating_snapshot"]["white_after"] > 1200
-    assert games.docs[0]["rating_snapshot"]["black_after"] < 1200
+    with pytest.raises(GameNotFoundError):
+        await service.get_game_state(game_id=str(gid), user_id="u1")
+
+    completed = archives.docs[0]
+    assert games.docs == []
+    assert completed["rating_snapshot"]["white_after"] > 1200
+    assert completed["rating_snapshot"]["black_after"] < 1200
     assert users.docs[0]["stats"]["games_won"] == 1
     assert users.docs[0]["stats"]["games_played"] == 1
-    assert users.docs[0]["stats"]["elo"] == games.docs[0]["rating_snapshot"]["white_after"]
-    assert users.docs[0]["stats"]["ratings"]["overall"]["elo"] == games.docs[0]["rating_snapshot"]["overall"]["white_after"]
-    assert users.docs[0]["stats"]["ratings"]["vs_humans"]["elo"] == games.docs[0]["rating_snapshot"]["specific"]["white_after"]
+    assert users.docs[0]["stats"]["elo"] == completed["rating_snapshot"]["white_after"]
+    assert users.docs[0]["stats"]["ratings"]["overall"]["elo"] == completed["rating_snapshot"]["overall"]["white_after"]
+    assert users.docs[0]["stats"]["ratings"]["vs_humans"]["elo"] == completed["rating_snapshot"]["specific"]["white_after"]
     assert users.docs[1]["stats"]["games_lost"] == 1
     assert users.docs[1]["stats"]["games_played"] == 1
-    assert users.docs[1]["stats"]["ratings"]["vs_humans"]["elo"] == games.docs[0]["rating_snapshot"]["specific"]["black_after"]
+    assert users.docs[1]["stats"]["ratings"]["vs_humans"]["elo"] == completed["rating_snapshot"]["specific"]["black_after"]
     assert len(archives.docs) == 1
-    assert archives.docs[0]["rating_snapshot"] == games.docs[0]["rating_snapshot"]
-
-    # simulate archival pipeline handoff for transcript/recent checks
-    games.docs.clear()
 
     participant_transcript = await service.get_game_transcript(game_id=str(gid), user_id="u1")
     assert participant_transcript.viewer_color == "white"
@@ -256,16 +252,17 @@ async def test_completed_bot_game_updates_bot_elo_and_stats() -> None:
     assert resigned["result"] == {"winner": "white", "reason": "resignation"}
     await service.flush_all()
 
-    assert games.docs[0]["rating_snapshot"]["white_after"] > 1200
-    assert games.docs[0]["rating_snapshot"]["black_after"] < 1200
+    completed = archives.docs[0]
+    assert games.docs == []
+    assert completed["rating_snapshot"]["white_after"] > 1200
+    assert completed["rating_snapshot"]["black_after"] < 1200
     assert users.docs[0]["stats"]["games_won"] == 1
     assert users.docs[0]["stats"]["games_played"] == 1
     assert users.docs[1]["stats"]["games_lost"] == 1
     assert users.docs[1]["stats"]["games_played"] == 1
-    assert users.docs[1]["stats"]["elo"] == games.docs[0]["rating_snapshot"]["black_after"]
-    assert users.docs[0]["stats"]["ratings"]["vs_bots"]["elo"] == games.docs[0]["rating_snapshot"]["specific"]["white_after"]
-    assert users.docs[1]["stats"]["ratings"]["vs_humans"]["elo"] == games.docs[0]["rating_snapshot"]["specific"]["black_after"]
-    assert archives.docs[0]["rating_snapshot"] == games.docs[0]["rating_snapshot"]
+    assert users.docs[1]["stats"]["elo"] == completed["rating_snapshot"]["black_after"]
+    assert users.docs[0]["stats"]["ratings"]["vs_bots"]["elo"] == completed["rating_snapshot"]["specific"]["white_after"]
+    assert users.docs[1]["stats"]["ratings"]["vs_humans"]["elo"] == completed["rating_snapshot"]["specific"]["black_after"]
 
 
 @pytest.mark.asyncio

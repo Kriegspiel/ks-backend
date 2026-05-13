@@ -701,7 +701,7 @@ class GameService:
             return self._cache.get(oid)
 
     async def _get_game_for_runtime(self, *, game_id: str) -> tuple[dict[str, Any], CachedGameEntry | None]:
-        oid = await self._resolve_game_object_id(game_id)
+        oid = await self._resolve_live_game_object_id(game_id)
         cached = await self._get_cached_entry(oid)
         if cached is not None:
             return cached.game, cached
@@ -810,11 +810,48 @@ class GameService:
                     return
             docs.append(archived_game)
 
+    async def _find_archived_game_by_id(self, game_id: ObjectId) -> dict[str, Any] | None:
+        if self._archives is None:
+            return None
+        if hasattr(self._archives, "find_one"):
+            return await self._archives.find_one({"_id": game_id})
+        docs = getattr(self._archives, "docs", None)
+        if isinstance(docs, list):
+            for doc in docs:
+                if doc.get("_id") == game_id:
+                    return doc
+        return None
+
+    async def _delete_completed_live_game_document(self, *, game_id: ObjectId) -> None:
+        if hasattr(self._games, "delete_one"):
+            await self._games.delete_one({"_id": game_id})
+            return
+        docs = getattr(self._games, "docs", None)
+        if isinstance(docs, list):
+            for index, doc in enumerate(docs):
+                if doc.get("_id") == game_id:
+                    docs.pop(index)
+                    return
+
+    async def _archive_completed_game_and_delete_live(self, finalized: dict[str, Any]) -> None:
+        if self._archives is None:
+            return
+
+        archive_doc = deepcopy(finalized)
+        await self._upsert_archive(archive_doc)
+        archived = await self._find_archived_game_by_id(archive_doc["_id"])
+        if archived != archive_doc:
+            raise GameConflictError(
+                code="ARCHIVE_WRITE_MISMATCH",
+                message="Completed game archive write did not match the live game document",
+            )
+        await self._delete_completed_live_game_document(game_id=archive_doc["_id"])
+
     async def _finalize_completed_game(self, game: dict[str, Any]) -> dict[str, Any]:
         if game.get("state") != "completed":
             return game
         if game.get("stats_recorded_at"):
-            await self._upsert_archive(deepcopy(game))
+            await self._archive_completed_game_and_delete_live(game)
             return game
 
         result = game.get("result") or {}
@@ -905,11 +942,11 @@ class GameService:
         updated = await self._games.find_one_and_update({"_id": game["_id"]}, {"$set": finalized_fields}, return_document=ReturnDocument.AFTER)
         finalized = updated or game
         finalized.update(finalized_fields)
-        await self._upsert_archive(deepcopy(finalized))
+        await self._archive_completed_game_and_delete_live(finalized)
         return finalized
 
-    async def get_game_or_archive(self, *, game_id: str) -> dict[str, Any] | None:
-        oid = await self._resolve_game_object_id(game_id)
+    async def _get_live_game_document(self, *, game_id: str) -> dict[str, Any] | None:
+        oid = await self._resolve_live_game_object_id(game_id)
         cached = await self._get_cached_entry(oid)
         if cached is not None:
             snapshot = deepcopy(cached.game)
@@ -924,9 +961,13 @@ class GameService:
                 await self._delete_waiting_game_document(game_id=oid)
                 return None
             return game
+        return None
+
+    async def _get_archived_game_document(self, *, game_id: str) -> dict[str, Any] | None:
         if self._archives is None:
             return None
-        return await self._archives.find_one({"_id": oid})
+        oid = await self._resolve_archived_game_object_id(game_id)
+        return await self._find_archived_game_by_id(oid)
 
     def _is_participant(self, *, game: dict[str, Any], user_id: str) -> bool:
         white = game.get("white") or {}
@@ -1111,19 +1152,25 @@ class GameService:
         except Exception as exc:  # noqa: BLE001
             raise GameNotFoundError() from exc
 
-    async def _resolve_game_object_id(self, game_ref: str) -> ObjectId:
+    async def _resolve_game_object_id_from_collection(self, collection: Any, game_ref: str) -> ObjectId:
         try:
             return self._id_query(game_ref)
         except GameNotFoundError:
             normalized = str(game_ref).strip().upper()
             if not normalized:
                 raise
-            game = await self._games.find_one({"game_code": normalized}, {"_id": 1})
-            if game is None and self._archives is not None:
-                game = await self._archives.find_one({"game_code": normalized}, {"_id": 1})
+            game = await collection.find_one({"game_code": normalized}, {"_id": 1})
             if game is None:
                 raise GameNotFoundError()
             return game["_id"]
+
+    async def _resolve_live_game_object_id(self, game_ref: str) -> ObjectId:
+        return await self._resolve_game_object_id_from_collection(self._games, game_ref)
+
+    async def _resolve_archived_game_object_id(self, game_ref: str) -> ObjectId:
+        if self._archives is None:
+            raise GameNotFoundError()
+        return await self._resolve_game_object_id_from_collection(self._archives, game_ref)
 
     async def _public_player(self, player: dict[str, Any] | None) -> dict[str, Any] | None:
         if not player:
@@ -1615,18 +1662,22 @@ class GameService:
     async def get_my_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:
         bounded = max(1, min(limit, 100))
         docs_by_key: dict[str, dict[str, Any]] = {}
-        for player_path in ("white.user_id", "black.user_id"):
-            query = {player_path: user_id}
-            cursor = (
-                self._find_with_projection(self._games, query, GAME_METADATA_PROJECTION)
-                .sort("created_at", -1)
-                .limit(bounded)
-            )
-            async for doc in cursor:
-                game_key = str(doc.get("_id") or doc.get("game_code") or id(doc))
-                previous = docs_by_key.get(game_key)
-                if previous is None or self._metadata_created_at(doc) >= self._metadata_created_at(previous):
-                    docs_by_key[game_key] = doc
+        sources = [self._games]
+        if self._archives is not None:
+            sources.append(self._archives)
+        for collection in sources:
+            for player_path in ("white.user_id", "black.user_id"):
+                query = {player_path: user_id}
+                cursor = (
+                    self._find_with_projection(collection, query, GAME_METADATA_PROJECTION)
+                    .sort("created_at", -1)
+                    .limit(bounded)
+                )
+                async for doc in cursor:
+                    game_key = str(doc.get("_id") or doc.get("game_code") or id(doc))
+                    previous = docs_by_key.get(game_key)
+                    if previous is None or self._metadata_created_at(doc) >= self._metadata_created_at(previous):
+                        docs_by_key[game_key] = doc
 
         out: list[GameMetadataResponse] = []
         for doc in sorted(docs_by_key.values(), key=self._metadata_created_at, reverse=True)[:bounded]:
@@ -1634,7 +1685,16 @@ class GameService:
         return out
 
     async def get_game(self, *, game_id: str) -> GameMetadataResponse:
-        game = await self.get_game_or_archive(game_id=game_id)
+        game: dict[str, Any] | None
+        try:
+            game = await self._get_live_game_document(game_id=game_id)
+        except GameNotFoundError:
+            game = None
+        if game is None:
+            try:
+                game = await self._get_archived_game_document(game_id=game_id)
+            except GameNotFoundError:
+                game = None
         if game is None:
             raise GameNotFoundError()
 
@@ -1961,7 +2021,16 @@ class GameService:
         return {"result": {"winner": winner, "reason": "resignation"}}
 
     async def get_game_transcript(self, *, game_id: str, user_id: str) -> GameTranscriptResponse:
-        game = await self.get_game_or_archive(game_id=game_id)
+        game: dict[str, Any] | None
+        try:
+            game = await self._get_live_game_document(game_id=game_id)
+        except GameNotFoundError:
+            game = None
+        if game is None:
+            try:
+                game = await self._get_archived_game_document(game_id=game_id)
+            except GameNotFoundError:
+                game = None
         if game is None:
             raise GameNotFoundError()
 
@@ -1987,7 +2056,7 @@ class GameService:
         )
 
     async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:
-        oid = await self._resolve_game_object_id(game_id)
+        oid = await self._resolve_live_game_object_id(game_id)
         game = await self._games.find_one({"_id": oid})
         if game is None:
             raise GameNotFoundError()
@@ -2005,7 +2074,7 @@ class GameService:
             raise GameConflictError(code="GAME_NOT_WAITING", message="Game is no longer deletable")
 
     async def hydrate_document(self, *, game_id: str) -> GameDocument:
-        oid = await self._resolve_game_object_id(game_id)
+        oid = await self._resolve_live_game_object_id(game_id)
         cached = await self._get_cached_entry(oid)
         game = deepcopy(cached.game) if cached is not None else await self._games.find_one({"_id": oid})
         if game is None:

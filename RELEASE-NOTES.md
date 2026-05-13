@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.18
+
+- **Completed Game Archiving**: move completed games out of `games` after an
+  identical `game_archives` write is verified, keep historical reads on archive
+  paths, and add a one-time cleanup script for already-archived completed docs.
+
 ## ks-backend v. 1.3.17
 
 - **Users Report**: read completed game history from `game_archives` and only
