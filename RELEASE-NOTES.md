@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.24
+
+- **Completed Game Archiving**: also normalize tuples to arrays during archive
+  verification, matching Mongo's BSON array round-trip for cached move
+  snapshots.
+
 ## ks-backend v. 1.3.23
 
 - **Completed Game Archiving**: compare archive verification and cleanup

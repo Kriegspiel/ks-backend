@@ -15,6 +15,8 @@ def normalize_for_mongo_equality(value: Any) -> Any:
         return _normalize_datetime(value)
     if isinstance(value, dict):
         return {key: normalize_for_mongo_equality(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [normalize_for_mongo_equality(item) for item in value]
     if isinstance(value, list):
         return [normalize_for_mongo_equality(item) for item in value]
     return value
