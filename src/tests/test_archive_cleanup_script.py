@@ -80,14 +80,20 @@ async def test_cleanup_completed_games_dry_run_reports_only_identical_archive_ma
     missing_id = ObjectId()
     mismatch_id = ObjectId()
     active_id = ObjectId()
-    identical = {"_id": identical_id, "game_code": "SAME01", "state": "completed", "updated_at": now}
+    identical = {
+        "_id": identical_id,
+        "game_code": "SAME01",
+        "state": "completed",
+        "moves": [{"next_turn_pawn_try_squares": (8, 9)}],
+        "updated_at": now,
+    }
     missing = {"_id": missing_id, "game_code": "MISS01", "state": "completed", "updated_at": now}
     mismatch = {"_id": mismatch_id, "game_code": "DIFF01", "state": "completed", "updated_at": now}
     active = {"_id": active_id, "game_code": "LIVE01", "state": "active", "updated_at": now}
     db = FakeDB(
         games=[identical, missing, mismatch, active],
         game_archives=[
-            {**identical, "updated_at": stored_now},
+            {**identical, "moves": [{"next_turn_pawn_try_squares": [8, 9]}], "updated_at": stored_now},
             {**mismatch, "updated_at": datetime(2026, 5, 1, tzinfo=UTC)},
         ],
     )

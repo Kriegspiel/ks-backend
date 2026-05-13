@@ -1322,6 +1322,8 @@ async def test_finalize_completed_game_accepts_mongo_datetime_round_trip_when_ve
             return value.astimezone(UTC).replace(tzinfo=None, microsecond=(value.microsecond // 1000) * 1000)
         if isinstance(value, dict):
             return {key: stored_shape(item) for key, item in value.items()}
+        if isinstance(value, tuple):
+            return [stored_shape(item) for item in value]
         if isinstance(value, list):
             return [stored_shape(item) for item in value]
         return value
@@ -1343,6 +1345,7 @@ async def test_finalize_completed_game_accepts_mongo_datetime_round_trip_when_ve
         "white": {"user_id": "u1", "username": "white"},
         "black": {"user_id": "u2", "username": "black"},
         "result": {"winner": "white", "reason": "checkmate"},
+        "moves": [{"next_turn_pawn_try_squares": (8, 9)}],
         "updated_at": datetime(2026, 4, 8, 11, 22, 33, 987654, tzinfo=UTC),
     }
     games.docs.append(deepcopy(game))
