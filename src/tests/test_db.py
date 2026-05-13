@@ -185,14 +185,15 @@ async def test_init_db_integration_creates_indexes_when_mongo_available():
             assert "COLLSCAN" not in stages, f"{collection_name}.{label} used {stages}"
             assert "SORT" not in stages, f"{collection_name}.{label} used {stages}"
 
-    for field in ("white.user_id", "black.user_id"):
-        explain = await db.command(
-            "explain",
-            {"find": "games", "filter": {field: "perf-user"}, "sort": {"created_at": -1}, "limit": 20},
-            verbosity="queryPlanner",
-        )
-        stages = _plan_stages(explain.get("queryPlanner", {}).get("winningPlan", {}))
-        assert "COLLSCAN" not in stages, f"games.{field} used {stages}"
-        assert "SORT" not in stages, f"games.{field} used {stages}"
+    for collection_name in ("games", "game_archives"):
+        for field in ("white.user_id", "black.user_id"):
+            explain = await db.command(
+                "explain",
+                {"find": collection_name, "filter": {field: "perf-user"}, "sort": {"created_at": -1}, "limit": 20},
+                verbosity="queryPlanner",
+            )
+            stages = _plan_stages(explain.get("queryPlanner", {}).get("winningPlan", {}))
+            assert "COLLSCAN" not in stages, f"{collection_name}.{field} used {stages}"
+            assert "SORT" not in stages, f"{collection_name}.{field} used {stages}"
 
     await db_module.close_db()
