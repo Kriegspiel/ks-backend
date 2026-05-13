@@ -1580,6 +1580,44 @@ async def test_background_flush_helpers_and_sweep_guards_cover_due_entry_paths(m
 
 
 @pytest.mark.asyncio
+async def test_completed_background_flush_archives_without_rewriting_live_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    now = datetime(2026, 4, 11, tzinfo=UTC)
+    gid = ObjectId()
+    entry = CachedGameEntry(
+        game={
+            "_id": gid,
+            "game_code": "F7SH99",
+            "rule_variant": "berkeley_any",
+            "state": "completed",
+            "white": {"user_id": "u1", "username": "white", "role": "bot"},
+            "black": {"user_id": "u2", "username": "black", "role": "bot"},
+            "result": {"winner": "white", "reason": "checkmate"},
+            "moves": [],
+            "created_at": now,
+            "updated_at": now,
+        },
+        dirty=True,
+        version=1,
+    )
+    service = GameService(games, archives_collection=archives)
+    service._cache[gid] = entry
+
+    async def fail_live_persist(game: dict) -> None:  # noqa: ARG001
+        raise AssertionError("completed background flush should not rewrite games")
+
+    monkeypatch.setattr(service, "_persist_game_document", fail_live_persist)
+
+    await service._flush_entry(entry, reason="completion")
+
+    assert games.docs == []
+    assert archives.docs[0]["_id"] == gid
+    assert archives.docs[0]["stats_recorded_at"] is not None
+    assert gid not in service._cache
+
+
+@pytest.mark.asyncio
 async def test_flush_loop_and_assert_active_fallbacks_cover_nonstandard_collections(monkeypatch: pytest.MonkeyPatch) -> None:
     service = GameService(FakeGamesCollection())
     loop_calls: list[str] = []

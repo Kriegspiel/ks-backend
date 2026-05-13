@@ -389,10 +389,13 @@ class GameService:
                 version = entry.version
                 persisted_ply = self._ply_count(snapshot)
 
-            await self._persist_game_document(snapshot)
-            persisted_snapshot = snapshot
-            if snapshot.get("state") == "completed":
+            if snapshot.get("state") == "completed" and self._archives is not None:
                 persisted_snapshot = await self._finalize_completed_game(snapshot)
+            else:
+                await self._persist_game_document(snapshot)
+                persisted_snapshot = snapshot
+                if snapshot.get("state") == "completed":
+                    persisted_snapshot = await self._finalize_completed_game(snapshot)
 
             async with entry.lock:
                 if entry.version == version:
@@ -939,7 +942,11 @@ class GameService:
         if rating_snapshot is not None:
             finalized_fields["rating_snapshot"] = rating_snapshot
 
-        updated = await self._games.find_one_and_update({"_id": game["_id"]}, {"$set": finalized_fields}, return_document=ReturnDocument.AFTER)
+        updated = await self._games.find_one_and_update(
+            {"_id": game["_id"], "state": "completed"},
+            {"$set": finalized_fields},
+            return_document=ReturnDocument.AFTER,
+        )
         finalized = updated or game
         finalized.update(finalized_fields)
         await self._archive_completed_game_and_delete_live(finalized)
