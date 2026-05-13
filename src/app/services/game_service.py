@@ -293,7 +293,16 @@ class GameService:
             await self._publish_game_event(game, event_type="game_changed")
 
         for game in await self._active_games_not_in_cache():
-            updated = await self._adjudicate_timeout_if_needed(game=game, now=now)
+            try:
+                updated = await self._adjudicate_timeout_if_needed(game=game, now=now)
+            except GameConflictError as exc:
+                logger.warning(
+                    "game_timeout_sweep_failed",
+                    game_id=str(game.get("_id")),
+                    code=exc.code,
+                    message=str(exc),
+                )
+                continue
             if updated.get("state") == "completed":
                 await self._publish_game_event(updated, event_type="game_changed")
                 logger.info("game_timeout_swept", game_id=str(updated.get("_id")))

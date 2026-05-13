@@ -1691,6 +1691,35 @@ async def test_background_flush_helpers_and_sweep_guards_cover_due_entry_paths(m
 
 
 @pytest.mark.asyncio
+async def test_timeout_sweep_skips_archive_conflicts_without_failing_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    games = FakeGamesCollection()
+    now = datetime.now(UTC)
+    gid = ObjectId()
+    games.docs.append(
+        {
+            "_id": gid,
+            "game_code": "A7K2M9",
+            "rule_variant": "berkeley_any",
+            "state": "active",
+            "white": {"user_id": "u1", "username": "white", "role": "bot"},
+            "black": {"user_id": "u2", "username": "black", "role": "bot"},
+            "turn": "white",
+            "move_number": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games)
+
+    async def fail_timeout_adjudication(*, game: dict, now: datetime) -> dict:  # noqa: ARG001
+        raise GameConflictError(code="ARCHIVE_WRITE_MISMATCH", message="archive mismatch")
+
+    monkeypatch.setattr(service, "_adjudicate_timeout_if_needed", fail_timeout_adjudication)
+
+    await service._sweep_timeouts(now=now)
+
+
+@pytest.mark.asyncio
 async def test_completed_background_flush_archives_without_rewriting_live_document(monkeypatch: pytest.MonkeyPatch) -> None:
     games = FakeGamesCollection()
     archives = FakeGamesCollection()
