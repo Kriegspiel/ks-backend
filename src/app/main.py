@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 import sentry_sdk
 import structlog
 
@@ -19,6 +19,7 @@ from app.services.game_service import GameService
 from app.services.session_service import SessionService
 
 logger = structlog.get_logger("app.main")
+APP_API_INGRESS_HOSTS = {"app.kriegspiel.org", "testserver", "localhost", "127.0.0.1"}
 
 
 def build_cors_origins(settings: Settings) -> list[str]:
@@ -31,6 +32,18 @@ def build_cors_origins(settings: Settings) -> list[str]:
         if origin not in deduped:
             deduped.append(origin)
     return deduped
+
+
+def _request_host(request: Request) -> str:
+    return request.headers.get("host", "").split(":", 1)[0].lower()
+
+
+def is_app_api_ingress_request(request: Request) -> bool:
+    return _request_host(request) in APP_API_INGRESS_HOSTS
+
+
+def is_api_prefixed_path(path: str) -> bool:
+    return path == "/api" or path.startswith("/api/")
 
 
 @asynccontextmanager
@@ -94,6 +107,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def restrict_app_api_ingress(request: Request, call_next):  # noqa: ANN001
+        if is_api_prefixed_path(request.url.path) and not is_app_api_ingress_request(request):
+            return JSONResponse({"detail": "Not Found"}, status_code=status.HTTP_404_NOT_FOUND)
+        return await call_next(request)
 
     canonical_routers = (auth_router, bot_router, game_router, user_router)
     for router in canonical_routers:

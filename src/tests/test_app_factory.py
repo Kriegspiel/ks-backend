@@ -117,13 +117,13 @@ def test_canonical_and_legacy_api_routes_are_both_available():
 
     with TestClient(app) as client:
         canonical_health = client.get("/health")
-        legacy_health = client.get("/api/health")
+        legacy_health = client.get("/api/health", headers={"host": "app.kriegspiel.org"})
         canonical_me = client.get("/auth/me")
-        legacy_me = client.get("/api/auth/me")
+        legacy_me = client.get("/api/auth/me", headers={"host": "app.kriegspiel.org"})
         canonical_game = client.get("/game/open")
-        legacy_game = client.get("/api/game/open")
+        legacy_game = client.get("/api/game/open", headers={"host": "app.kriegspiel.org"})
         canonical_bots = client.get("/bots")
-        legacy_bots = client.get("/api/bots")
+        legacy_bots = client.get("/api/bots", headers={"host": "app.kriegspiel.org"})
 
     assert canonical_health.status_code in (200, 503)
     assert legacy_health.status_code == canonical_health.status_code
@@ -134,6 +134,23 @@ def test_canonical_and_legacy_api_routes_are_both_available():
     assert legacy_game.status_code == canonical_game.status_code
     assert canonical_bots.status_code in (401, 503)
     assert legacy_bots.status_code == canonical_bots.status_code
+
+
+def test_public_api_host_rejects_api_prefixed_ingress_paths():
+    app = create_app(Settings())
+
+    with TestClient(app) as client:
+        canonical_health = client.get("/health", headers={"host": "api.kriegspiel.org"})
+        api_health = client.get("/api/health", headers={"host": "api.kriegspiel.org"})
+        api_me = client.get("/api/auth/me", headers={"host": "api.kriegspiel.org"})
+        api_game = client.get("/api/game/open", headers={"host": "api.kriegspiel.org"})
+        api_bots = client.get("/api/bots", headers={"host": "api.kriegspiel.org"})
+
+    assert canonical_health.status_code in (200, 503)
+    assert api_health.status_code == 404
+    assert api_me.status_code == 404
+    assert api_game.status_code == 404
+    assert api_bots.status_code == 404
 
 
 def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:

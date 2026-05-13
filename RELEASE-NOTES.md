@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.26
+
+- **API Routing**: restrict the hidden `/api/...` mount to app-host ingress so
+  `app.kriegspiel.org/api/...` remains available for browser same-origin
+  traffic while `/api/...` paths on the public API host return `404`.
+
 ## ks-backend v. 1.3.25
 
 - **Bot Availability**: let model-backed bots report OpenAI/Anthropic
