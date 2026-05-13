@@ -62,6 +62,21 @@ FLUSH_LOOP_INTERVAL_SECONDS = 1.0
 TIMEOUT_SWEEP_INTERVAL = timedelta(minutes=25)
 WAITING_GAME_SWEEP_INTERVAL = timedelta(seconds=5)
 NONSENSE_HISTORY_ANNOUNCEMENTS = frozenset({"IMPOSSIBLE_TO_ASK", "INVALID_UCI", "NONSENSE"})
+GAME_METADATA_PROJECTION = {
+    "_id": 1,
+    "game_code": 1,
+    "rule_variant": 1,
+    "state": 1,
+    "opponent_type": 1,
+    "white": 1,
+    "black": 1,
+    "turn": 1,
+    "move_number": 1,
+    "created_at": 1,
+    "updated_at": 1,
+    "result": 1,
+    "rating_snapshot": 1,
+}
 
 
 def _log_debug(event: str, **kwargs: Any) -> None:
@@ -501,6 +516,20 @@ class GameService:
     @staticmethod
     def _ply_count(game: dict[str, Any]) -> int:
         return len(game.get("moves", []))
+
+    @staticmethod
+    def _find_with_projection(collection: Any, query: dict[str, Any], projection: dict[str, int]):
+        try:
+            return collection.find(query, projection)
+        except TypeError:
+            return collection.find(query)
+
+    @staticmethod
+    def _metadata_created_at(game: dict[str, Any]) -> datetime:
+        created_at = game.get("created_at")
+        if isinstance(created_at, datetime):
+            return created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=UTC)
+        return datetime.min.replace(tzinfo=UTC)
 
     @staticmethod
     def _is_nonsense_history_entry(source: dict[str, Any]) -> bool:
@@ -1585,11 +1614,22 @@ class GameService:
 
     async def get_my_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:
         bounded = max(1, min(limit, 100))
-        query = {"$or": [{"white.user_id": user_id}, {"black.user_id": user_id}]}
-        cursor = self._games.find(query).sort("created_at", -1).limit(bounded)
+        docs_by_key: dict[str, dict[str, Any]] = {}
+        for player_path in ("white.user_id", "black.user_id"):
+            query = {player_path: user_id}
+            cursor = (
+                self._find_with_projection(self._games, query, GAME_METADATA_PROJECTION)
+                .sort("created_at", -1)
+                .limit(bounded)
+            )
+            async for doc in cursor:
+                game_key = str(doc.get("_id") or doc.get("game_code") or id(doc))
+                previous = docs_by_key.get(game_key)
+                if previous is None or self._metadata_created_at(doc) >= self._metadata_created_at(previous):
+                    docs_by_key[game_key] = doc
 
         out: list[GameMetadataResponse] = []
-        async for doc in cursor:
+        for doc in sorted(docs_by_key.values(), key=self._metadata_created_at, reverse=True)[:bounded]:
             out.append(await self._to_metadata(doc))
         return out
 

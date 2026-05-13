@@ -67,6 +67,7 @@ class FakeCursor:
 class FakeUsersCollection:
     def __init__(self) -> None:
         self.docs: list[dict] = []
+        self.find_calls: list[tuple[dict, dict | None]] = []
 
     async def find_one(self, query: dict):
         for doc in self.docs:
@@ -107,6 +108,7 @@ class FakeUsersCollection:
         return len([d for d in self.docs if self._matches(d, query)])
 
     def find(self, query: dict, projection: dict | None = None):
+        self.find_calls.append((query, projection))
         matches = [d for d in self.docs if self._matches(d, query)]
         if projection:
             matches = [self._project(doc, projection) for doc in matches]
@@ -1449,8 +1451,26 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
     assert current_week["total_games"] == 3
 
     assert [game["game_code"] for game in report["last_games"]] == ["LIVE02", "USER01"]
+    assert "BOTBOT" not in [game["game_code"] for game in report["last_games"]]
     assert report["last_games"][0]["white"] == {"username": "guest_judit_polgar", "role": "guest"}
     assert report["last_games"][0]["review_path"] == "/game/LIVE02/review"
+    assert set(report["last_games"][0]) == {
+        "game_id",
+        "game_code",
+        "rule_variant",
+        "state",
+        "white",
+        "black",
+        "result",
+        "turn_count",
+        "move_count",
+        "played_at",
+        "review_path",
+    }
+    expected_activity_query = {"updated_at": {"$gte": datetime(2025, 6, 1, 4, tzinfo=UTC)}}
+    assert archives.find_calls[0][0] == expected_activity_query
+    assert games.find_calls[0][0] == expected_activity_query
+    assert "$or" not in archives.find_calls[0][0]
 
 
 @pytest.mark.asyncio

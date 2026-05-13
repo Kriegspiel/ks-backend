@@ -29,12 +29,16 @@ async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.games.create_index([("state", ASCENDING), ("created_at", ASCENDING)])
     await db.games.create_index([("white.user_id", ASCENDING), ("state", ASCENDING)])
     await db.games.create_index([("black.user_id", ASCENDING), ("state", ASCENDING)])
+    await db.games.create_index([("updated_at", DESCENDING)])
+    await db.games.create_index([("white.user_id", ASCENDING), ("created_at", DESCENDING)])
+    await db.games.create_index([("black.user_id", ASCENDING), ("created_at", DESCENDING)])
     await db.games.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
 
     await db.game_archives.create_index([("white.user_id", ASCENDING), ("created_at", ASCENDING)])
     await db.game_archives.create_index([("black.user_id", ASCENDING), ("created_at", ASCENDING)])
     await db.game_archives.create_index([("result.winner", ASCENDING), ("created_at", ASCENDING)])
     await db.game_archives.create_index([("created_at", DESCENDING)])
+    await db.game_archives.create_index([("updated_at", DESCENDING)])
 
     await db.audit_log.create_index([("timestamp", ASCENDING)], expireAfterSeconds=7_776_000)
     await db.audit_log.create_index([("user_id", ASCENDING), ("timestamp", ASCENDING)])

@@ -13,6 +13,7 @@ from app.services.game_service import (
     BOT_GAME_FLUSH_PLIES,
     BOT_GAME_IDLE_FLUSH,
     CachedGameEntry,
+    GAME_METADATA_PROJECTION,
     GameConflictError,
     GameForbiddenError,
     GameNotFoundError,
@@ -58,6 +59,7 @@ class FakeDeleteResult:
 class FakeGamesCollection:
     def __init__(self):
         self.docs: list[dict] = []
+        self.find_calls: list[tuple[dict, dict | None]] = []
 
     async def find_one(self, query: dict, projection: dict | None = None):
         for doc in self.docs:
@@ -74,8 +76,12 @@ class FakeGamesCollection:
     async def count_documents(self, query: dict):
         return sum(1 for doc in self.docs if self._matches(doc, query))
 
-    def find(self, query: dict):
-        return FakeCursor([d for d in self.docs if self._matches(d, query)])
+    def find(self, query: dict, projection: dict | None = None):
+        self.find_calls.append((query, projection))
+        docs = [d for d in self.docs if self._matches(d, query)]
+        if projection:
+            docs = [self._project(doc, projection) for doc in docs]
+        return FakeCursor(docs)
 
     async def find_one_and_update(self, query: dict, update: dict, return_document=None):  # noqa: ANN001
         for doc in self.docs:
@@ -120,6 +126,25 @@ class FakeGamesCollection:
                 return None
             current = current.get(part)
         return current
+
+    @staticmethod
+    def _set_nested(doc: dict, key: str, value):  # noqa: ANN001
+        parts = key.split(".")
+        current = doc
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
+
+    @classmethod
+    def _project(cls, doc: dict, projection: dict):
+        result = {}
+        for key, include in projection.items():
+            if not include:
+                continue
+            value = cls._resolve(doc, key)
+            if value is not None:
+                cls._set_nested(result, key, value)
+        return result
 
 
 class FakeUsersCollection:
@@ -538,6 +563,67 @@ async def test_get_game_and_my_games_include_only_participant_games() -> None:
 
     with pytest.raises(GameNotFoundError):
         await service.get_game(game_id="invalid")
+
+
+@pytest.mark.asyncio
+async def test_get_my_games_uses_metadata_projection_and_merges_player_branches() -> None:
+    games = FakeGamesCollection()
+    now = datetime.now(UTC)
+    games.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "AA2222",
+                "rule_variant": "berkeley_any",
+                "white": {"user_id": "u1", "username": "both", "connected": True, "role": "user"},
+                "black": {"user_id": "u1", "username": "both-again", "connected": True, "role": "user"},
+                "state": "active",
+                "turn": "white",
+                "move_number": 4,
+                "created_at": now + timedelta(minutes=3),
+                "updated_at": now + timedelta(minutes=3),
+                "moves": [{"ply": index} for index in range(2000)],
+                "engine_state": {"large": "ignored"},
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "BB3333",
+                "rule_variant": "berkeley_any",
+                "white": {"user_id": "u2", "username": "white", "connected": True, "role": "user"},
+                "black": {"user_id": "u1", "username": "black", "connected": True, "role": "user"},
+                "state": "active",
+                "turn": "black",
+                "move_number": 3,
+                "created_at": now + timedelta(minutes=2),
+                "updated_at": now + timedelta(minutes=2),
+                "moves": [{"ply": index} for index in range(1000)],
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "CC4444",
+                "rule_variant": "berkeley_any",
+                "white": {"user_id": "u1", "username": "white", "connected": True, "role": "user"},
+                "black": {"user_id": "u3", "username": "black", "connected": True, "role": "user"},
+                "state": "completed",
+                "turn": None,
+                "move_number": 2,
+                "created_at": now + timedelta(minutes=1),
+                "updated_at": now + timedelta(minutes=1),
+                "result": {"winner": "white", "reason": "resignation"},
+                "moves": [{"ply": index} for index in range(500)],
+            },
+        ]
+    )
+    service = GameService(games)
+
+    mine = await service.get_my_games(user_id="u1", limit=2)
+
+    assert [item.game_code for item in mine] == ["AA2222", "BB3333"]
+    assert mine[0].model_dump().keys() == mine[1].model_dump().keys()
+    assert games.find_calls == [
+        ({"white.user_id": "u1"}, GAME_METADATA_PROJECTION),
+        ({"black.user_id": "u1"}, GAME_METADATA_PROJECTION),
+    ]
 
 
 @pytest.mark.asyncio
