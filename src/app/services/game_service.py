@@ -1172,7 +1172,12 @@ class GameService:
             raise GameNotFoundError()
         return await self._resolve_game_object_id_from_collection(self._archives, game_ref)
 
-    async def _public_player(self, player: dict[str, Any] | None) -> dict[str, Any] | None:
+    async def _public_player(
+        self,
+        player: dict[str, Any] | None,
+        *,
+        user_doc_cache: dict[str, dict[str, Any] | None] | None = None,
+    ) -> dict[str, Any] | None:
         if not player:
             return None
         elo = player.get("elo")
@@ -1182,7 +1187,13 @@ class GameService:
             elo = int(stats.get("elo", 1200))
         user_id = player.get("user_id")
         if user_id:
-            user_doc = await self._find_user_doc(str(user_id))
+            cache_key = str(user_id)
+            if user_doc_cache is not None and cache_key in user_doc_cache:
+                user_doc = user_doc_cache[cache_key]
+            else:
+                user_doc = await self._find_user_doc(cache_key)
+                if user_doc_cache is not None:
+                    user_doc_cache[cache_key] = user_doc
             if user_doc is not None:
                 user_stats = normalize_user_stats_payload(user_doc.get("stats"))
                 ratings = user_stats.get("ratings", ratings)
@@ -1195,7 +1206,12 @@ class GameService:
             "ratings": ratings,
         }
 
-    async def _to_metadata(self, doc: dict[str, Any]) -> GameMetadataResponse:
+    async def _to_metadata(
+        self,
+        doc: dict[str, Any],
+        *,
+        user_doc_cache: dict[str, dict[str, Any] | None] | None = None,
+    ) -> GameMetadataResponse:
         return GameMetadataResponse.model_validate(
             {
                 "game_id": str(doc["_id"]),
@@ -1203,8 +1219,8 @@ class GameService:
                 "rule_variant": doc["rule_variant"],
                 "state": doc["state"],
                 "opponent_type": doc.get("opponent_type", "human"),
-                "white": await self._public_player(doc.get("white")),
-                "black": await self._public_player(doc.get("black")),
+                "white": await self._public_player(doc.get("white"), user_doc_cache=user_doc_cache),
+                "black": await self._public_player(doc.get("black"), user_doc_cache=user_doc_cache),
                 "turn": doc.get("turn"),
                 "move_number": doc.get("move_number", 1),
                 "created_at": doc["created_at"],
@@ -1680,8 +1696,9 @@ class GameService:
                         docs_by_key[game_key] = doc
 
         out: list[GameMetadataResponse] = []
+        user_doc_cache: dict[str, dict[str, Any] | None] = {}
         for doc in sorted(docs_by_key.values(), key=self._metadata_created_at, reverse=True)[:bounded]:
-            out.append(await self._to_metadata(doc))
+            out.append(await self._to_metadata(doc, user_doc_cache=user_doc_cache))
         return out
 
     async def get_game(self, *, game_id: str) -> GameMetadataResponse:

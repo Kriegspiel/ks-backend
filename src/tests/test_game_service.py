@@ -151,8 +151,10 @@ class FakeGamesCollection:
 class FakeUsersCollection:
     def __init__(self, docs: list[dict] | None = None):
         self.docs = docs or []
+        self.find_one_calls: list[dict] = []
 
     async def find_one(self, query: dict, projection: dict | None = None):
+        self.find_one_calls.append(query)
         for doc in self.docs:
             matches = True
             for key, expected in query.items():
@@ -677,6 +679,43 @@ async def test_get_my_games_includes_archived_completed_games_with_metadata_proj
         ({"white.user_id": "u1"}, GAME_METADATA_PROJECTION),
         ({"black.user_id": "u1"}, GAME_METADATA_PROJECTION),
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_my_games_caches_player_user_lookups_within_response() -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    users = FakeUsersCollection(
+        docs=[
+            {"_id": "u1", "username": "repeat", "stats": default_user_stats_payload()},
+            {"_id": "u2", "username": "opponent", "stats": default_user_stats_payload()},
+        ]
+    )
+    now = datetime.now(UTC)
+    for offset, collection in enumerate((games, archives)):
+        collection.docs.append(
+            {
+                "_id": ObjectId(),
+                "game_code": f"A7K2M{9 - offset}",
+                "rule_variant": "berkeley_any",
+                "white": {"user_id": "u1", "username": "repeat", "connected": True, "role": "user"},
+                "black": {"user_id": "u2", "username": "opponent", "connected": True, "role": "user"},
+                "state": "completed" if collection is archives else "active",
+                "turn": None,
+                "move_number": 3,
+                "created_at": now + timedelta(minutes=offset),
+                "updated_at": now + timedelta(minutes=offset),
+                "result": {"winner": "white", "reason": "resignation"},
+            }
+        )
+    service = GameService(games, users_collection=users, archives_collection=archives)
+
+    mine = await service.get_my_games(user_id="u1", limit=10)
+
+    assert len(mine) == 2
+    lookup_ids = [call.get("_id") for call in users.find_one_calls]
+    assert lookup_ids.count("u1") == 1
+    assert lookup_ids.count("u2") == 1
 
 
 @pytest.mark.asyncio
