@@ -40,6 +40,7 @@ from app.services.engine_adapter import (
     public_reserve_summary,
     serialize_game_state,
 )
+from app.services.mongo_document_compare import mongo_documents_equal
 from app.services.state_projection import (
     allowed_moves_for_player,
     build_viewer_referee_log,
@@ -852,7 +853,7 @@ class GameService:
         archive_doc = deepcopy(finalized)
         await self._upsert_archive(archive_doc)
         archived = await self._find_archived_game_by_id(archive_doc["_id"])
-        if archived != archive_doc:
+        if not mongo_documents_equal(archived, archive_doc):
             raise GameConflictError(
                 code="ARCHIVE_WRITE_MISMATCH",
                 message="Completed game archive write did not match the live game document",

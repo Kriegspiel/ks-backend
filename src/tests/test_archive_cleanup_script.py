@@ -74,7 +74,8 @@ class FakeDB:
 
 @pytest.mark.asyncio
 async def test_cleanup_completed_games_dry_run_reports_only_identical_archive_matches() -> None:
-    now = datetime(2026, 4, 30, tzinfo=UTC)
+    now = datetime(2026, 4, 30, 12, 0, 0, 456789, tzinfo=UTC)
+    stored_now = datetime(2026, 4, 30, 12, 0, 0, 456000)
     identical_id = ObjectId()
     missing_id = ObjectId()
     mismatch_id = ObjectId()
@@ -86,7 +87,7 @@ async def test_cleanup_completed_games_dry_run_reports_only_identical_archive_ma
     db = FakeDB(
         games=[identical, missing, mismatch, active],
         game_archives=[
-            identical.copy(),
+            {**identical, "updated_at": stored_now},
             {**mismatch, "updated_at": datetime(2026, 5, 1, tzinfo=UTC)},
         ],
     )

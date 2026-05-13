@@ -13,6 +13,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from app.services.mongo_document_compare import mongo_documents_equal  # noqa: E402
+
 
 def _public_game_id(doc: dict[str, Any]) -> dict[str, str | None]:
     return {
@@ -49,7 +51,7 @@ async def cleanup_completed_games(db: Any, *, apply: bool, limit: int | None = N
                 summary["missing_archive_examples"].append(_public_game_id(live_doc))
             continue
 
-        if archive_doc != live_doc:
+        if not mongo_documents_equal(archive_doc, live_doc):
             summary["mismatched_archive"] += 1
             if len(summary["mismatched_archive_examples"]) < max_details:
                 summary["mismatched_archive_examples"].append(_public_game_id(live_doc))
