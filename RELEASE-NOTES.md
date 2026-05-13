@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.23
+
+- **Completed Game Archiving**: compare archive verification and cleanup
+  candidates using Mongo-normalized datetime values so safe completed games can
+  be archived and removed from `games` after BSON round-trips.
+
 ## ks-backend v. 1.3.22
 
 - **Startup Health**: keep backend startup healthy when a historical timed-out

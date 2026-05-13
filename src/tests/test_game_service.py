@@ -1316,6 +1316,45 @@ async def test_finalize_completed_game_keeps_live_doc_when_archive_verify_fails(
 
 
 @pytest.mark.asyncio
+async def test_finalize_completed_game_accepts_mongo_datetime_round_trip_when_verifying_archive() -> None:
+    def stored_shape(value):  # noqa: ANN001
+        if isinstance(value, datetime):
+            return value.astimezone(UTC).replace(tzinfo=None, microsecond=(value.microsecond // 1000) * 1000)
+        if isinstance(value, dict):
+            return {key: stored_shape(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [stored_shape(item) for item in value]
+        return value
+
+    class MongoRoundTripArchiveCollection(FakeGamesCollection):
+        async def find_one(self, query: dict, projection: dict | None = None):
+            doc = await super().find_one(query, projection)
+            if doc is None:
+                return None
+            return stored_shape(deepcopy(doc))
+
+    games = FakeGamesCollection()
+    archives = MongoRoundTripArchiveCollection()
+    game = {
+        "_id": ObjectId(),
+        "game_code": "BSON42",
+        "state": "completed",
+        "stats_recorded_at": datetime(2026, 4, 8, 10, 20, 30, 456789, tzinfo=UTC),
+        "white": {"user_id": "u1", "username": "white"},
+        "black": {"user_id": "u2", "username": "black"},
+        "result": {"winner": "white", "reason": "checkmate"},
+        "updated_at": datetime(2026, 4, 8, 11, 22, 33, 987654, tzinfo=UTC),
+    }
+    games.docs.append(deepcopy(game))
+    service = GameService(games, archives_collection=archives)
+
+    await service._finalize_completed_game(game)
+
+    assert archives.docs[0] == game
+    assert games.docs == []
+
+
+@pytest.mark.asyncio
 async def test_game_service_user_lookup_update_and_join_cooldown_support_object_id_strings() -> None:
     oid = ObjectId()
     users = FakeUsersCollection(
