@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.22
+
+- **Startup Health**: keep backend startup healthy when a historical timed-out
+  game hits an archive mismatch during the timeout sweep.
+
 ## ks-backend v. 1.3.21
 
 - **Game List Performance**: add active-only and archived-only `mine`
