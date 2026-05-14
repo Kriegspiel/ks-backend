@@ -728,6 +728,16 @@ class GameService:
             return cached.game, cached
         return game, None
 
+    async def _get_game_for_state(self, *, game_id: str) -> tuple[dict[str, Any], CachedGameEntry | None, bool]:
+        try:
+            game, entry = await self._get_game_for_runtime(game_id=game_id)
+            return game, entry, False
+        except GameNotFoundError as live_error:
+            archived = await self._get_archived_game_document(game_id=game_id)
+            if archived is None or archived.get("state") != "completed":
+                raise live_error
+            return archived, None, True
+
     @staticmethod
     def _mark_entry_dirty_locked(entry: CachedGameEntry, *, now: datetime) -> None:
         entry.dirty = True
@@ -1762,7 +1772,7 @@ class GameService:
         return await self._to_metadata(game)
 
     async def get_game_state(self, *, game_id: str, user_id: str) -> GameStateResponse:
-        game, entry = await self._get_game_for_runtime(game_id=game_id)
+        game, entry, archived = await self._get_game_for_state(game_id=game_id)
         now = self.utcnow()
         timed_out = False
         if entry is not None:
@@ -1774,7 +1784,7 @@ class GameService:
                     self._mark_entry_dirty_locked(entry, now=now)
                     self._schedule_flush(entry, reason="timeout")
                     timed_out = True
-        else:
+        elif not archived:
             game = await self._adjudicate_timeout_if_needed(game=game, now=now)
             if game.get("state") == "completed":
                 game = await self._finalize_completed_game(game)

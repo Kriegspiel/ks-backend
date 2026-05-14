@@ -637,6 +637,27 @@ async def test_get_game_state_completed_reveals_full_board(active_game_doc: dict
     assert state.allowed_moves == []
 
 
+@pytest.mark.asyncio
+async def test_get_game_state_completed_reveals_archived_game_by_code(active_game_doc: dict) -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    completed = dict(active_game_doc)
+    completed["state"] = "completed"
+    completed["turn"] = None
+    completed["result"] = {"winner": "black", "reason": "timeout"}
+    archives.docs.append(completed)
+    service = GameService(games, archives_collection=archives)
+
+    state = await service.get_game_state(game_id=completed["game_code"], user_id="u1")
+
+    assert state.state == "completed"
+    assert state.result == {"winner": "black", "reason": "timeout"}
+    assert state.your_fen == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    assert state.possible_actions == []
+    assert state.allowed_moves == []
+    assert games.docs == []
+
+
 def test_build_referee_log_filters_private_announcements_but_keeps_all_public_announcements() -> None:
     now = datetime.now(UTC)
     log = build_referee_log(

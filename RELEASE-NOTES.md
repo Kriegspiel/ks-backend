@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.27
+
+- **Archived Game State**: keep completed archived games readable through the
+  game-state endpoint so old live-game URLs can still show the final board and
+  completed-game summary instead of "Game not found".
+
 ## ks-backend v. 1.3.26
 
 - **API Routing**: restrict the hidden `/api/...` mount to app-host ingress so
