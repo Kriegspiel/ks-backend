@@ -856,6 +856,10 @@ class UserService:
             "black": 1,
             "created_at": 1,
             "updated_at": 1,
+            "moves": 1,
+            "result": 1,
+            "state": 1,
+            "time_control": 1,
         }
 
         for collection_name in ("game_archives", "games"):
@@ -907,11 +911,79 @@ class UserService:
 
     @staticmethod
     def _game_duration_seconds(game: dict[str, Any]) -> int:
+        clock_duration = UserService._game_clock_duration_seconds(game)
+        if clock_duration is not None:
+            return clock_duration
+
         started_at = UserService._optional_datetime(game.get("created_at"))
         ended_at = UserService._optional_datetime(game.get("updated_at"))
         if started_at is None or ended_at is None or ended_at < started_at:
             return 0
         return int((ended_at - started_at).total_seconds())
+
+    @staticmethod
+    def _game_clock_duration_seconds(game: dict[str, Any]) -> int | None:
+        moves = game.get("moves")
+        if not isinstance(moves, list):
+            return None
+
+        stamped_moves = [
+            move
+            for move in moves
+            if isinstance(move, dict) and UserService._optional_datetime(move.get("timestamp")) is not None
+        ]
+        if not stamped_moves:
+            return None
+
+        time_control = game.get("time_control") if isinstance(game.get("time_control"), dict) else {}
+        base = UserService._positive_float(time_control.get("base"), default=25 * 60.0)
+        increment = UserService._positive_float(time_control.get("increment"), default=10.0)
+        remaining = {"white": base, "black": base}
+        active_color: str | None = None
+        last_updated_at: datetime | None = None
+        played_seconds = 0.0
+
+        for move in stamped_moves:
+            timestamp = UserService._optional_datetime(move.get("timestamp"))
+            if timestamp is None:
+                continue
+
+            if active_color in remaining and last_updated_at is not None:
+                elapsed = max(0.0, (timestamp - last_updated_at).total_seconds())
+                spent = min(elapsed, remaining[active_color])
+                remaining[active_color] -= spent
+                played_seconds += spent
+
+            color = move.get("color")
+            if color not in remaining:
+                if active_color in remaining:
+                    last_updated_at = timestamp
+                continue
+
+            if move.get("move_done") is True:
+                remaining[color] += increment
+                active_color = "black" if color == "white" else "white"
+            elif active_color in remaining:
+                active_color = color
+
+            if active_color in remaining:
+                last_updated_at = timestamp
+
+        result = game.get("result") if isinstance(game.get("result"), dict) else {}
+        if game.get("state") == "completed" and result.get("reason") == "timeout" and active_color in remaining:
+            played_seconds += remaining[active_color]
+
+        return int(played_seconds)
+
+    @staticmethod
+    def _positive_float(value: Any, *, default: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not math.isfinite(parsed) or parsed < 0:
+            return default
+        return parsed
 
     @staticmethod
     def _activity_player_role(player: dict[str, Any], bot_usernames: set[str]) -> str:

@@ -1366,6 +1366,63 @@ async def test_get_guest_report_lists_guests_with_archive_and_live_game_counts()
 
 
 @pytest.mark.asyncio
+async def test_get_guest_report_uses_clock_time_for_delayed_timeout_archive() -> None:
+    guest_id = ObjectId()
+    bot_id = ObjectId()
+    started_at = datetime(2026, 5, 13, 4, 34, 2, tzinfo=UTC)
+    archived_at = started_at + timedelta(hours=8, minutes=46)
+
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {
+                "_id": guest_id,
+                "username": "guest_soso_kupreichik",
+                "username_display": "guest_soso_kupreichik",
+                "role": "guest",
+                "created_at": started_at,
+            },
+            {"_id": bot_id, "username": "randobot", "role": "bot", "created_at": started_at},
+        ]
+    )
+
+    archives = FakeUsersCollection()
+    archives.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "PE2S7Q",
+            "state": "completed",
+            "white": {"user_id": str(bot_id), "username": "randobot"},
+            "black": {"user_id": str(guest_id), "username": "guest_soso_kupreichik"},
+            "created_at": started_at,
+            "updated_at": archived_at,
+            "result": {"winner": "white", "reason": "timeout"},
+            "time_control": {
+                "base": 1500.0,
+                "increment": 10.0,
+                "white_remaining": 1535.0,
+                "black_remaining": 0.0,
+                "active_color": None,
+                "last_updated_at": archived_at,
+            },
+            "moves": [
+                {"color": "white", "move_done": True, "timestamp": started_at + timedelta(seconds=4)},
+                {"color": "black", "move_done": True, "timestamp": started_at + timedelta(seconds=16)},
+                {"color": "white", "move_done": True, "timestamp": started_at + timedelta(seconds=30)},
+            ],
+        }
+    )
+
+    report = await UserService(users).get_guest_report(FakeDB(users=users, game_archives=archives))
+
+    row = report["guests"][0]
+    assert row["username"] == "guest_soso_kupreichik"
+    assert row["number_of_games"] == 1
+    assert row["last_game"] == archived_at.isoformat()
+    assert row["total_time_played_seconds"] == 1524
+
+
+@pytest.mark.asyncio
 async def test_get_guest_report_returns_empty_without_guest_accounts() -> None:
     users = FakeUsersCollection()
     users.docs.append({"_id": ObjectId(), "username": "human", "role": "user", "created_at": datetime(2026, 4, 1, tzinfo=UTC)})
