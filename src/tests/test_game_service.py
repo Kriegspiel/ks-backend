@@ -20,6 +20,7 @@ from app.services.game_service import (
     GameNotFoundError,
     GameService,
     GameValidationError,
+    PRE_START_ACTIVE_GAME_TTL,
 )
 
 
@@ -1730,6 +1731,98 @@ async def test_background_flush_helpers_and_sweep_guards_cover_due_entry_paths(m
     await service._maybe_sweep_timeouts()
 
     assert sweep_calls == [("expire", now), ("timeout", now)]
+
+
+@pytest.mark.asyncio
+async def test_pre_start_active_sweep_deletes_abandoned_games_without_history() -> None:
+    games = FakeGamesCollection()
+    now = datetime(2026, 5, 16, 18, tzinfo=UTC)
+
+    def pre_start_doc(code: str, *, updated_at: datetime, moves: list[dict] | None = None) -> dict:
+        return {
+            "_id": ObjectId(),
+            "game_code": code,
+            "rule_variant": "berkeley",
+            "creator_color": "black",
+            "opponent_type": "human",
+            "white": {"user_id": "white", "username": f"white-{code}", "role": "guest"},
+            "black": {"user_id": "black", "username": f"black-{code}", "role": "guest"},
+            "state": "active",
+            "turn": "white",
+            "move_number": 1,
+            "moves": moves or [],
+            "engine_state": serialize_game_state(create_new_game(rule_variant="berkeley")),
+            "time_control": {
+                "base": 1500.0,
+                "increment": 10.0,
+                "white_remaining": 1500.0,
+                "black_remaining": 1500.0,
+                "active_color": None,
+                "last_updated_at": updated_at,
+            },
+            "created_at": updated_at,
+            "updated_at": updated_at,
+            "expires_at": None,
+        }
+
+    stale = pre_start_doc("STALE1", updated_at=now - PRE_START_ACTIVE_GAME_TTL - timedelta(seconds=1))
+    illegal_only = pre_start_doc(
+        "TRYBAD",
+        updated_at=now - PRE_START_ACTIVE_GAME_TTL - timedelta(seconds=1),
+        moves=[{"move_done": False, "announcement": "ILLEGAL_MOVE"}],
+    )
+    young = pre_start_doc("YOUNG1", updated_at=now - PRE_START_ACTIVE_GAME_TTL + timedelta(seconds=1))
+    started = pre_start_doc("START1", updated_at=now - PRE_START_ACTIVE_GAME_TTL - timedelta(seconds=1))
+    started["move_number"] = 2
+    started["moves"] = [{"move_done": True, "announcement": "REGULAR_MOVE"}]
+    started["time_control"]["active_color"] = "black"
+
+    games.docs.extend([stale, illegal_only, young, started])
+    service = GameService(games)
+
+    await service._expire_pre_start_active_games(now=now)
+
+    assert {game["game_code"] for game in games.docs} == {"YOUNG1", "START1"}
+
+
+@pytest.mark.asyncio
+async def test_pre_start_active_sweep_evicts_cached_abandoned_game() -> None:
+    games = FakeGamesCollection()
+    now = datetime(2026, 5, 16, 18, tzinfo=UTC)
+    gid = ObjectId()
+    doc = {
+        "_id": gid,
+        "game_code": "ZC42PB",
+        "rule_variant": "berkeley",
+        "creator_color": "black",
+        "opponent_type": "human",
+        "white": {"user_id": "white", "username": "guest_ernst_benko", "role": "guest"},
+        "black": {"user_id": "black", "username": "guest_alexander_sargissian", "role": "guest"},
+        "state": "active",
+        "turn": "white",
+        "move_number": 1,
+        "moves": [],
+        "engine_state": serialize_game_state(create_new_game(rule_variant="berkeley")),
+        "time_control": {
+            "base": 1500.0,
+            "increment": 10.0,
+            "white_remaining": 1500.0,
+            "black_remaining": 1500.0,
+            "active_color": None,
+            "last_updated_at": now - PRE_START_ACTIVE_GAME_TTL - timedelta(minutes=1),
+        },
+        "created_at": now - PRE_START_ACTIVE_GAME_TTL - timedelta(minutes=1),
+        "updated_at": now - PRE_START_ACTIVE_GAME_TTL - timedelta(minutes=1),
+        "expires_at": None,
+    }
+    games.docs.append(doc)
+    service = GameService(games)
+    await service._prime_cache(doc, persisted=True)
+
+    await service._expire_pre_start_active_games(now=now)
+
+    assert games.docs == []
+    assert await service._get_cached_entry(gid) is None
 
 
 @pytest.mark.asyncio

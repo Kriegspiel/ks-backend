@@ -58,6 +58,7 @@ PlayerColor = Literal["white", "black"]
 logger = structlog.get_logger("app.game")
 ELO_K_FACTOR = 32
 WAITING_GAME_TTL = timedelta(minutes=10)
+PRE_START_ACTIVE_GAME_TTL = timedelta(hours=1)
 BOT_GAME_FLUSH_PLIES = 20
 BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
 FLUSH_LOOP_INTERVAL_SECONDS = 1.0
@@ -151,10 +152,12 @@ class GameService:
         self._shutdown = False
         self._last_timeout_sweep_at: datetime | None = None
         self._last_waiting_game_sweep_at: datetime | None = None
+        self._last_pre_start_active_game_sweep_at: datetime | None = None
 
     async def start(self) -> None:
         self._shutdown = False
         await self._maybe_expire_waiting_games()
+        await self._maybe_expire_pre_start_active_games()
         await self._maybe_sweep_timeouts()
         if self._flush_loop_task is None or self._flush_loop_task.done():
             self._flush_loop_task = asyncio.create_task(self._flush_loop(), name="game-service-flush-loop")
@@ -183,6 +186,7 @@ class GameService:
                 await asyncio.sleep(FLUSH_LOOP_INTERVAL_SECONDS)
                 await self._flush_due_entries()
                 await self._maybe_expire_waiting_games()
+                await self._maybe_expire_pre_start_active_games()
                 await self._maybe_sweep_timeouts()
         except asyncio.CancelledError:
             raise
@@ -239,6 +243,64 @@ class GameService:
                 continue
             await self._delete_waiting_game_document(game_id=game_id)
             logger.info("waiting_game_expired", game_id=str(game_id), source="db")
+
+    async def _maybe_expire_pre_start_active_games(self) -> None:
+        now = self.utcnow()
+        if (
+            self._last_pre_start_active_game_sweep_at is not None
+            and now - self._last_pre_start_active_game_sweep_at < WAITING_GAME_SWEEP_INTERVAL
+        ):
+            return
+        self._last_pre_start_active_game_sweep_at = now
+        await self._expire_pre_start_active_games(now=now)
+
+    async def _expire_pre_start_active_games(self, *, now: datetime) -> None:
+        cutoff = now - PRE_START_ACTIVE_GAME_TTL
+        async with self._cache_lock:
+            cached_entries = list(self._cache.items())
+
+        expired_cached_games: list[dict[str, Any]] = []
+        for game_id, entry in cached_entries:
+            async with entry.lock:
+                game = entry.game
+                if not self._is_pre_start_active_game_expired(game=game, now=now):
+                    continue
+                expired_cached_games.append(dict(game))
+
+        for game in expired_cached_games:
+            game_id = game.get("_id")
+            if not isinstance(game_id, ObjectId):
+                continue
+            deleted = await self._delete_pre_start_active_game_document(game_id=game_id, cutoff=cutoff)
+            if not deleted:
+                continue
+            await self._evict_cached_game(game_id)
+            await self._publish_game_event(game, event_type="game_changed")
+            logger.info("pre_start_active_game_expired", game_id=str(game_id), source="cache")
+
+        expired_uncached_games: list[dict[str, Any]] = []
+        query = {"state": "active", "updated_at": {"$lte": cutoff}, "time_control.active_color": None}
+        if hasattr(self._games, "find"):
+            cursor = self._games.find(query)
+            async for doc in cursor:
+                if self._is_pre_start_active_game_expired(game=doc, now=now):
+                    expired_uncached_games.append(doc)
+        else:
+            docs = getattr(self._games, "docs", None)
+            if isinstance(docs, list):
+                expired_uncached_games = [
+                    doc for doc in docs if self._is_pre_start_active_game_expired(game=doc, now=now)
+                ]
+
+        for game in expired_uncached_games:
+            game_id = game.get("_id")
+            if not isinstance(game_id, ObjectId) or game_id in {cached.get("_id") for cached in expired_cached_games}:
+                continue
+            deleted = await self._delete_pre_start_active_game_document(game_id=game_id, cutoff=cutoff)
+            if not deleted:
+                continue
+            await self._publish_game_event(game, event_type="game_changed")
+            logger.info("pre_start_active_game_expired", game_id=str(game_id), source="db")
 
     async def _maybe_sweep_timeouts(self) -> None:
         now = self.utcnow()
@@ -1445,6 +1507,28 @@ class GameService:
         expires_at = cls._normalize_utc_datetime(game.get("expires_at"))
         return isinstance(expires_at, datetime) and expires_at <= now
 
+    @classmethod
+    def _is_pre_start_active_game_expired(cls, *, game: dict[str, Any], now: datetime) -> bool:
+        if game.get("state") != "active":
+            return False
+        updated_at = cls._normalize_utc_datetime(game.get("updated_at")) or cls._normalize_utc_datetime(game.get("created_at"))
+        if updated_at is None or updated_at > now - PRE_START_ACTIVE_GAME_TTL:
+            return False
+        time_control = game.get("time_control") if isinstance(game.get("time_control"), dict) else {}
+        if time_control.get("active_color") in ("white", "black"):
+            return False
+        return not cls._has_completed_move(game)
+
+    @staticmethod
+    def _has_completed_move(game: dict[str, Any]) -> bool:
+        moves = game.get("moves")
+        if isinstance(moves, list) and any(isinstance(move, dict) and move.get("move_done") is True for move in moves):
+            return True
+        try:
+            return int(game.get("move_number", 1) or 1) > 1
+        except (TypeError, ValueError):
+            return False
+
     async def _delete_waiting_game_document(self, *, game_id: ObjectId) -> None:
         if hasattr(self._games, "delete_one"):
             await self._games.delete_one({"_id": game_id, "state": "waiting"})
@@ -1456,6 +1540,41 @@ class GameService:
                 if doc.get("_id") == game_id and doc.get("state") == "waiting":
                     docs.pop(index)
                     return
+
+    async def _delete_pre_start_active_game_document(self, *, game_id: ObjectId, cutoff: datetime) -> bool:
+        query = {
+            "_id": game_id,
+            "state": "active",
+            "move_number": {"$lte": 1},
+            "updated_at": {"$lte": cutoff},
+            "time_control.active_color": None,
+        }
+        if hasattr(self._games, "delete_one"):
+            result = await self._games.delete_one(query)
+            return bool(getattr(result, "deleted_count", 0))
+
+        docs = getattr(self._games, "docs", None)
+        if isinstance(docs, list):
+            for index, doc in enumerate(docs):
+                if not self._matches_pre_start_delete_query(doc=doc, query=query):
+                    continue
+                docs.pop(index)
+                return True
+        return False
+
+    @classmethod
+    def _matches_pre_start_delete_query(cls, *, doc: dict[str, Any], query: dict[str, Any]) -> bool:
+        if doc.get("_id") != query["_id"] or doc.get("state") != "active":
+            return False
+        try:
+            if int(doc.get("move_number", 1) or 1) > 1:
+                return False
+        except (TypeError, ValueError):
+            return False
+        updated_at = cls._normalize_utc_datetime(doc.get("updated_at"))
+        cutoff = cls._normalize_utc_datetime(query["updated_at"]["$lte"])
+        time_control = doc.get("time_control") if isinstance(doc.get("time_control"), dict) else {}
+        return updated_at is not None and cutoff is not None and updated_at <= cutoff and time_control.get("active_color") is None
 
     async def _find_waiting_game_for_creator(self, *, user_id: str) -> dict[str, Any] | None:
         waiting = await self._games.find_one({"state": "waiting", "white.user_id": user_id})
