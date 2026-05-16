@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.30
+
+- **Abandoned Active Games**: delete joined-but-not-started active games after
+  one hour without a successful first move, so games that never happened do not
+  remain active or count in guest reports.
+
 ## ks-backend v. 1.3.29
 
 - **Guest Tech Report**: calculate guest total time played from game clocks and
