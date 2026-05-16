@@ -835,6 +835,7 @@ class UserService:
                 "day_started": self._created_day(user),
                 "last_game": None,
                 "number_of_games": 0,
+                "total_time_played_seconds": 0,
                 "_seen_games": set(),
             }
             guest_ids.append(user_id_string)
@@ -862,8 +863,9 @@ class UserService:
             if collection is None:
                 continue
             async for game in self._find(collection, query, projection):
-                game_key = str(game.get("_id") or game.get("game_code") or id(game))
+                game_key = str(game.get("game_code") or game.get("_id") or id(game))
                 played_at = self._optional_datetime(game.get("updated_at")) or self._optional_datetime(game.get("created_at"))
+                duration_seconds = self._game_duration_seconds(game)
                 for color in ("white", "black"):
                     player = game.get(color) if isinstance(game.get(color), dict) else {}
                     guest_row = guests_by_id.get(str(player.get("user_id") or ""))
@@ -873,6 +875,7 @@ class UserService:
                     if game_key not in seen_games:
                         seen_games.add(game_key)
                         guest_row["number_of_games"] += 1
+                        guest_row["total_time_played_seconds"] += duration_seconds
                     last_game = guest_row["last_game"]
                     if played_at is not None and (last_game is None or played_at > last_game):
                         guest_row["last_game"] = played_at
@@ -887,6 +890,7 @@ class UserService:
                     "day_started": guest_row["day_started"],
                     "last_game": last_game.isoformat() if isinstance(last_game, datetime) else None,
                     "number_of_games": guest_row["number_of_games"],
+                    "total_time_played_seconds": guest_row["total_time_played_seconds"],
                 }
             )
 
@@ -900,6 +904,14 @@ class UserService:
     @staticmethod
     def _activity_time(game: dict[str, Any]) -> datetime | None:
         return UserService._optional_datetime(game.get("updated_at")) or UserService._optional_datetime(game.get("created_at"))
+
+    @staticmethod
+    def _game_duration_seconds(game: dict[str, Any]) -> int:
+        started_at = UserService._optional_datetime(game.get("created_at"))
+        ended_at = UserService._optional_datetime(game.get("updated_at"))
+        if started_at is None or ended_at is None or ended_at < started_at:
+            return 0
+        return int((ended_at - started_at).total_seconds())
 
     @staticmethod
     def _activity_player_role(player: dict[str, Any], bot_usernames: set[str]) -> str:

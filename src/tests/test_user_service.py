@@ -1357,10 +1357,12 @@ async def test_get_guest_report_lists_guests_with_archive_and_live_game_counts()
         "day_started": "2026-04-01",
         "last_game": "2026-04-04T13:00:00+00:00",
         "number_of_games": 2,
+        "total_time_played_seconds": 900,
     }
     assert rows["guest_judit_polgar"]["day_started"] == "2026-04-02"
     assert rows["guest_judit_polgar"]["last_game"] == "2026-04-04T13:00:00+00:00"
     assert rows["guest_judit_polgar"]["number_of_games"] == 2
+    assert rows["guest_judit_polgar"]["total_time_played_seconds"] == 300
 
 
 @pytest.mark.asyncio
