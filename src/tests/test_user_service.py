@@ -1482,8 +1482,34 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
             "state": "active",
             "white": {"user_id": str(guest_id), "username": "guest_judit_polgar", "role": "guest"},
             "black": {"user_id": str(bot_id), "username": "gptnano"},
+            "move_number": 2,
             "created_at": datetime(2026, 5, 1, 10, 30, tzinfo=UTC),
             "updated_at": datetime(2026, 5, 1, 11, tzinfo=UTC),
+        }
+    )
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "WAIT01",
+            "rule_variant": "berkeley_any",
+            "state": "waiting",
+            "white": None,
+            "black": {"user_id": str(bot_id), "username": "gptnano", "role": "bot"},
+            "created_at": datetime(2026, 5, 1, 11, 30, tzinfo=UTC),
+            "updated_at": datetime(2026, 5, 1, 11, 30, tzinfo=UTC),
+        }
+    )
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "JOINED",
+            "rule_variant": "berkeley_any",
+            "state": "active",
+            "white": {"user_id": str(human_id), "username": "fil", "role": "user"},
+            "black": {"user_id": str(bot_id), "username": "gptnano", "role": "bot"},
+            "move_number": 1,
+            "created_at": datetime(2026, 5, 1, 11, 40, tzinfo=UTC),
+            "updated_at": datetime(2026, 5, 1, 11, 40, tzinfo=UTC),
         }
     )
 
@@ -1511,6 +1537,8 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
 
     assert [game["game_code"] for game in report["last_games"]] == ["LIVE02", "USER01"]
     assert "BOTBOT" not in [game["game_code"] for game in report["last_games"]]
+    assert "WAIT01" not in [game["game_code"] for game in report["last_games"]]
+    assert "JOINED" not in [game["game_code"] for game in report["last_games"]]
     assert report["last_games"][0]["white"] == {"username": "guest_judit_polgar", "role": "guest"}
     assert report["last_games"][0]["review_path"] == "/game/LIVE02/review"
     assert set(report["last_games"][0]) == {
@@ -1528,9 +1556,9 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
     }
     expected_activity_query = {"updated_at": {"$gte": datetime(2025, 6, 1, 4, tzinfo=UTC)}}
     assert archives.find_calls[0][0] == expected_activity_query
-    assert games.find_calls[0][0] == {**expected_activity_query, "state": {"$ne": "completed"}}
+    assert games.find_calls[0][0] == {**expected_activity_query, "state": "active"}
     assert "$or" not in archives.find_calls[0][0]
-    assert games.find_calls[1][0] == {"state": {"$ne": "completed"}}
+    assert games.find_calls[1][0] == {"state": "active"}
 
 
 @pytest.mark.asyncio
