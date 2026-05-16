@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.28
+
+- **Guest Tech Report**: include total time played per guest, calculated from
+  the games already counted in the report.
+
 ## ks-backend v. 1.3.27
 
 - **Archived Game State**: keep completed archived games readable through the
