@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.31
+
+- **Users Tech Report**: exclude waiting and never-started live games from the
+  "Last 100 games by users" table and activity totals.
+
 ## ks-backend v. 1.3.30
 
 - **Abandoned Active Games**: delete joined-but-not-started active games after

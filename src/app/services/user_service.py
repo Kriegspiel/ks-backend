@@ -910,6 +910,24 @@ class UserService:
         return UserService._optional_datetime(game.get("updated_at")) or UserService._optional_datetime(game.get("created_at"))
 
     @staticmethod
+    def _activity_game_has_completed_move(game: dict[str, Any]) -> bool:
+        moves = game.get("moves")
+        if isinstance(moves, list) and any(isinstance(move, dict) and move.get("move_done") is True for move in moves):
+            return True
+
+        for key, threshold in (("move_number", 1), ("move_count", 0), ("turn_count", 0)):
+            try:
+                if int(game.get(key, 0) or 0) > threshold:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    @classmethod
+    def _is_live_activity_game(cls, game: dict[str, Any]) -> bool:
+        return game.get("state") == "active" and cls._activity_game_has_completed_move(game)
+
+    @staticmethod
     def _game_duration_seconds(game: dict[str, Any]) -> int:
         clock_duration = UserService._game_clock_duration_seconds(game)
         if clock_duration is not None:
@@ -1092,6 +1110,7 @@ class UserService:
             "updated_at": 1,
             "turn_count": 1,
             "move_count": 1,
+            "move_number": 1,
         }
         games_by_key: dict[str, dict[str, Any]] = {}
         for collection_name in ("game_archives", "games"):
@@ -1100,8 +1119,10 @@ class UserService:
                 continue
             query = dict(activity_query)
             if collection_name == "games":
-                query["state"] = {"$ne": "completed"}
+                query["state"] = "active"
             async for game in self._find(collection, query, projection):
+                if collection_name == "games" and not self._is_live_activity_game(game):
+                    continue
                 played_at = self._activity_time(game)
                 if played_at is None:
                     continue
@@ -1164,8 +1185,10 @@ class UserService:
             collection = getattr(db, collection_name, None)
             if collection is None:
                 continue
-            query = {"state": {"$ne": "completed"}} if collection_name == "games" else {}
+            query = {"state": "active"} if collection_name == "games" else {}
             async for game in self._find(collection, query, projection).sort("updated_at", -1).limit(500):
+                if collection_name == "games" and not self._is_live_activity_game(game):
+                    continue
                 played_at = self._activity_time(game)
                 if played_at is None:
                     continue
