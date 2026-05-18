@@ -696,6 +696,67 @@ async def test_get_public_profile_recomputes_partial_unsynced_track_results() ->
 
 
 @pytest.mark.asyncio
+async def test_get_public_profile_repairs_inconsistent_synced_result_totals() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": user_id,
+            "username": "darkboardmcts",
+            "username_display": "Darkboard MCTS",
+            "email": "bot@example.com",
+            "email_verified": True,
+            "password_hash": "hash",
+            "auth_providers": ["local"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": {"owner_email": "bot@example.com"},
+            "stats": {
+                **default_user_stats_payload(),
+                "games_played": 2,
+                "games_lost": 2,
+                "results": {
+                    "overall": {"games_played": 2, "games_won": 0, "games_lost": 2, "games_drawn": 0},
+                    "vs_humans": {"games_played": 1, "games_won": 0, "games_lost": 1, "games_drawn": 0},
+                    "vs_bots": {"games_played": 0, "games_won": 0, "games_lost": 0, "games_drawn": 0},
+                },
+                "results_synced_at": datetime(2026, 5, 18, tzinfo=UTC),
+            },
+            "settings": {},
+            "role": "bot",
+            "status": "active",
+            "last_active_at": datetime(2026, 5, 18, tzinfo=UTC),
+            "created_at": datetime(2026, 5, 18, tzinfo=UTC),
+            "updated_at": datetime(2026, 5, 18, tzinfo=UTC),
+        }
+    )
+    archives.docs.append(
+        {
+            "_id": ObjectId(),
+            "white": {"user_id": "human-1", "role": "user"},
+            "black": {"user_id": str(user_id), "role": "bot"},
+            "result": {"winner": "white"},
+            "created_at": datetime(2026, 5, 18, 17, tzinfo=UTC),
+        }
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    profile = await service.get_public_profile(db, "darkboardmcts")
+
+    assert profile is not None
+    assert profile["stats"]["games_played"] == 1
+    assert profile["stats"]["games_lost"] == 1
+    assert profile["stats"]["results"]["overall"]["games_played"] == 1
+    assert profile["stats"]["results"]["overall"]["games_lost"] == 1
+    assert profile["stats"]["results"]["vs_humans"]["games_played"] == 1
+    assert profile["stats"]["results"]["vs_humans"]["games_lost"] == 1
+    assert profile["stats"]["results"]["vs_bots"]["games_played"] == 0
+    assert users.docs[0]["stats"]["games_played"] == 1
+    assert users.docs[0]["stats"].get("results_synced_at") is not None
+
+
+@pytest.mark.asyncio
 async def test_get_rating_history_returns_series_for_selected_track() -> None:
     users = FakeUsersCollection()
     archives = FakeUsersCollection()

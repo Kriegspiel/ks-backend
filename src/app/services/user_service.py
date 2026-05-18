@@ -213,6 +213,21 @@ class UserService:
             bucket["games_drawn"] += 1
 
     @staticmethod
+    def _result_tracks_are_consistent(stats: dict[str, Any]) -> bool:
+        fields = ("games_played", "games_won", "games_lost", "games_drawn")
+        results = stats.get("results") if isinstance(stats.get("results"), dict) else {}
+        overall = results.get("overall") if isinstance(results.get("overall"), dict) else {}
+        vs_humans = results.get("vs_humans") if isinstance(results.get("vs_humans"), dict) else {}
+        vs_bots = results.get("vs_bots") if isinstance(results.get("vs_bots"), dict) else {}
+        for field in fields:
+            overall_value = int(overall.get(field, 0))
+            if int(stats.get(field, 0)) != overall_value:
+                return False
+            if overall_value != int(vs_humans.get(field, 0)) + int(vs_bots.get(field, 0)):
+                return False
+        return True
+
+    @staticmethod
     def _track_for_opponent_role(opponent_role: str | None) -> str:
         return "vs_bots" if str(opponent_role or "user").lower() == "bot" else "vs_humans"
 
@@ -269,7 +284,7 @@ class UserService:
         raw_results = raw_stats.get("results") if isinstance(raw_stats.get("results"), dict) else None
         result_keys = ("overall", "vs_humans", "vs_bots")
         has_results_shape = raw_results is not None and all(isinstance(raw_results.get(key), dict) for key in result_keys)
-        if has_results_shape and raw_stats.get("results_synced_at"):
+        if has_results_shape and raw_stats.get("results_synced_at") and self._result_tracks_are_consistent(stats):
             user["stats"] = stats
             return user
 
@@ -281,7 +296,7 @@ class UserService:
             "games_lost": int(raw_stats.get("games_lost", 0)),
             "games_drawn": int(raw_stats.get("games_drawn", 0)),
         }
-        if any(stored_summary.values()):
+        if any(stored_summary.values()) and not has_results_shape:
             stats["results"]["overall"] = stored_summary
         else:
             overall_results = computed_results["overall"]
