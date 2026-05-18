@@ -64,6 +64,7 @@ BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
 FLUSH_LOOP_INTERVAL_SECONDS = 1.0
 TIMEOUT_SWEEP_INTERVAL = timedelta(minutes=25)
 WAITING_GAME_SWEEP_INTERVAL = timedelta(seconds=5)
+STATS_RECORDING_STALE_AFTER = timedelta(minutes=5)
 NONSENSE_HISTORY_ANNOUNCEMENTS = frozenset({"IMPOSSIBLE_TO_ASK", "INVALID_UCI", "NONSENSE"})
 GAME_METADATA_PROJECTION = {
     "_id": 1,
@@ -908,6 +909,16 @@ class GameService:
                     return doc
         return None
 
+    async def _find_live_game_by_id(self, game_id: ObjectId) -> dict[str, Any] | None:
+        if hasattr(self._games, "find_one"):
+            return await self._games.find_one({"_id": game_id})
+        docs = getattr(self._games, "docs", None)
+        if isinstance(docs, list):
+            for doc in docs:
+                if doc.get("_id") == game_id:
+                    return doc
+        return None
+
     async def _delete_completed_live_game_document(self, *, game_id: ObjectId) -> None:
         if hasattr(self._games, "delete_one"):
             await self._games.delete_one({"_id": game_id})
@@ -924,6 +935,7 @@ class GameService:
             return
 
         archive_doc = deepcopy(finalized)
+        archive_doc.pop("stats_recording_started_at", None)
         await self._upsert_archive(archive_doc)
         archived = await self._find_archived_game_by_id(archive_doc["_id"])
         if not mongo_documents_equal(archived, archive_doc):
@@ -933,12 +945,62 @@ class GameService:
             )
         await self._delete_completed_live_game_document(game_id=archive_doc["_id"])
 
+    def _stats_recording_is_claimable(self, game: dict[str, Any], *, now: datetime) -> bool:
+        if game.get("stats_recorded_at"):
+            return False
+        started_at = self._normalize_utc_datetime(game.get("stats_recording_started_at"))
+        return started_at is None or now - started_at >= STATS_RECORDING_STALE_AFTER
+
+    async def _claim_completed_game_stats_recording(self, *, game_id: ObjectId, now: datetime) -> dict[str, Any] | None:
+        stale_before = now - STATS_RECORDING_STALE_AFTER
+        query = {
+            "_id": game_id,
+            "state": "completed",
+            "stats_recorded_at": None,
+            "$or": [
+                {"stats_recording_started_at": None},
+                {"stats_recording_started_at": {"$lt": stale_before}},
+            ],
+        }
+        update = {"$set": {"stats_recording_started_at": now}}
+
+        if hasattr(self._games, "find_one_and_update"):
+            return await self._games.find_one_and_update(query, update, return_document=ReturnDocument.AFTER)
+
+        docs = getattr(self._games, "docs", None)
+        if isinstance(docs, list):
+            for doc in docs:
+                if doc.get("_id") != game_id or doc.get("state") != "completed":
+                    continue
+                if not self._stats_recording_is_claimable(doc, now=now):
+                    return None
+                doc["stats_recording_started_at"] = now
+                return doc
+        return None
+
+    async def _completed_game_after_stats_claim_miss(self, *, game_id: ObjectId) -> dict[str, Any] | None:
+        archived = await self._find_archived_game_by_id(game_id)
+        if archived is not None:
+            return archived
+        live = await self._find_live_game_by_id(game_id)
+        return live if live is not None and live.get("state") == "completed" else None
+
     async def _finalize_completed_game(self, game: dict[str, Any]) -> dict[str, Any]:
         if game.get("state") != "completed":
             return game
         if game.get("stats_recorded_at"):
             await self._archive_completed_game_and_delete_live(game)
             return game
+
+        processed_at = self.utcnow()
+        claimed_game = await self._claim_completed_game_stats_recording(game_id=game["_id"], now=processed_at)
+        if claimed_game is None:
+            existing = await self._completed_game_after_stats_claim_miss(game_id=game["_id"])
+            if existing is not None:
+                return existing
+            game["stats_recording_started_at"] = processed_at
+        else:
+            game = claimed_game
 
         result = game.get("result") or {}
         winner = result.get("winner")
@@ -1020,18 +1082,18 @@ class GameService:
             await self._update_user_stats(user_id=white_user_id, stats=white_stats)
             await self._update_user_stats(user_id=black_user_id, stats=black_stats)
 
-        processed_at = self.utcnow()
         finalized_fields: dict[str, Any] = {"stats_recorded_at": processed_at}
         if rating_snapshot is not None:
             finalized_fields["rating_snapshot"] = rating_snapshot
 
         updated = await self._games.find_one_and_update(
             {"_id": game["_id"], "state": "completed"},
-            {"$set": finalized_fields},
+            {"$set": finalized_fields, "$unset": {"stats_recording_started_at": ""}},
             return_document=ReturnDocument.AFTER,
         )
         finalized = updated or game
         finalized.update(finalized_fields)
+        finalized.pop("stats_recording_started_at", None)
         await self._archive_completed_game_and_delete_live(finalized)
         return finalized
 
