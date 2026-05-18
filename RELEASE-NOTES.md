@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.33
+
+- **Profile Stats**: repair inconsistent profile result totals from archived
+  game history so profile "Games played" matches the listed completed games.
+
 ## ks-backend v. 1.3.32
 
 - **Completed Game Finalization**: claim stats recording before updating player
