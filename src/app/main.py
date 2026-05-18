@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response, status
@@ -11,6 +12,7 @@ from app.config import Settings, get_settings
 from app.db import close_db, get_db, init_db
 from app.logging_config import configure_logging
 from app.monitoring import capture_backend_restart, configure_sentry
+from app.services.archive_turn_counts import run_archive_turn_count_migration_once
 from app.routers.auth import router as auth_router
 from app.routers.bot import router as bot_router
 from app.routers.game import router as game_router
@@ -20,6 +22,16 @@ from app.services.session_service import SessionService
 
 logger = structlog.get_logger("app.main")
 APP_API_INGRESS_HOSTS = {"app.kriegspiel.org", "testserver", "localhost", "127.0.0.1"}
+
+
+async def _run_archive_turn_count_migration(app: FastAPI) -> None:
+    try:
+        summary = await run_archive_turn_count_migration_once(app.state.db)
+        logger.info("archive_turn_count_migration_complete", **summary)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("archive_turn_count_migration_failed", error_type=type(exc).__name__)
 
 
 def build_cors_origins(settings: Settings) -> list[str]:
@@ -52,6 +64,7 @@ async def lifespan(app: FastAPI):
     app.state.db_ready = False
     app.state.game_service = None
     app.state.session_service = None
+    app.state.archive_turn_count_migration_task = None
 
     try:
         db = await init_db(app.state.settings)
@@ -65,6 +78,10 @@ async def lifespan(app: FastAPI):
             site_origin=app.state.settings.SITE_ORIGIN,
         )
         await app.state.game_service.start()
+        app.state.archive_turn_count_migration_task = asyncio.create_task(
+            _run_archive_turn_count_migration(app),
+            name="archive-turn-count-migration",
+        )
         restart_event_id = capture_backend_restart(app.state.settings)
         logger.info("db_init_success", sentry_restart_event_id=restart_event_id)
     except Exception as exc:
@@ -83,6 +100,13 @@ async def lifespan(app: FastAPI):
         session_service = getattr(app.state, "session_service", None)
         if session_service is not None:
             await session_service.clear_cache()
+        migration_task = getattr(app.state, "archive_turn_count_migration_task", None)
+        if migration_task is not None and not migration_task.done():
+            migration_task.cancel()
+            try:
+                await migration_task
+            except asyncio.CancelledError:
+                pass
         await close_db()
 
 

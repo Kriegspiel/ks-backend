@@ -28,6 +28,7 @@ from app.models.game import (
     RecentGameItem,
     RecentGamesResponse,
 )
+from app.services.archive_turn_counts import archive_count_fields
 from app.services.bot_service import BotService
 from app.services.clock_service import ClockService
 from app.services.code_generator import generate_game_code
@@ -936,6 +937,7 @@ class GameService:
 
         archive_doc = deepcopy(finalized)
         archive_doc.pop("stats_recording_started_at", None)
+        archive_doc.update(archive_count_fields(archive_doc))
         await self._upsert_archive(archive_doc)
         archived = await self._find_archived_game_by_id(archive_doc["_id"])
         if not mongo_documents_equal(archived, archive_doc):

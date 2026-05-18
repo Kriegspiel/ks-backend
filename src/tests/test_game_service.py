@@ -1248,7 +1248,7 @@ async def test_finalize_completed_game_updates_stats_and_archive_for_all_outcome
     assert finalized["stats_recorded_at"] is not None
     assert finalized["rating_snapshot"]["white_track"] == "vs_bots"
     assert finalized["rating_snapshot"]["black_track"] == "vs_humans"
-    assert archives.docs[0] == finalized
+    assert archives.docs[0] == {**finalized, "move_count": 0, "turn_count": 0}
     assert games.docs == []
 
     white_stats = users.docs[0]["stats"]
@@ -1303,7 +1303,7 @@ async def test_finalize_completed_game_does_not_record_stats_for_stale_completed
     finalized = await service._finalize_completed_game(game)
     repeated = await service._finalize_completed_game(stale_completed_copy)
 
-    assert repeated == finalized
+    assert repeated == {**finalized, "move_count": 0, "turn_count": 0}
     assert len(archives.docs) == 1
     assert games.docs == []
     assert users.docs[0]["stats"]["games_played"] == 1
@@ -1331,7 +1331,7 @@ async def test_finalize_completed_game_short_circuits_when_not_completed_or_alre
     games.docs.append(recorded_game)
     await service._finalize_completed_game(recorded_game)
 
-    assert archives.docs[0] == recorded_game
+    assert archives.docs[0] == {**recorded_game, "move_count": 0, "turn_count": 0}
     assert games.docs == []
 
 
@@ -1406,7 +1406,7 @@ async def test_finalize_completed_game_accepts_mongo_datetime_round_trip_when_ve
 
     await service._finalize_completed_game(game)
 
-    assert archives.docs[0] == game
+    assert archives.docs[0] == {**game, "move_count": 1, "turn_count": 0}
     assert games.docs == []
 
 
@@ -2289,7 +2289,7 @@ async def test_branch_helpers_cover_user_noops_finalize_and_cache_scan_paths() -
     finalized = await finalize_service._finalize_completed_game(completed)
     assert finalized["stats_recorded_at"] is not None
     assert "rating_snapshot" not in finalized
-    assert finalize_archives.docs[0] == finalized
+    assert finalize_archives.docs[0] == {**finalized, "move_count": 0, "turn_count": 0}
     assert finalize_games.docs == []
 
     list_only_games = type(
