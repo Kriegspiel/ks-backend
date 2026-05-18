@@ -232,6 +232,176 @@ class UserService:
         return "vs_bots" if str(opponent_role or "user").lower() == "bot" else "vs_humans"
 
     @staticmethod
+    def _bot_metric_bucket() -> dict[str, int | float]:
+        return {"total_games": 0, "wins": 0, "losses": 0, "draws": 0, "win_rate": 0.0}
+
+    @classmethod
+    def _increment_bot_metric_bucket(cls, bucket: dict[str, int | float], outcome: str) -> None:
+        bucket["total_games"] = int(bucket["total_games"]) + 1
+        if outcome == "win":
+            bucket["wins"] = int(bucket["wins"]) + 1
+        elif outcome == "loss":
+            bucket["losses"] = int(bucket["losses"]) + 1
+        else:
+            bucket["draws"] = int(bucket["draws"]) + 1
+
+    @staticmethod
+    def _finalize_bot_metric_bucket(bucket: dict[str, int | float]) -> dict[str, int | float]:
+        total_games = int(bucket["total_games"])
+        wins = int(bucket["wins"])
+        return {
+            "total_games": total_games,
+            "wins": wins,
+            "losses": int(bucket["losses"]),
+            "draws": int(bucket["draws"]),
+            "win_rate": round((wins / total_games) if total_games else 0.0, 4),
+        }
+
+    @staticmethod
+    def _bot_metric_play_as(game: dict[str, Any], *, user_id: str, username: str) -> str | None:
+        canonical_username = username.strip().lower()
+        for color in ("white", "black"):
+            player = game.get(color)
+            if not isinstance(player, dict):
+                continue
+            if str(player.get("user_id") or "") == user_id:
+                return color
+            if str(player.get("username") or "").strip().lower() == canonical_username:
+                return color
+        return None
+
+    @staticmethod
+    def _bot_metric_turn_count(game: dict[str, Any]) -> int:
+        for key in ("turn_count", "move_count"):
+            try:
+                value = int(game.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return UserService._completed_turn_count(game)
+
+    async def _bot_profile_metrics(self, db: Any, user: dict[str, Any]) -> dict[str, Any]:
+        user_id = str(user["_id"])
+        username = str(user.get("username") or "")
+        cursor = self._find(
+            db.game_archives,
+            {
+                "$or": [
+                    {"white.user_id": user_id},
+                    {"black.user_id": user_id},
+                    {"white.username": username},
+                    {"black.username": username},
+                ],
+            },
+            {
+                "white": 1,
+                "black": 1,
+                "state": 1,
+                "result": 1,
+                "rule_variant": 1,
+                "moves": 1,
+                "move_count": 1,
+                "turn_count": 1,
+                "time_control": 1,
+                "created_at": 1,
+                "updated_at": 1,
+            },
+        )
+
+        totals = {
+            "overall": self._bot_metric_bucket(),
+            "vs_humans": self._bot_metric_bucket(),
+            "vs_bots": self._bot_metric_bucket(),
+            "as_white": self._bot_metric_bucket(),
+            "as_black": self._bot_metric_bucket(),
+        }
+        by_opponent: dict[str, dict[str, Any]] = {}
+        by_ruleset: dict[str, dict[str, Any]] = {}
+        total_duration_seconds = 0
+        total_turn_count = 0
+        last_completed_at: datetime | None = None
+
+        async for game in cursor:
+            if game.get("state") not in {None, "completed"}:
+                continue
+            play_as = self._bot_metric_play_as(game, user_id=user_id, username=username)
+            if play_as is None:
+                continue
+
+            opponent_color = "black" if play_as == "white" else "white"
+            opponent = game.get(opponent_color) if isinstance(game.get(opponent_color), dict) else {}
+            opponent_username = str(opponent.get("username") or "unknown").strip() or "unknown"
+            opponent_role = str(opponent.get("role") or "user").strip().lower() or "user"
+            opponent_track = self._track_for_opponent_role(opponent_role)
+            outcome = self._winner_result((game.get("result") or {}).get("winner"), play_as)
+            rule_variant = str(game.get("rule_variant") or "unknown").strip() or "unknown"
+
+            for bucket_key in ("overall", opponent_track, f"as_{play_as}"):
+                self._increment_bot_metric_bucket(totals[bucket_key], outcome)
+
+            opponent_key = opponent_username.lower()
+            opponent_row = by_opponent.setdefault(
+                opponent_key,
+                {
+                    "username": opponent_username,
+                    "role": opponent_role,
+                    "stats": self._bot_metric_bucket(),
+                },
+            )
+            self._increment_bot_metric_bucket(opponent_row["stats"], outcome)
+
+            ruleset_row = by_ruleset.setdefault(
+                rule_variant,
+                {
+                    "rule_variant": rule_variant,
+                    "stats": self._bot_metric_bucket(),
+                },
+            )
+            self._increment_bot_metric_bucket(ruleset_row["stats"], outcome)
+
+            duration_seconds = self._game_duration_seconds(game)
+            total_duration_seconds += duration_seconds
+            total_turn_count += self._bot_metric_turn_count(game)
+            completed_at = self._activity_time(game)
+            if completed_at is not None and (last_completed_at is None or completed_at > last_completed_at):
+                last_completed_at = completed_at
+
+        completed_games = int(totals["overall"]["total_games"])
+        opponent_rows = [
+            {
+                "username": row["username"],
+                "role": row["role"],
+                **self._finalize_bot_metric_bucket(row["stats"]),
+            }
+            for row in by_opponent.values()
+        ]
+        ruleset_rows = [
+            {
+                "rule_variant": row["rule_variant"],
+                **self._finalize_bot_metric_bucket(row["stats"]),
+            }
+            for row in by_ruleset.values()
+        ]
+        opponent_rows.sort(key=lambda row: (-int(row["total_games"]), str(row["username"])))
+        ruleset_rows.sort(key=lambda row: (-int(row["total_games"]), str(row["rule_variant"])))
+
+        return {
+            "completed_games": completed_games,
+            "total_duration_seconds": total_duration_seconds,
+            "average_duration_seconds": round(total_duration_seconds / completed_games) if completed_games else 0,
+            "average_turn_count": round(total_turn_count / completed_games, 1) if completed_games else 0.0,
+            "last_completed_at": self._safe_datetime(last_completed_at) if last_completed_at is not None else None,
+            "overall": self._finalize_bot_metric_bucket(totals["overall"]),
+            "vs_humans": self._finalize_bot_metric_bucket(totals["vs_humans"]),
+            "vs_bots": self._finalize_bot_metric_bucket(totals["vs_bots"]),
+            "as_white": self._finalize_bot_metric_bucket(totals["as_white"]),
+            "as_black": self._finalize_bot_metric_bucket(totals["as_black"]),
+            "opponents": opponent_rows[:10],
+            "rulesets": ruleset_rows,
+        }
+
+    @staticmethod
     def _history_rating_snapshot_for_player(game: dict[str, Any], *, play_as: str) -> tuple[dict[str, Any], dict[str, Any]]:
         rating_snapshot = game.get("rating_snapshot") if isinstance(game.get("rating_snapshot"), dict) else {}
         prefix = "white" if play_as == "white" else "black"
@@ -714,7 +884,7 @@ class UserService:
             or user.get("username")
         )
 
-        return {
+        profile = {
             "username": user.get("username"),
             "display_name": display_name,
             "role": user.get("role", "user"),
@@ -724,6 +894,9 @@ class UserService:
             "stats": normalize_user_stats_payload(user.get("stats")),
             "member_since": self._safe_datetime(user.get("created_at")),
         }
+        if user.get("role") == "bot":
+            profile["bot_metrics"] = await self._bot_profile_metrics(db, user)
+        return profile
 
     async def get_game_history(self, db: Any, user_id: str, page: int, per_page: int) -> tuple[list[dict[str, Any]], int]:
         bounded_page = max(page, 1)

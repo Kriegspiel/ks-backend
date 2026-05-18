@@ -556,9 +556,105 @@ async def test_get_public_profile_and_missing_user() -> None:
     assert profile["username"] == "playerone"
     assert profile["stats"]["elo"] == 1337
     assert profile["stats"]["ratings"]["overall"]["elo"] == 1337
+    assert "bot_metrics" not in profile
     assert bot_profile is not None
     assert bot_profile["owner_email"] == "bot-random-any@kriegspiel.org"
+    assert bot_profile["bot_metrics"]["completed_games"] == 0
     assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_get_public_bot_profile_includes_generic_bot_metrics() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "darkboardmcts",
+            "username_display": "darkboardmcts",
+            "email": "bot-darkboard-mcts@kriegspiel.org",
+            "email_verified": True,
+            "password_hash": "hash",
+            "auth_providers": ["local"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": {"owner_email": "bot-darkboard-mcts@kriegspiel.org"},
+            "stats": default_user_stats_payload(),
+            "settings": {},
+            "role": "bot",
+            "status": "active",
+            "last_active_at": datetime(2026, 5, 18, tzinfo=UTC),
+            "created_at": datetime(2026, 5, 18, tzinfo=UTC),
+            "updated_at": datetime(2026, 5, 18, tzinfo=UTC),
+        }
+    )
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "BOT001",
+                "white": {"user_id": str(bot_id), "username": "darkboardmcts", "role": "bot"},
+                "black": {"user_id": "bot-1", "username": "randobot", "role": "bot"},
+                "rule_variant": "wild16",
+                "turn_count": 12,
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 5, 18, 10, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 18, 10, 5, tzinfo=UTC),
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "BOT002",
+                "white": {"user_id": "human-1", "username": "fil", "role": "user"},
+                "black": {"user_id": str(bot_id), "username": "darkboardmcts", "role": "bot"},
+                "rule_variant": "berkeley_any",
+                "move_count": 8,
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 5, 18, 11, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 18, 11, 10, tzinfo=UTC),
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "BOT003",
+                "white": {"user_id": str(bot_id), "username": "darkboardmcts", "role": "bot"},
+                "black": {"user_id": "bot-1", "username": "randobot", "role": "bot"},
+                "rule_variant": "wild16",
+                "turn_count": 10,
+                "result": {"winner": None},
+                "created_at": datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 18, 12, 15, tzinfo=UTC),
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "BOT004",
+                "state": "active",
+                "white": {"user_id": str(bot_id), "username": "darkboardmcts", "role": "bot"},
+                "black": {"user_id": "human-2", "username": "alex", "role": "user"},
+                "rule_variant": "wild16",
+                "turn_count": 6,
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 5, 18, 13, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 18, 13, 5, tzinfo=UTC),
+            },
+        ]
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    profile = await service.get_public_profile(db, "darkboardmcts")
+
+    assert profile is not None
+    metrics = profile["bot_metrics"]
+    assert metrics["completed_games"] == 3
+    assert metrics["average_duration_seconds"] == 600
+    assert metrics["average_turn_count"] == 10.0
+    assert metrics["last_completed_at"].isoformat() == "2026-05-18T12:15:00+00:00"
+    assert metrics["overall"] == {"total_games": 3, "wins": 1, "losses": 1, "draws": 1, "win_rate": 0.3333}
+    assert metrics["vs_bots"] == {"total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
+    assert metrics["vs_humans"] == {"total_games": 1, "wins": 0, "losses": 1, "draws": 0, "win_rate": 0.0}
+    assert metrics["as_white"] == {"total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
+    assert metrics["as_black"] == {"total_games": 1, "wins": 0, "losses": 1, "draws": 0, "win_rate": 0.0}
+    assert metrics["opponents"][0] == {"username": "randobot", "role": "bot", "total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
+    assert metrics["rulesets"][0] == {"rule_variant": "wild16", "total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
 
 
 @pytest.mark.asyncio
