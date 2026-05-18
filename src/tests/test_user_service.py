@@ -655,6 +655,7 @@ async def test_get_public_bot_profile_includes_generic_bot_metrics() -> None:
     assert metrics["as_black"] == {"total_games": 1, "wins": 0, "losses": 1, "draws": 0, "win_rate": 0.0}
     assert metrics["opponents"][0] == {"username": "randobot", "role": "bot", "total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
     assert metrics["rulesets"][0] == {"rule_variant": "wild16", "total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
+    assert archives.find_calls[0][0] == {"$or": [{"white.user_id": str(bot_id)}, {"black.user_id": str(bot_id)}]}
 
 
 @pytest.mark.asyncio
