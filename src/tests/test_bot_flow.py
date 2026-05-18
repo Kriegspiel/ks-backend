@@ -891,6 +891,18 @@ def test_bot_service_supported_rule_variants_fallbacks_cover_randobotany() -> No
         "berkeley",
         "berkeley_any",
     ]
+    assert BotService._supported_rule_variants({"username": "simpleheuristics", "bot_profile": {}}) == [
+        "berkeley",
+        "berkeley_any",
+        "wild16",
+    ]
+    assert BotService._supported_rule_variants(
+        {"username": "simpleheuristics", "bot_profile": {"supported_rule_variants": ["berkeley", "berkeley_any"]}}
+    ) == [
+        "berkeley",
+        "berkeley_any",
+        "wild16",
+    ]
     assert BotService._supported_rule_variants(
         {"username": "custombot", "bot_profile": {"supported_rule_variants": ["crazykrieg"]}}
     ) == [
