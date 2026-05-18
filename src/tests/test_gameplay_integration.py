@@ -7,7 +7,7 @@ from bson import ObjectId
 
 from app.services.clock_service import ClockService
 from app.services.engine_adapter import create_new_game, serialize_game_state
-from app.services.game_service import GameForbiddenError, GameNotFoundError, GameService, GameValidationError
+from app.services.game_service import GameForbiddenError, GameService, GameValidationError
 
 
 class FakeCursor:
@@ -188,10 +188,12 @@ async def test_resign_transcript_recent_and_completed_visibility() -> None:
     assert resigned["result"] == {"winner": "white", "reason": "resignation"}
     await service.flush_all()
 
-    with pytest.raises(GameNotFoundError):
-        await service.get_game_state(game_id=str(gid), user_id="u1")
-
     completed = archives.docs[0]
+    completed_state = await service.get_game_state(game_id=str(gid), user_id="u1")
+    assert completed_state.state == "completed"
+    assert completed_state.result == {"winner": "white", "reason": "resignation"}
+    assert completed_state.allowed_moves == []
+    assert completed_state.possible_actions == []
     assert games.docs == []
     assert completed["rating_snapshot"]["white_after"] > 1200
     assert completed["rating_snapshot"]["black_after"] < 1200
