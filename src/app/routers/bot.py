@@ -6,7 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.db import get_db
 from app.dependencies import get_current_user
-from app.models.bot import BotAvailabilityReportRequest, BotAvailabilityReportResponse, BotListResponse
+from app.models.bot import (
+    BotAvailabilityReportRequest,
+    BotAvailabilityReportResponse,
+    BotListResponse,
+    BotProfileSyncRequest,
+    BotProfileSyncResponse,
+)
 from app.models.user import UserModel
 from app.services.bot_service import BotService
 
@@ -41,3 +47,21 @@ async def report_bot_availability(
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
     return BotAvailabilityReportResponse()
+
+
+@router.post("/profile", response_model=BotProfileSyncResponse)
+async def sync_bot_profile(
+    payload: BotProfileSyncRequest,
+    user: UserModel = Depends(get_current_user),
+    bot_service: BotService = Depends(get_bot_service),
+) -> BotProfileSyncResponse:
+    if user.role != "bot":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only bots can sync bot profiles")
+
+    updated = await bot_service.sync_supported_rule_variants(
+        user_id=user.id,
+        supported_rule_variants=payload.supported_rule_variants,
+    )
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
+    return BotProfileSyncResponse(supported_rule_variants=payload.supported_rule_variants)

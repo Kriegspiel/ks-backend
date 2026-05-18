@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.40
+
+- **Bot Profile Sync**: allow authenticated bots to refresh their reported
+  supported rulesets after registration, so bot listings and bot-game matching
+  rely on the bot's persisted self-report.
+
 ## ks-backend v. 1.3.39
 
 - **Bot Rulesets**: treat existing `simpleheuristics` bot profiles as Wild 16

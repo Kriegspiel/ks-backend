@@ -3,30 +3,39 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SupportedRuleVariant = str
 ALL_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
+SUPPORTED_RULE_VARIANT_VALUES = frozenset(ALL_SUPPORTED_RULE_VARIANTS)
 DEFAULT_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any"]
 BOT_SPECIFIC_DEFAULT_RULE_VARIANTS: dict[str, list[SupportedRuleVariant]] = {
     "randobot": ALL_SUPPORTED_RULE_VARIANTS,
     "randobotany": ["berkeley_any"],
-    "simpleheuristics": ["berkeley", "berkeley_any", "wild16"],
 }
-BOT_SPECIFIC_ADDITIONAL_RULE_VARIANTS: dict[str, list[SupportedRuleVariant]] = {
-    "simpleheuristics": ["wild16"],
-}
+
+
+def normalize_supported_rule_variants(value: list[str] | None) -> list[SupportedRuleVariant] | None:
+    if value is None:
+        return None
+
+    normalized: list[SupportedRuleVariant] = []
+    for item in value:
+        rule = item.strip()
+        if rule not in SUPPORTED_RULE_VARIANT_VALUES:
+            raise ValueError("Unsupported rule variant")
+        if rule not in normalized:
+            normalized.append(rule)
+    if not normalized:
+        raise ValueError("At least one supported rule variant is required")
+    return normalized
 
 
 def supported_rule_variants_for_bot(username: str, variants: object = None) -> list[SupportedRuleVariant]:
-    supported_rulesets = set(ALL_SUPPORTED_RULE_VARIANTS)
     normalized_username = username.strip().lower()
     if isinstance(variants, list) and variants:
-        filtered = [str(item) for item in variants if str(item) in supported_rulesets]
+        filtered = [str(item) for item in variants if str(item) in SUPPORTED_RULE_VARIANT_VALUES]
         if filtered:
-            for rule_variant in BOT_SPECIFIC_ADDITIONAL_RULE_VARIANTS.get(normalized_username, []):
-                if rule_variant not in filtered:
-                    filtered.append(rule_variant)
             return filtered
 
     return BOT_SPECIFIC_DEFAULT_RULE_VARIANTS.get(normalized_username, DEFAULT_SUPPORTED_RULE_VARIANTS).copy()
@@ -87,3 +96,24 @@ class BotAvailabilityReportResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ok: bool = True
+
+
+class BotProfileSyncRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    supported_rule_variants: list[SupportedRuleVariant]
+
+    @field_validator("supported_rule_variants")
+    @classmethod
+    def validate_supported_rule_variants(cls, value: list[str]) -> list[SupportedRuleVariant]:
+        normalized = normalize_supported_rule_variants(value)
+        if normalized is None:
+            raise ValueError("At least one supported rule variant is required")
+        return normalized
+
+
+class BotProfileSyncResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool = True
+    supported_rule_variants: list[SupportedRuleVariant]
