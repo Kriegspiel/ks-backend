@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.32
+
+- **Completed Game Finalization**: claim stats recording before updating player
+  totals so stale completed-game copies cannot double-count a finished game.
+
 ## ks-backend v. 1.3.31
 
 - **Users Tech Report**: exclude waiting and never-started live games from the

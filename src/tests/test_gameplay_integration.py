@@ -49,6 +49,8 @@ class FakeCollection:
             if self._matches(doc, query):
                 for key, value in update.get("$set", {}).items():
                     doc[key] = value
+                for key in update.get("$unset", {}):
+                    doc.pop(key, None)
                 for key, value in update.get("$inc", {}).items():
                     doc[key] = doc.get(key, 0) + value
                 for key, value in update.get("$push", {}).items():
@@ -60,11 +62,22 @@ class FakeCollection:
         return FakeCursor([d for d in self.docs if self._matches(d, query)])
 
     def _matches(self, doc: dict, query: dict) -> bool:
-        if "$or" in query:
-            return any(self._matches(doc, branch) for branch in query["$or"])
-
         for key, expected in query.items():
+            if key == "$or":
+                if any(self._matches(doc, branch) for branch in expected):
+                    continue
+                return False
             value = self._resolve(doc, key)
+            if isinstance(expected, dict):
+                if "$lt" in expected and not (value is not None and value < expected["$lt"]):
+                    return False
+                if "$lte" in expected and not (value is not None and value <= expected["$lte"]):
+                    return False
+                if "$gt" in expected and not (value is not None and value > expected["$gt"]):
+                    return False
+                if "$gte" in expected and not (value is not None and value >= expected["$gte"]):
+                    return False
+                continue
             if value != expected:
                 return False
         return True

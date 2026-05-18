@@ -90,6 +90,8 @@ class FakeGamesCollection:
             if self._matches(doc, query):
                 for key, value in update.get("$set", {}).items():
                     doc[key] = value
+                for key in update.get("$unset", {}):
+                    doc.pop(key, None)
                 return doc
         return None
 
@@ -101,10 +103,11 @@ class FakeGamesCollection:
         return FakeDeleteResult(0)
 
     def _matches(self, doc: dict, query: dict) -> bool:
-        if "$or" in query:
-            return any(self._matches(doc, branch) for branch in query["$or"])
-
         for key, expected in query.items():
+            if key == "$or":
+                if any(self._matches(doc, branch) for branch in expected):
+                    continue
+                return False
             value = self._resolve(doc, key)
             if isinstance(expected, dict):
                 if "$gte" in expected and not (value is not None and value >= expected["$gte"]):
@@ -1258,6 +1261,55 @@ async def test_finalize_completed_game_updates_stats_and_archive_for_all_outcome
     assert black_stats["results"]["overall"][black_bucket] == 1
     assert white_stats["results"]["vs_bots"][white_bucket] == 1
     assert black_stats["results"]["vs_humans"][black_bucket] == 1
+
+
+@pytest.mark.asyncio
+async def test_finalize_completed_game_does_not_record_stats_for_stale_completed_copy() -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    users = FakeUsersCollection(
+        docs=[
+            {
+                "_id": "white-user",
+                "username": "white",
+                "role": "user",
+                "stats": default_user_stats_payload(),
+            },
+            {
+                "_id": "black-bot",
+                "username": "blackbot",
+                "role": "bot",
+                "stats": default_user_stats_payload(),
+            },
+        ]
+    )
+    now = datetime(2026, 4, 7, tzinfo=UTC)
+    game = {
+        "_id": ObjectId(),
+        "game_code": "DONE43",
+        "rule_variant": "wild16",
+        "white": {"user_id": "white-user", "username": "white", "role": "user"},
+        "black": {"user_id": "black-bot", "username": "blackbot", "role": "bot"},
+        "state": "completed",
+        "result": {"winner": "white", "reason": "checkmate"},
+        "moves": [],
+        "created_at": now,
+        "updated_at": now,
+    }
+    stale_completed_copy = deepcopy(game)
+    games.docs.append(game)
+    service = GameService(games, archives_collection=archives, users_collection=users)
+
+    finalized = await service._finalize_completed_game(game)
+    repeated = await service._finalize_completed_game(stale_completed_copy)
+
+    assert repeated == finalized
+    assert len(archives.docs) == 1
+    assert games.docs == []
+    assert users.docs[0]["stats"]["games_played"] == 1
+    assert users.docs[1]["stats"]["games_played"] == 1
+    assert users.docs[1]["stats"]["games_lost"] == 1
+    assert archives.docs[0]["rating_snapshot"]["black_before"] == 1200
 
 
 @pytest.mark.asyncio
