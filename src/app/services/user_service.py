@@ -279,7 +279,7 @@ class UserService:
                 continue
             if value > 0:
                 return value
-        return UserService._completed_turn_count(game)
+        return 0
 
     async def _bot_profile_metrics(self, db: Any, user: dict[str, Any]) -> dict[str, Any]:
         user_id = str(user["_id"])
@@ -298,7 +298,6 @@ class UserService:
                 "state": 1,
                 "result": 1,
                 "rule_variant": 1,
-                "moves": 1,
                 "move_count": 1,
                 "turn_count": 1,
                 "time_control": 1,
@@ -452,7 +451,8 @@ class UserService:
         raw_results = raw_stats.get("results") if isinstance(raw_stats.get("results"), dict) else None
         result_keys = ("overall", "vs_humans", "vs_bots")
         has_results_shape = raw_results is not None and all(isinstance(raw_results.get(key), dict) for key in result_keys)
-        if has_results_shape and raw_stats.get("results_synced_at") and self._result_tracks_are_consistent(stats):
+        has_nonzero_summary = any(int(raw_stats.get(field, 0) or 0) for field in ("games_played", "games_won", "games_lost", "games_drawn"))
+        if has_results_shape and (raw_stats.get("results_synced_at") or has_nonzero_summary) and self._result_tracks_are_consistent(stats):
             user["stats"] = stats
             return user
 

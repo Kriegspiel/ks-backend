@@ -656,6 +656,7 @@ async def test_get_public_bot_profile_includes_generic_bot_metrics() -> None:
     assert metrics["opponents"][0] == {"username": "randobot", "role": "bot", "total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
     assert metrics["rulesets"][0] == {"rule_variant": "wild16", "total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
     assert archives.find_calls[0][0] == {"$or": [{"white.user_id": str(bot_id)}, {"black.user_id": str(bot_id)}]}
+    assert "moves" not in archives.find_calls[0][1]
 
 
 @pytest.mark.asyncio
@@ -710,6 +711,51 @@ async def test_get_public_profile_backfills_track_results() -> None:
     assert profile["stats"]["results"]["overall"]["games_played"] == 2
     assert profile["stats"]["results"]["vs_bots"]["games_won"] == 1
     assert profile["stats"]["results"]["vs_humans"]["games_lost"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_public_profile_keeps_consistent_unsynced_result_totals() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": user_id,
+            "username": "darkboardmcts",
+            "username_display": "Darkboard MCTS",
+            "email": "bot@example.com",
+            "email_verified": True,
+            "password_hash": "hash",
+            "auth_providers": ["local"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": {"owner_email": "bot@example.com"},
+            "stats": {
+                **default_user_stats_payload(),
+                "games_played": 2,
+                "games_lost": 2,
+                "results": {
+                    "overall": {"games_played": 2, "games_won": 0, "games_lost": 2, "games_drawn": 0},
+                    "vs_humans": {"games_played": 1, "games_won": 0, "games_lost": 1, "games_drawn": 0},
+                    "vs_bots": {"games_played": 1, "games_won": 0, "games_lost": 1, "games_drawn": 0},
+                },
+            },
+            "settings": {},
+            "role": "bot",
+            "status": "active",
+            "last_active_at": datetime(2026, 5, 18, tzinfo=UTC),
+            "created_at": datetime(2026, 5, 18, tzinfo=UTC),
+            "updated_at": datetime(2026, 5, 18, tzinfo=UTC),
+        }
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    profile = await service.get_public_profile(db, "darkboardmcts")
+
+    assert profile is not None
+    assert profile["stats"]["games_played"] == 2
+    assert profile["stats"]["results"]["vs_bots"]["games_played"] == 1
+    assert len(archives.find_calls) == 1
 
 
 @pytest.mark.asyncio
