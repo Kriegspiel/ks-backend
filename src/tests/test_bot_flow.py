@@ -623,6 +623,37 @@ async def test_bot_service_records_model_availability_for_authenticated_bot() ->
 
 
 @pytest.mark.asyncio
+async def test_bot_service_syncs_supported_rule_variants_for_authenticated_bot() -> None:
+    now = datetime(2026, 5, 18, 22, tzinfo=UTC)
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "simpleheuristics",
+            "username_display": "Simple Heuristics",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "Simple Heuristics",
+                "description": "Heuristic bot",
+                "supported_rule_variants": ["berkeley", "berkeley_any"],
+            },
+        }
+    )
+    service = BotService(users, now_factory=lambda: now)
+
+    updated = await service.sync_supported_rule_variants(
+        user_id=str(bot_id),
+        supported_rule_variants=["berkeley", "berkeley_any", "wild16"],
+    )
+
+    assert updated is users.docs[0]
+    assert users.docs[0]["bot_profile"]["supported_rule_variants"] == ["berkeley", "berkeley_any", "wild16"]
+    assert users.docs[0]["updated_at"] == now
+
+
+@pytest.mark.asyncio
 async def test_bot_service_hides_unlisted_bots() -> None:
     users = FakeUsersCollection()
     users.docs.extend(
@@ -894,10 +925,12 @@ def test_bot_service_supported_rule_variants_fallbacks_cover_randobotany() -> No
     assert BotService._supported_rule_variants({"username": "simpleheuristics", "bot_profile": {}}) == [
         "berkeley",
         "berkeley_any",
-        "wild16",
     ]
     assert BotService._supported_rule_variants(
-        {"username": "simpleheuristics", "bot_profile": {"supported_rule_variants": ["berkeley", "berkeley_any"]}}
+        {
+            "username": "simpleheuristics",
+            "bot_profile": {"supported_rule_variants": ["berkeley", "berkeley_any", "wild16"]},
+        }
     ) == [
         "berkeley",
         "berkeley_any",
@@ -981,3 +1014,58 @@ def test_bot_router_records_model_availability_for_authenticated_bot() -> None:
     assert response.json() == {"ok": True}
     assert users.docs[0]["bot_profile"]["model_availability"]["provider"] == "openai"
     assert users.docs[0]["bot_profile"]["model_availability"]["ready"] is False
+
+
+def test_bot_router_syncs_supported_rule_variants_for_authenticated_bot() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "simpleheuristics",
+            "username_display": "Simple Heuristics",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "Simple Heuristics",
+                "description": "Heuristic bot",
+                "listed": True,
+                "supported_rule_variants": ["berkeley", "berkeley_any"],
+            },
+        }
+    )
+
+    from app.routers import bot as bot_router_module
+
+    bot_router_module.get_db = lambda: type("Db", (), {"users": users})()
+    app.dependency_overrides[bot_router_module.get_current_user] = lambda: type(
+        "User", (), {"id": str(bot_id), "role": "bot"}
+    )()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/bots/profile",
+            json={"supported_rule_variants": ["berkeley", "berkeley_any", "wild16", "wild16"]},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "supported_rule_variants": ["berkeley", "berkeley_any", "wild16"]}
+    assert users.docs[0]["bot_profile"]["supported_rule_variants"] == ["berkeley", "berkeley_any", "wild16"]
+
+
+def test_bot_router_profile_sync_rejects_non_bot_user() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    users = FakeUsersCollection()
+
+    from app.routers import bot as bot_router_module
+
+    bot_router_module.get_db = lambda: type("Db", (), {"users": users})()
+    app.dependency_overrides[bot_router_module.get_current_user] = lambda: type(
+        "User", (), {"id": "user-1", "role": "user"}
+    )()
+
+    with TestClient(app) as client:
+        response = client.post("/api/bots/profile", json={"supported_rule_variants": ["wild16"]})
+
+    assert response.status_code == 403

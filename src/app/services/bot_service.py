@@ -36,6 +36,16 @@ class BotService:
         profile = doc.get("bot_profile") or {}
         return supported_rule_variants_for_bot(str(doc.get("username") or ""), profile.get("supported_rule_variants"))
 
+    @staticmethod
+    def _active_bot_queries(user_id: str) -> list[dict[str, Any]]:
+        queries: list[dict[str, Any]] = []
+        try:
+            queries.append({"_id": ObjectId(user_id), "role": "bot", "status": "active"})
+        except Exception:
+            pass
+        queries.append({"_id": user_id, "role": "bot", "status": "active"})
+        return queries
+
     @classmethod
     def model_availability_required_provider(cls, doc: dict[str, Any]) -> str | None:
         username = str(doc.get("username") or "").strip().lower()
@@ -111,14 +121,28 @@ class BotService:
             "checked_at": now,
         }
         update = {"$set": {"bot_profile.model_availability": availability, "updated_at": now}}
-        queries: list[dict[str, Any]] = []
-        try:
-            queries.append({"_id": ObjectId(user_id), "role": "bot", "status": "active"})
-        except Exception:
-            pass
-        queries.append({"_id": user_id, "role": "bot", "status": "active"})
 
-        for query in queries:
+        for query in self._active_bot_queries(user_id):
+            updated = await self._users.find_one_and_update(query, update, return_document=ReturnDocument.AFTER)
+            if updated is not None:
+                return updated
+        return None
+
+    async def sync_supported_rule_variants(
+        self,
+        *,
+        user_id: str,
+        supported_rule_variants: list[str],
+    ) -> dict[str, Any] | None:
+        now = self._now_factory()
+        update = {
+            "$set": {
+                "bot_profile.supported_rule_variants": list(supported_rule_variants),
+                "updated_at": now,
+            }
+        }
+
+        for query in self._active_bot_queries(user_id):
             updated = await self._users.find_one_and_update(query, update, return_document=ReturnDocument.AFTER)
             if updated is not None:
                 return updated

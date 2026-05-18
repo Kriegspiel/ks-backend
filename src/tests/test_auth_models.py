@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.models.auth import BotRegisterRequest, BotRegisterResponse, RegisterRequest
+from app.models.bot import BotProfileSyncRequest
 
 
 def test_register_request_rejects_invalid_email_format() -> None:
@@ -79,3 +80,14 @@ def test_bot_register_request_allows_supported_rule_variants_to_be_omitted() -> 
     )
 
     assert payload.supported_rule_variants is None
+
+
+def test_bot_profile_sync_request_validates_supported_rule_variants() -> None:
+    payload = BotProfileSyncRequest(supported_rule_variants=["wild16", "berkeley_any", "wild16"])
+    assert payload.supported_rule_variants == ["wild16", "berkeley_any"]
+
+    with pytest.raises(ValueError, match="Unsupported rule variant"):
+        BotProfileSyncRequest(supported_rule_variants=["standard"])
+
+    with pytest.raises(ValueError, match="At least one supported rule variant is required"):
+        BotProfileSyncRequest(supported_rule_variants=[])

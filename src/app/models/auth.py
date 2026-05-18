@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.bot import normalize_supported_rule_variants
+
 _USERNAME_PATTERN = r"^[a-zA-Z0-9_]+$"
-SUPPORTED_RULE_VARIANTS = frozenset({"berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"})
 
 
 class RegisterRequest(BaseModel):
@@ -82,18 +83,7 @@ class BotRegisterRequest(BaseModel):
     @field_validator("supported_rule_variants")
     @classmethod
     def validate_supported_rule_variants(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        normalized: list[str] = []
-        for item in value:
-            rule = item.strip()
-            if rule not in SUPPORTED_RULE_VARIANTS:
-                raise ValueError("Unsupported rule variant")
-            if rule not in normalized:
-                normalized.append(rule)
-        if not normalized:
-            raise ValueError("At least one supported rule variant is required")
-        return normalized
+        return normalize_supported_rule_variants(value)
 
 
 class BotRegisterResponse(BaseModel):
