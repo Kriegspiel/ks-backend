@@ -290,8 +290,6 @@ class UserService:
                 "$or": [
                     {"white.user_id": user_id},
                     {"black.user_id": user_id},
-                    {"white.username": username},
-                    {"black.username": username},
                 ],
             },
             {
