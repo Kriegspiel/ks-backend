@@ -8,6 +8,7 @@ from pymongo import UpdateOne
 from app.models.user import utcnow
 
 ARCHIVE_TURN_COUNT_MIGRATION_ID = "archive_turn_counts_v1"
+ARCHIVE_COUNT_MISSING_FILTER = {"$or": [{"move_count": {"$exists": False}}, {"turn_count": {"$exists": False}}]}
 
 
 def archive_count_fields(game: dict[str, Any]) -> dict[str, int]:
@@ -37,6 +38,52 @@ def _record_example(summary: dict[str, Any], key: str, doc: dict[str, Any], *, m
     examples = summary[key]
     if len(examples) < max_details:
         examples.append(_public_game_id(doc))
+
+
+def archive_count_update_pipeline() -> list[dict[str, Any]]:
+    moves_or_empty: dict[str, Any] = {"$cond": [{"$isArray": "$moves"}, "$moves", []]}
+    completed_plies = {
+        "$size": {
+            "$filter": {
+                "input": moves_or_empty,
+                "as": "move",
+                "cond": {
+                    "$cond": [
+                        {"$eq": [{"$type": "$$move"}, "object"]},
+                        {"$eq": ["$$move.move_done", True]},
+                        True,
+                    ]
+                },
+            }
+        }
+    }
+    return [
+        {
+            "$set": {
+                "move_count": {"$cond": [{"$isArray": "$moves"}, {"$size": "$moves"}, 0]},
+                "turn_count": {
+                    "$cond": [
+                        {"$isArray": "$moves"},
+                        {"$toInt": {"$ceil": {"$divide": [completed_plies, 2]}}},
+                        0,
+                    ]
+                },
+            }
+        }
+    ]
+
+
+async def backfill_archive_turn_counts_server_side(db: Any) -> dict[str, Any]:
+    result = await db.game_archives.update_many(
+        ARCHIVE_COUNT_MISSING_FILTER,
+        archive_count_update_pipeline(),
+    )
+    return {
+        "apply": True,
+        "mode": "server_side_update_many",
+        "matched": int(getattr(result, "matched_count", 0)),
+        "updated": int(getattr(result, "modified_count", 0)),
+    }
 
 
 async def backfill_archive_turn_counts(
@@ -116,7 +163,7 @@ async def run_archive_turn_count_migration_once(db: Any, *, batch_size: int = 50
         upsert=True,
     )
     try:
-        summary = await backfill_archive_turn_counts(db, apply=True, batch_size=batch_size)
+        summary = await backfill_archive_turn_counts_server_side(db)
     except Exception as exc:
         failed_at = utcnow()
         await db.maintenance_state.update_one(

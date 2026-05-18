@@ -13,14 +13,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.services.archive_turn_counts import (  # noqa: E402
+    ARCHIVE_COUNT_MISSING_FILTER,
     archive_count_fields,
     backfill_archive_turn_counts,
+    backfill_archive_turn_counts_server_side,
     run_archive_turn_count_migration_once,
 )
 
 
 class FakeBulkResult:
     def __init__(self, modified_count: int):
+        self.modified_count = modified_count
+
+
+class FakeUpdateResult:
+    def __init__(self, *, matched_count: int, modified_count: int):
+        self.matched_count = matched_count
         self.modified_count = modified_count
 
 
@@ -49,6 +57,7 @@ class FakeArchiveCollection:
         self.docs = docs
         self.find_calls: list[tuple[dict, dict | None]] = []
         self.bulk_calls: list[list[UpdateOne]] = []
+        self.update_many_calls: list[tuple[dict, list[dict]]] = []
 
     def find(self, query: dict, projection: dict | None = None):
         self.find_calls.append((query, projection))
@@ -68,6 +77,20 @@ class FakeArchiveCollection:
                     modified += 1 if before != values else 0
                     break
         return FakeBulkResult(modified)
+
+    async def update_many(self, query: dict, update: list[dict]):
+        self.update_many_calls.append((query, update))
+        matched = 0
+        modified = 0
+        for doc in self.docs:
+            if "move_count" in doc and "turn_count" in doc:
+                continue
+            matched += 1
+            counts = archive_count_fields(doc)
+            before = {key: doc.get(key) for key in counts}
+            doc.update(counts)
+            modified += 1 if before != counts else 0
+        return FakeUpdateResult(matched_count=matched, modified_count=modified)
 
     @staticmethod
     def _project(doc: dict, projection: dict | None):
@@ -148,6 +171,27 @@ async def test_backfill_archive_turn_counts_apply_updates_in_batches() -> None:
 
 
 @pytest.mark.asyncio
+async def test_backfill_archive_turn_counts_server_side_updates_only_missing_counts() -> None:
+    first = {"_id": ObjectId(), "game_code": "ABC123", "moves": [{"move_done": True}, {"move_done": True}]}
+    current = {"_id": ObjectId(), "game_code": "CUR123", "moves": [], "move_count": 0, "turn_count": 0}
+    db = FakeDB([first, current])
+
+    summary = await backfill_archive_turn_counts_server_side(db)
+
+    assert summary == {
+        "apply": True,
+        "mode": "server_side_update_many",
+        "matched": 1,
+        "updated": 1,
+    }
+    assert db.game_archives.update_many_calls[0][0] == ARCHIVE_COUNT_MISSING_FILTER
+    assert isinstance(db.game_archives.update_many_calls[0][1], list)
+    assert db.game_archives.docs[0]["move_count"] == 2
+    assert db.game_archives.docs[0]["turn_count"] == 1
+    assert db.game_archives.docs[1] == current
+
+
+@pytest.mark.asyncio
 async def test_run_archive_turn_count_migration_once_records_completion_marker() -> None:
     game = {"_id": ObjectId(), "game_code": "ABC123", "moves": [{"move_done": True}, {"move_done": True}]}
     db = FakeDB([game])
@@ -160,4 +204,6 @@ async def test_run_archive_turn_count_migration_once_records_completion_marker()
     marker = next(iter(db.maintenance_state.docs.values()))
     assert marker["status"] == "completed"
     assert marker["summary"]["updated"] == 1
+    assert db.game_archives.find_calls == []
+    assert len(db.game_archives.update_many_calls) == 1
     assert second_summary["skipped"] is True
