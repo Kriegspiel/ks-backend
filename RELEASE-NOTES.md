@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.39
+
+- **Bot Rulesets**: treat existing `simpleheuristics` bot profiles as Wild 16
+  compatible, even when their stored profile predates the Wild 16 runtime
+  support.
+
 ## ks-backend v. 1.3.33
 
 - **Profile Stats**: repair inconsistent profile result totals from archived

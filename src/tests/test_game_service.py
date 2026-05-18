@@ -1551,6 +1551,18 @@ def test_result_scoresheet_and_bot_variant_helpers_cover_uncommon_branches() -> 
         "berkeley",
         "berkeley_any",
     ]
+    assert GameService._bot_supported_rule_variants({"username": "simpleheuristics", "bot_profile": {}}) == [
+        "berkeley",
+        "berkeley_any",
+        "wild16",
+    ]
+    assert GameService._bot_supported_rule_variants(
+        {"username": "simpleheuristics", "bot_profile": {"supported_rule_variants": ["berkeley", "berkeley_any"]}}
+    ) == [
+        "berkeley",
+        "berkeley_any",
+        "wild16",
+    ]
     assert GameService._bot_supported_rule_variants(
         {"username": "custombot", "bot_profile": {"supported_rule_variants": ["wild16"]}}
     ) == [

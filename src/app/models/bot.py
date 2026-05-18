@@ -11,17 +11,24 @@ DEFAULT_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any"]
 BOT_SPECIFIC_DEFAULT_RULE_VARIANTS: dict[str, list[SupportedRuleVariant]] = {
     "randobot": ALL_SUPPORTED_RULE_VARIANTS,
     "randobotany": ["berkeley_any"],
+    "simpleheuristics": ["berkeley", "berkeley_any", "wild16"],
+}
+BOT_SPECIFIC_ADDITIONAL_RULE_VARIANTS: dict[str, list[SupportedRuleVariant]] = {
+    "simpleheuristics": ["wild16"],
 }
 
 
 def supported_rule_variants_for_bot(username: str, variants: object = None) -> list[SupportedRuleVariant]:
     supported_rulesets = set(ALL_SUPPORTED_RULE_VARIANTS)
+    normalized_username = username.strip().lower()
     if isinstance(variants, list) and variants:
         filtered = [str(item) for item in variants if str(item) in supported_rulesets]
         if filtered:
+            for rule_variant in BOT_SPECIFIC_ADDITIONAL_RULE_VARIANTS.get(normalized_username, []):
+                if rule_variant not in filtered:
+                    filtered.append(rule_variant)
             return filtered
 
-    normalized_username = username.strip().lower()
     return BOT_SPECIFIC_DEFAULT_RULE_VARIANTS.get(normalized_username, DEFAULT_SUPPORTED_RULE_VARIANTS).copy()
 
 
