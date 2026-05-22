@@ -28,6 +28,13 @@ _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS = {
     'CHECK_KNIGHT',
     'CHECK_DOUBLE',
 }
+_SINGLE_CHECK_ANNOUNCEMENTS = {
+    'CHECK_RANK',
+    'CHECK_FILE',
+    'CHECK_LONG_DIAGONAL',
+    'CHECK_SHORT_DIAGONAL',
+    'CHECK_KNIGHT',
+}
 
 _PUBLIC_ANNOUNCEMENT_TEXT = {
     'ILLEGAL_MOVE': 'Illegal move',
@@ -116,6 +123,20 @@ def _format_public_announcement(
             return f'{label} captured at {capture_square.upper()}'
         return f'{text} at {capture_square.upper()}'
     return text
+
+
+def _special_announcement_codes(special_announcement: Any, checks: Any) -> list[str]:
+    if not isinstance(special_announcement, str) or special_announcement not in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
+        return []
+
+    codes = [special_announcement]
+    if special_announcement != 'CHECK_DOUBLE' or not isinstance(checks, list):
+        return codes
+
+    for check in checks[:2]:
+        if isinstance(check, str) and check in _SINGLE_CHECK_ANNOUNCEMENTS:
+            codes.append(check)
+    return codes
 
 
 def _format_piece_announcement(value: Any) -> str:
@@ -235,8 +256,8 @@ def _move_messages(move: dict[str, Any]) -> list[str]:
     if move.get('promotion_announced') is True:
         out.append('Promotion')
 
-    if special_announcement in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
-        out.append(_format_public_announcement(special_announcement, None))
+    for code in _special_announcement_codes(special_announcement, move.get('checks')):
+        out.append(_format_public_announcement(code, None))
 
     return [item for item in out if item]
 
@@ -292,12 +313,12 @@ def build_referee_log(moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
 
-        if special_announcement in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
+        for code in _special_announcement_codes(special_announcement, move.get('checks')):
             out.append(
                 {
                     **base_item,
-                    'announcement': special_announcement,
-                    'special_announcement': special_announcement,
+                    'announcement': code,
+                    'special_announcement': code,
                     'capture_square': None,
                 }
             )
@@ -465,7 +486,7 @@ def reconstruct_scoresheets_from_moves(moves: list[dict[str, Any]]) -> dict[str,
                 'next_turn_pawn_tries': move.get('next_turn_pawn_tries'),
                 'next_turn_has_pawn_capture': move.get('next_turn_has_pawn_capture'),
                 'next_turn_pawn_try_squares': move.get('next_turn_pawn_try_squares'),
-                'checks': [],
+                'checks': move.get('checks') if isinstance(move.get('checks'), list) else [],
                 'move_done': bool(move.get('move_done', False)),
             },
         }
@@ -547,8 +568,8 @@ def _scoresheet_answer_texts(answer: dict[str, Any]) -> list[str]:
             )
         )
     special = answer.get('special_announcement')
-    if isinstance(special, str) and special in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
-        texts.append(_format_public_announcement(special, None))
+    for code in _special_announcement_codes(special, answer.get('checks')):
+        texts.append(_format_public_announcement(code, None))
     dropped_piece = _format_piece_announcement(answer.get('dropped_piece_announcement'))
     if dropped_piece:
         texts.append(f'{dropped_piece} dropped')

@@ -92,7 +92,8 @@ def game_docs() -> tuple[dict, dict, dict]:
                 "question_type": "COMMON",
                 "uci": "e2e4",
                 "announcement": "REGULAR_MOVE",
-                "special_announcement": None,
+                "special_announcement": "CHECK_DOUBLE",
+                "checks": ["CHECK_KNIGHT", "CHECK_FILE"],
                 "capture_square": None,
                 "move_done": True,
                 "timestamp": now,
@@ -141,6 +142,8 @@ async def test_get_game_transcript_access_matrix_for_live_and_archived_games(gam
     participant = await service.get_game_transcript(game_id=str(active["_id"]), user_id="u1")
     assert participant.viewer_color == "white"
     assert participant.moves[0].answer.main == "REGULAR_MOVE"
+    assert participant.moves[0].answer.special == "CHECK_DOUBLE"
+    assert participant.moves[0].answer.checks == ["CHECK_KNIGHT", "CHECK_FILE"]
     assert participant.moves[0].replay_fen is not None
     assert participant.moves[0].replay_fen.full.startswith("rnbqkbnr")
 

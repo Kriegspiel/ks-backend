@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.41
+
+- **Double Check Announcements**: expose both component check directions in
+  move responses, referee logs, scoresheets, and review transcripts whenever
+  the engine reports a double check.
+
 ## ks-backend v. 1.3.40
 
 - **Bot Profile Sync**: allow authenticated bots to refresh their reported

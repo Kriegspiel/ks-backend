@@ -119,6 +119,7 @@ class MoveResponse(BaseModel):
     move_done: bool
     announcement: str
     special_announcement: str | None = None
+    checks: list[str] = Field(default_factory=list)
     capture_square: str | None = None
     captured_piece_announcement: PieceAnnouncement | None = None
     dropped_piece_announcement: PieceAnnouncement | None = None
@@ -275,6 +276,7 @@ class TranscriptAnswer(BaseModel):
     dropped_piece_announcement: PieceAnnouncement | None = None
     promotion_announced: bool | None = None
     special: str | None = None
+    checks: list[str] = Field(default_factory=list)
     next_turn_pawn_tries: int | None = Field(default=None, ge=0)
     next_turn_has_pawn_capture: bool | None = None
     next_turn_pawn_try_squares: list[str] | None = None
