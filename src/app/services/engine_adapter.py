@@ -132,6 +132,7 @@ def attempt_move(game: KriegspielGame, move_uci: str) -> dict[str, Any]:
             "move_done": False,
             "announcement": "INVALID_UCI",
             "special_announcement": None,
+            "checks": [],
             "capture_square": None,
             "captured_piece_announcement": None,
             "dropped_piece_announcement": None,
@@ -316,12 +317,14 @@ def _answer_payload(game: KriegspielGame, answer: Any) -> dict[str, Any]:
     captured_piece = answer.captured_piece_announcement
     dropped_piece = answer.dropped_piece_announcement
     special = answer.special_announcement
+    checks = _answer_check_names(answer)
     pawn_try_squares = answer.next_turn_pawn_try_squares
 
     return {
         "move_done": bool(answer.move_done),
         "announcement": answer.main_announcement.name,
         "special_announcement": None if special is None or special == SpecialCaseAnnouncement.NONE else special.name,
+        "checks": checks,
         "capture_square": capture_square,
         "captured_piece_announcement": (
             captured_piece.name if isinstance(captured_piece, CapturedPieceAnnouncement) else None
@@ -341,6 +344,14 @@ def _answer_payload(game: KriegspielGame, answer: Any) -> dict[str, Any]:
         "turn": "white" if game.turn == chess.WHITE else "black",
         "game_over": bool(game.game_over),
     }
+
+
+def _answer_check_names(answer: Any) -> list[str]:
+    checks: list[str] = []
+    for check in (getattr(answer, "check_1", None), getattr(answer, "check_2", None)):
+        if isinstance(check, SpecialCaseAnnouncement):
+            checks.append(check.name)
+    return checks
 
 
 def _serialize_color(value: Any) -> str | None:

@@ -19,9 +19,23 @@ def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_
         {
             "main_announcement": "REGULAR_MOVE",
             "special_announcement": "CHECK_DOUBLE",
+            "checks": ["CHECK_KNIGHT", "CHECK_LONG_DIAGONAL"],
             "capture_square": None,
         }
-    ) == ["Move complete", "Double check"]
+    ) == ["Move complete", "Double check", "Check by knight", "Check on long diagonal"]
+    assert [
+        item["announcement"]
+        for item in projection.build_referee_log(
+            [
+                {
+                    "ply": 1,
+                    "announcement": "REGULAR_MOVE",
+                    "special_announcement": "CHECK_DOUBLE",
+                    "checks": ["CHECK_RANK", "CHECK_FILE"],
+                }
+            ]
+        )
+    ] == ["REGULAR_MOVE", "CHECK_DOUBLE", "CHECK_RANK", "CHECK_FILE"]
 
 
 def test_state_projection_turn_and_referee_helpers_skip_unrecognized_entries(monkeypatch) -> None:

@@ -56,6 +56,23 @@ def test_create_new_game_and_legal_move_succeeds() -> None:
     assert result["announcement"] in {"REGULAR_MOVE", "CAPTURE_DONE"}
 
 
+def test_attempt_move_surfaces_double_check_component_announcements() -> None:
+    game = create_new_game(rule_variant="berkeley")
+    board = game._board  # noqa: SLF001
+    board.clear()
+    board.set_piece_at(chess.C2, chess.Piece(chess.KING, chess.WHITE))
+    board.set_piece_at(chess.H8, chess.Piece(chess.KING, chess.BLACK))
+    board.set_piece_at(chess.E2, chess.Piece(chess.QUEEN, chess.BLACK))
+    board.set_piece_at(chess.D2, chess.Piece(chess.KNIGHT, chess.BLACK))
+    game._generate_possible_to_ask_list()  # noqa: SLF001
+
+    assert attempt_move(game, "c2b2")["announcement"] == "REGULAR_MOVE"
+    result = attempt_move(game, "d2c4")
+
+    assert result["special_announcement"] == "CHECK_DOUBLE"
+    assert result["checks"] == ["CHECK_RANK", "CHECK_KNIGHT"]
+
+
 def test_illegal_move_returns_classified_announcement() -> None:
     game = create_new_game(any_rule=True)
 
@@ -177,6 +194,7 @@ def test_invalid_uci_and_default_scoresheet_serialization_are_stable() -> None:
         "move_done": False,
         "announcement": "INVALID_UCI",
         "special_announcement": None,
+        "checks": [],
         "capture_square": None,
         "captured_piece_announcement": None,
         "dropped_piece_announcement": None,
