@@ -1404,6 +1404,10 @@ class GameService:
             return {"winner": "black", "reason": "checkmate"}
         if special_announcement == "DRAW_STALEMATE":
             return {"winner": None, "reason": "stalemate"}
+        if special_announcement == "STALEMATE_WHITE_WINS":
+            return {"winner": "white", "reason": "stalemate"}
+        if special_announcement == "STALEMATE_BLACK_WINS":
+            return {"winner": "black", "reason": "stalemate"}
         if special_announcement == "DRAW_INSUFFICIENT":
             return {"winner": None, "reason": "insufficient"}
         if special_announcement == "DRAW_TOOMANYREVERSIBLEMOVES":

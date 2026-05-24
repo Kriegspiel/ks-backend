@@ -1171,6 +1171,7 @@ def test_helper_edges_cover_password_parsing_datetime_and_result_reasoning() -> 
         UserService._normalized_result_reason({"moves": [{"special_announcement": "DRAW_TOOMANYREVERSIBLEMOVES"}]})
         == "too_many_reversible_moves"
     )
+    assert UserService._normalized_result_reason({"moves": [{"special_announcement": "STALEMATE_BLACK_WINS"}]}) == "stalemate"
     assert UserService._normalized_result_reason({"moves": [{"special_announcement": "CHECKMATE_BLACK_WINS"}]}) == "checkmate"
 
 

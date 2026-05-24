@@ -677,9 +677,15 @@ def test_build_referee_log_filters_private_announcements_but_keeps_all_public_an
                 "special_announcement": "DRAW_TOOMANYREVERSIBLEMOVES",
                 "timestamp": now,
             },
+            {
+                "ply": 5,
+                "announcement": "REGULAR_MOVE",
+                "special_announcement": "STALEMATE_WHITE_WINS",
+                "timestamp": now,
+            },
         ]
     )
-    assert len(log) == 6
+    assert len(log) == 8
     assert log[0]["announcement"] == "REGULAR_MOVE"
     assert log[1]["announcement"] == "ILLEGAL_MOVE"
     assert log[2]["announcement"] == "CAPTURE_DONE"
@@ -688,6 +694,8 @@ def test_build_referee_log_filters_private_announcements_but_keeps_all_public_an
     assert log[3]["capture_square"] is None
     assert log[4]["announcement"] == "REGULAR_MOVE"
     assert log[5]["announcement"] == "DRAW_TOOMANYREVERSIBLEMOVES"
+    assert log[6]["announcement"] == "REGULAR_MOVE"
+    assert log[7]["announcement"] == "STALEMATE_WHITE_WINS"
 
 
 def test_build_referee_turns_records_illegal_move_announcements() -> None:
@@ -699,6 +707,41 @@ def test_build_referee_turns_records_illegal_move_announcements() -> None:
     )
 
     assert turns == [{"turn": 1, "white": [{"kind": "illegal_move", "actor": "self", "prompt": "Move attempt", "message": "Move attempt — Illegal move", "messages": ["Illegal move"], "move_uci": "e2e4", "question_type": "COMMON"}], "black": []}]
+
+
+def test_build_referee_turns_formats_rand_stalemate_winner_announcements() -> None:
+    now = datetime.now(UTC)
+    turns = build_referee_turns(
+        [
+            {
+                "ply": 1,
+                "color": "white",
+                "question_type": "COMMON",
+                "uci": "g5g6",
+                "announcement": "REGULAR_MOVE",
+                "special_announcement": "STALEMATE_WHITE_WINS",
+                "timestamp": now,
+            },
+        ]
+    )
+
+    assert turns == [
+        {
+            "turn": 1,
+            "white": [
+                {
+                    "kind": "move",
+                    "actor": "self",
+                    "prompt": "Move attempt",
+                    "message": "Move attempt — Move complete · Stalemate — White wins",
+                    "messages": ["Move complete", "Stalemate — White wins"],
+                    "move_uci": "g5g6",
+                    "question_type": "COMMON",
+                }
+            ],
+            "black": [],
+        }
+    ]
 
 
 def test_build_referee_turns_groups_live_moves_by_turn_and_color() -> None:

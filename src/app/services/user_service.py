@@ -108,7 +108,6 @@ class UserService:
     def issue_bot_token() -> tuple[str, str, str]:
         token_id = secrets.token_hex(8)
         token_secret = secrets.token_urlsafe(24)
-        token = f"ksbot_{token_id}.{token_secret}"
         token_digest = UserService.bot_token_digest(token_secret)
         return token_id, token_secret, token_digest
 
@@ -179,6 +178,8 @@ class UserService:
                 return "stalemate"
             if special == "DRAW_TOOMANYREVERSIBLEMOVES":
                 return "too_many_reversible_moves"
+            if special in {"STALEMATE_WHITE_WINS", "STALEMATE_BLACK_WINS"}:
+                return "stalemate"
             if special in {"CHECKMATE_WHITE_WINS", "CHECKMATE_BLACK_WINS"}:
                 return "checkmate"
         return None
