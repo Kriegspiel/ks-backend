@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-# Curated from public chess-player name lists such as FIDE rankings and
-# grandmaster lists. The generator combines these as guest_first_last.
+# Guest usernames combine one token from each tuple as guest_first_last.
+# The pools are curated name tokens, not pair-preserving full names:
+# - public chess-player first and last names, such as FIDE rankings and
+#   grandmaster lists
+# - normalized first/last tokens for people cited in content/blog posts,
+#   including research-paper, book, manuscript, and problem-composer names.
+#   Blog citations with only initials keep the visible first initial as a
+#   first-name token; compound surnames are ASCII-collapsed when needed.
 GUEST_FIRST_NAMES = tuple(
     """
     adolf akiba alexander alexandra alexei
@@ -44,6 +50,12 @@ GUEST_FIRST_NAMES = tuple(
     vidit raunak nihal maurice aravind
     koneru irina valentina ekaterina xu
     ju wenjun zhu zhongyi andrei
+    gerald henry thomas paolo jason
+    stuart lloyd makoto hiroyuki jin
+    austin dana edward gian piero
+    giampiero francesco marco alessandro henk
+    pien h c t k
+    v g j
     """.split()
 )
 
@@ -89,5 +101,12 @@ GUEST_LAST_NAMES = tuple(
     vanforeest vahap vitiugov volokitin yudasin
     yusupov zherebukh zhigalko simagin smirin
     so sveshnikov torre unzicker yermolinsky
+    temple cayley anderson ferguson ciancarini
+    wolfe russell shapley sakuta iida
+    yoshimura parker nau subrahmanian li
+    winter matros favini maran collareda
+    bolognesi wetherell buckholtz booth swart
+    dawson tencate foster roche loustau
+    rotenberg macqueen
     """.split()
 )

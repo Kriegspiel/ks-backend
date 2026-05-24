@@ -227,12 +227,18 @@ async def test_create_user_stores_canonical_username_display_and_hashed_password
 
 
 def test_guest_name_pools_have_expected_size_and_safe_shape() -> None:
-    assert len(GUEST_FIRST_NAMES) == 201
-    assert len(GUEST_LAST_NAMES) == 200
-    assert UserService.guest_name_pool_size() == 40_200
-    assert len(set(GUEST_FIRST_NAMES)) == 201
-    assert len(set(GUEST_LAST_NAMES)) == 200
+    assert len(GUEST_FIRST_NAMES) == 229
+    assert len(GUEST_LAST_NAMES) == 232
+    assert UserService.guest_name_pool_size() == 53_128
+    assert len(set(GUEST_FIRST_NAMES)) == 229
+    assert len(set(GUEST_LAST_NAMES)) == 232
     assert "magnus" in GUEST_FIRST_NAMES
+    assert "paolo" in GUEST_FIRST_NAMES
+    assert "pien" in GUEST_FIRST_NAMES
+    assert "j" in GUEST_FIRST_NAMES
+    assert "ciancarini" in GUEST_LAST_NAMES
+    assert "tencate" in GUEST_LAST_NAMES
+    assert "loustau" in GUEST_LAST_NAMES
     assert all(name.isascii() and name.isalnum() and name == name.lower() for name in GUEST_FIRST_NAMES)
     assert all(name.isascii() and name.isalnum() and name == name.lower() for name in GUEST_LAST_NAMES)
     assert all(len(UserService._guest_username_for_index(index)) <= 33 for index in range(UserService.guest_name_pool_size()))
