@@ -1497,6 +1497,8 @@ async def test_count_documents_and_game_id_resolution_cover_fallback_paths() -> 
 def test_result_scoresheet_and_bot_variant_helpers_cover_uncommon_branches() -> None:
     assert GameService._final_result_from_special("CHECKMATE_BLACK_WINS") == {"winner": "black", "reason": "checkmate"}
     assert GameService._final_result_from_special("DRAW_STALEMATE") == {"winner": None, "reason": "stalemate"}
+    assert GameService._final_result_from_special("STALEMATE_WHITE_WINS") == {"winner": "white", "reason": "stalemate"}
+    assert GameService._final_result_from_special("STALEMATE_BLACK_WINS") == {"winner": "black", "reason": "stalemate"}
     assert GameService._final_result_from_special("DRAW_TOOMANYREVERSIBLEMOVES") == {
         "winner": None,
         "reason": "too_many_reversible_moves",
@@ -1514,6 +1516,10 @@ def test_result_scoresheet_and_bot_variant_helpers_cover_uncommon_branches() -> 
             {"special_announcement": "DRAW_STALEMATE"},
         ],
     ) == {"winner": "black", "reason": "stalemate"}
+    assert GameService._normalized_result(
+        result=None,
+        moves=[{"special_announcement": "STALEMATE_WHITE_WINS"}],
+    ) == {"winner": "white", "reason": "stalemate"}
 
     engine = create_new_game(any_rule=True)
     engine_scoresheets = GameService._stored_scoresheets({"moves": []}, engine)

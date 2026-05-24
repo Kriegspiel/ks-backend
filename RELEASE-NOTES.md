@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.44
+
+- **RAND Stalemate Results**: record RAND stalemates as wins for the
+  non-stalemated side, and expose the public stalemate winner announcement in
+  game state/history projections.
+
 ## ks-backend v. 1.3.43
 
 - **Guest Name Pool**: removed single-letter first-name tokens from the
