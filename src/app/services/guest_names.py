@@ -6,8 +6,8 @@ from __future__ import annotations
 #   grandmaster lists
 # - normalized first/last tokens for people cited in content/blog posts,
 #   including research-paper, book, manuscript, and problem-composer names.
-#   Blog citations with only initials keep the visible first initial as a
-#   first-name token; compound surnames are ASCII-collapsed when needed.
+#   Blog citations with only initials contribute surname tokens only; compound
+#   surnames are ASCII-collapsed when needed.
 GUEST_FIRST_NAMES = tuple(
     """
     adolf akiba alexander alexandra alexei
@@ -54,8 +54,7 @@ GUEST_FIRST_NAMES = tuple(
     stuart lloyd makoto hiroyuki jin
     austin dana edward gian piero
     giampiero francesco marco alessandro henk
-    pien h c t k
-    v g j
+    pien
     """.split()
 )
 
