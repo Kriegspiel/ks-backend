@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.42
+
+- **Guest Name Pool**: added normalized first and last name tokens for people
+  cited in the blog corpus, expanding guest username combinations from 40,200
+  to 53,128 and documenting what sources feed the pool.
+
 ## ks-backend v. 1.3.41
 
 - **Double Check Announcements**: expose both component check directions in
