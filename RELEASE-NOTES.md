@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.46
+
+- **Engine State Compatibility**: accept canonical engine-state schema `8`
+  when loading active CrazyKrieg games after the English en-passant engine
+  schema bump.
+
 ## ks-backend v. 1.3.45
 
 - **English En Passant**: carry the engine's English en-passant announcement
