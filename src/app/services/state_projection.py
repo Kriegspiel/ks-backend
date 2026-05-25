@@ -109,6 +109,7 @@ def _format_public_announcement(
     capture_square: str | None,
     *,
     captured_piece_announcement: str | None = None,
+    en_passant_announced: bool | None = None,
 ) -> str:
     text = _PUBLIC_ANNOUNCEMENT_TEXT.get(code)
     if not text:
@@ -122,6 +123,8 @@ def _format_public_announcement(
             'ROOK': 'Rook',
             'QUEEN': 'Queen',
         }
+        if en_passant_announced is True:
+            return f'En passant capture at {capture_square.upper()}'
         label = captured_piece_labels.get(captured_piece_announcement or '')
         if label:
             return f'{label} captured at {capture_square.upper()}'
@@ -250,6 +253,7 @@ def _move_messages(move: dict[str, Any]) -> list[str]:
                 announcement,
                 capture_square,
                 captured_piece_announcement=captured_piece_announcement,
+                en_passant_announced=move.get('en_passant_announced'),
             )
         )
 
@@ -486,6 +490,7 @@ def reconstruct_scoresheets_from_moves(moves: list[dict[str, Any]]) -> dict[str,
                 'capture_square': move.get('capture_square'),
                 'captured_piece_announcement': move.get('captured_piece_announcement'),
                 'dropped_piece_announcement': move.get('dropped_piece_announcement'),
+                'en_passant_announced': move.get('en_passant_announced'),
                 'promotion_announced': move.get('promotion_announced'),
                 'next_turn_pawn_tries': move.get('next_turn_pawn_tries'),
                 'next_turn_has_pawn_capture': move.get('next_turn_has_pawn_capture'),
@@ -569,6 +574,7 @@ def _scoresheet_answer_texts(answer: dict[str, Any]) -> list[str]:
                 main,
                 answer.get('capture_square'),
                 captured_piece_announcement=answer.get('captured_piece_announcement'),
+                en_passant_announced=answer.get('en_passant_announced'),
             )
         )
     special = answer.get('special_announcement')

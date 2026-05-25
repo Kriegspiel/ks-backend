@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.45
+
+- **English En Passant**: carry the engine's English en-passant announcement
+  flag through move responses, stored scoresheets, transcripts, and referee
+  log text.
+
 ## ks-backend v. 1.3.44
 
 - **RAND Stalemate Results**: record RAND stalemates as wins for the

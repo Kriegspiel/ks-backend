@@ -8,13 +8,58 @@ from app.services import state_projection as projection
 def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_paths() -> None:
     assert projection._format_public_announcement("UNKNOWN", None) == ""
     assert projection._format_public_announcement("CAPTURE_DONE", "d4") == "Capture done at D4"
-    assert projection._format_public_announcement("CAPTURE_DONE", "d4", captured_piece_announcement="PAWN") == "Pawn captured at D4"
-    assert projection._format_public_announcement("CAPTURE_DONE", "d4", captured_piece_announcement="KNIGHT") == "Knight captured at D4"
-    assert projection._next_turn_message(next_turn_pawn_tries=2, next_turn_has_pawn_capture=None, next_turn_pawn_try_squares=None) == "2 pawn tries"
-    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=True, next_turn_pawn_try_squares=None) == "Has pawn capture"
-    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=False, next_turn_pawn_try_squares=None) == "No pawn captures"
-    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=None, next_turn_pawn_try_squares=["e4", "c2"]) == "Pawn tries from E4, C2"
-    assert projection._next_turn_message(next_turn_pawn_tries=None, next_turn_has_pawn_capture=None, next_turn_pawn_try_squares=[44]) == "Pawn try from E6"
+    assert (
+        projection._format_public_announcement("CAPTURE_DONE", "d4", captured_piece_announcement="PAWN")
+        == "Pawn captured at D4"
+    )
+    assert (
+        projection._format_public_announcement("CAPTURE_DONE", "d4", captured_piece_announcement="KNIGHT")
+        == "Knight captured at D4"
+    )
+    assert (
+        projection._format_public_announcement("CAPTURE_DONE", "f6", en_passant_announced=True)
+        == "En passant capture at F6"
+    )
+    assert (
+        projection._next_turn_message(
+            next_turn_pawn_tries=2,
+            next_turn_has_pawn_capture=None,
+            next_turn_pawn_try_squares=None,
+        )
+        == "2 pawn tries"
+    )
+    assert (
+        projection._next_turn_message(
+            next_turn_pawn_tries=None,
+            next_turn_has_pawn_capture=True,
+            next_turn_pawn_try_squares=None,
+        )
+        == "Has pawn capture"
+    )
+    assert (
+        projection._next_turn_message(
+            next_turn_pawn_tries=None,
+            next_turn_has_pawn_capture=False,
+            next_turn_pawn_try_squares=None,
+        )
+        == "No pawn captures"
+    )
+    assert (
+        projection._next_turn_message(
+            next_turn_pawn_tries=None,
+            next_turn_has_pawn_capture=None,
+            next_turn_pawn_try_squares=["e4", "c2"],
+        )
+        == "Pawn tries from E4, C2"
+    )
+    assert (
+        projection._next_turn_message(
+            next_turn_pawn_tries=None,
+            next_turn_has_pawn_capture=None,
+            next_turn_pawn_try_squares=[44],
+        )
+        == "Pawn try from E6"
+    )
     assert projection._scoresheet_answer_texts(
         {
             "main_announcement": "REGULAR_MOVE",
@@ -23,6 +68,13 @@ def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_
             "capture_square": None,
         }
     ) == ["Move complete", "Double check", "Check by knight", "Check on long diagonal"]
+    assert projection._scoresheet_answer_texts(
+        {
+            "main_announcement": "CAPTURE_DONE",
+            "capture_square": "f6",
+            "en_passant_announced": True,
+        }
+    ) == ["En passant capture at F6"]
     assert [
         item["announcement"]
         for item in projection.build_referee_log(

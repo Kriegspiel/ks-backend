@@ -136,6 +136,7 @@ def attempt_move(game: KriegspielGame, move_uci: str) -> dict[str, Any]:
             "capture_square": None,
             "captured_piece_announcement": None,
             "dropped_piece_announcement": None,
+            "en_passant_announced": None,
             "promotion_announced": None,
             "next_turn_pawn_tries": None,
             "next_turn_has_pawn_capture": None,
@@ -332,6 +333,7 @@ def _answer_payload(game: KriegspielGame, answer: Any) -> dict[str, Any]:
         "dropped_piece_announcement": (
             dropped_piece.name if isinstance(dropped_piece, CapturedPieceAnnouncement) else None
         ),
+        "en_passant_announced": True if getattr(answer, "en_passant_announced", False) else None,
         "promotion_announced": True if answer.promotion_announced else None,
         "next_turn_pawn_tries": answer.next_turn_pawn_tries,
         "next_turn_has_pawn_capture": answer.next_turn_has_pawn_capture,
@@ -428,6 +430,7 @@ def _serialize_answer(answer: Any) -> dict[str, Any]:
             "capture_square": None,
             "captured_piece_announcement": None,
             "dropped_piece_announcement": None,
+            "en_passant_announced": None,
             "promotion_announced": None,
             "next_turn_pawn_tries": None,
             "next_turn_has_pawn_capture": None,
@@ -452,6 +455,7 @@ def _serialize_answer(answer: Any) -> dict[str, Any]:
         "dropped_piece_announcement": (
             answer.dropped_piece_announcement.name if answer.dropped_piece_announcement is not None else None
         ),
+        "en_passant_announced": True if getattr(answer, "en_passant_announced", False) else None,
         "promotion_announced": True if answer.promotion_announced else None,
         "next_turn_pawn_tries": answer.next_turn_pawn_tries,
         "next_turn_has_pawn_capture": answer.next_turn_has_pawn_capture,
@@ -479,6 +483,9 @@ def _deserialize_answer(payload: Any) -> KriegspielAnswer:
     promotion_announced = data.get("promotion_announced")
     if isinstance(promotion_announced, bool):
         kwargs["promotion_announced"] = promotion_announced
+    en_passant_announced = data.get("en_passant_announced")
+    if isinstance(en_passant_announced, bool):
+        kwargs["en_passant_announced"] = en_passant_announced
     next_turn_pawn_tries = data.get("next_turn_pawn_tries")
     if isinstance(next_turn_pawn_tries, int):
         kwargs["next_turn_pawn_tries"] = next_turn_pawn_tries

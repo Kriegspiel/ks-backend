@@ -198,6 +198,7 @@ def test_invalid_uci_and_default_scoresheet_serialization_are_stable() -> None:
         "capture_square": None,
         "captured_piece_announcement": None,
         "dropped_piece_announcement": None,
+        "en_passant_announced": None,
         "promotion_announced": None,
         "next_turn_pawn_tries": None,
         "next_turn_has_pawn_capture": None,
@@ -289,6 +290,13 @@ def test_deserialize_answer_handles_capture_and_special_cases() -> None:
 
 
 def test_answer_serializers_cover_named_checks_and_non_double_specials() -> None:
+    en_passant = _deserialize_answer(
+        {
+            "main_announcement": "CAPTURE_DONE",
+            "capture_square": "f6",
+            "en_passant_announced": True,
+        }
+    )
     double_check = _deserialize_answer(
         {
             "main_announcement": "REGULAR_MOVE",
@@ -308,6 +316,8 @@ def test_answer_serializers_cover_named_checks_and_non_double_specials() -> None
     assert serialized["checks"] == ["CHECK_FILE", "CHECK_RANK"]
     assert serialized["special_announcement"] == "CHECK_DOUBLE"
     assert restored.special_announcement == SpecialCaseAnnouncement.CHECK_FILE
+    assert en_passant.en_passant_announced is True
+    assert _serialize_answer(en_passant)["en_passant_announced"] is True
 
 
 @pytest.mark.parametrize(
@@ -375,6 +385,25 @@ def test_attempt_move_surfaces_rand_and_crazykrieg_metadata() -> None:
     drop = attempt_move(crazy, "P@e4")
     assert drop["dropped_piece_announcement"] == "PAWN"
     assert public_reserve_summary(crazy)["white"]["pawns"] == 0
+
+
+def test_attempt_move_surfaces_english_en_passant_announcement() -> None:
+    game = create_new_game(rule_variant="english")
+    game._board.clear()
+    game._board.turn = chess.BLACK
+    game._board.set_piece_at(chess.A1, chess.Piece(chess.KING, chess.WHITE))
+    game._board.set_piece_at(chess.H8, chess.Piece(chess.KING, chess.BLACK))
+    game._board.set_piece_at(chess.E4, chess.Piece(chess.PAWN, chess.BLACK))
+    game._board.set_piece_at(chess.D4, chess.Piece(chess.PAWN, chess.WHITE))
+    game._board.ep_square = chess.D3
+    game._generate_possible_to_ask_list()
+
+    result = attempt_move(game, "e4d3")
+
+    assert result["announcement"] == "CAPTURE_DONE"
+    assert result["capture_square"] == "d3"
+    assert result["en_passant_announced"] is True
+    assert result["captured_piece_announcement"] is None
 
 
 @pytest.mark.parametrize("rule_variant", ["berkeley", "berkeley_any"])

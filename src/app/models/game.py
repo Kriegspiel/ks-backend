@@ -123,6 +123,7 @@ class MoveResponse(BaseModel):
     capture_square: str | None = None
     captured_piece_announcement: PieceAnnouncement | None = None
     dropped_piece_announcement: PieceAnnouncement | None = None
+    en_passant_announced: bool | None = None
     promotion_announced: bool | None = None
     next_turn_pawn_tries: int | None = Field(default=None, ge=0)
     next_turn_has_pawn_capture: bool | None = None
@@ -274,6 +275,7 @@ class TranscriptAnswer(BaseModel):
     capture_square: str | None = None
     captured_piece_announcement: PieceAnnouncement | None = None
     dropped_piece_announcement: PieceAnnouncement | None = None
+    en_passant_announced: bool | None = None
     promotion_announced: bool | None = None
     special: str | None = None
     checks: list[str] = Field(default_factory=list)
