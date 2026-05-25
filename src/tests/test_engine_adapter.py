@@ -145,6 +145,21 @@ def test_deserialize_game_state_accepts_intermediate_canonical_schema() -> None:
     assert restored.ruleset_id == "berkeley_any"
 
 
+def test_deserialize_game_state_accepts_crazykrieg_schema() -> None:
+    game = create_new_game(rule_variant="crazykrieg")
+
+    payload = serialize_game_state(game)
+    payload["schema_version"] = 8
+    payload["library_version"] = "1.7.1"
+
+    restored = deserialize_game_state(payload)
+
+    assert is_supported_canonical_engine_state(payload) is True
+    assert is_current_canonical_engine_state(payload) is False
+    assert restored._board.fen() == game._board.fen()  # noqa: SLF001
+    assert restored.ruleset_id == "crazykrieg"
+
+
 def test_deserialize_repairs_empty_possible_to_ask_when_pawn_captures_required() -> None:
     game = create_new_game(any_rule=True)
     attempt_move(game, "d2c3")
