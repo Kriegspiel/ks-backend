@@ -100,6 +100,21 @@ def test_ask_any_has_stable_contract() -> None:
     assert isinstance(result["has_any"], bool)
 
 
+def test_english_failed_required_pawn_try_does_not_reenable_ask_any() -> None:
+    game = create_new_game(rule_variant="english")
+
+    assert attempt_move(game, "e2e4")["announcement"] == "REGULAR_MOVE"
+    assert attempt_move(game, "d7d5")["announcement"] == "REGULAR_MOVE"
+    assert ask_any(game)["announcement"] == "HAS_ANY"
+    assert attempt_move(game, "e4f5")["announcement"] == "ILLEGAL_MOVE"
+    assert attempt_move(game, "g1g3")["announcement"] == "ILLEGAL_MOVE"
+
+    repeat = ask_any(game)
+
+    assert repeat["announcement"] == "IMPOSSIBLE_TO_ASK"
+    assert repeat["has_any"] is False
+
+
 def test_serialize_deserialize_round_trip_preserves_state() -> None:
     game = create_new_game(any_rule=True)
     attempt_move(game, "e2e4")
