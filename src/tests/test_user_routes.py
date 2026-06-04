@@ -80,6 +80,7 @@ class StubService:
                         "day_started": "2026-04-01",
                         "last_game": "2026-04-04T13:00:00+00:00",
                         "number_of_games": 2,
+                        "non_timeout_games": 1,
                         "total_time_played_seconds": 900,
                     }
                 ],
@@ -158,6 +159,7 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
 
     assert guests_report.status_code == 200
     assert guests_report.json()["guests"][0]["username"] == "guest_mikhail_tal"
+    assert guests_report.json()["guests"][0]["non_timeout_games"] == 1
     assert guests_report.json()["guests"][0]["total_time_played_seconds"] == 900
     assert guests_report.json()["available_guest_accounts"] == 39999
 

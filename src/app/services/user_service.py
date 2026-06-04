@@ -1022,6 +1022,7 @@ class UserService:
                 "day_started": self._created_day(user),
                 "last_game": None,
                 "number_of_games": 0,
+                "non_timeout_games": 0,
                 "total_time_played_seconds": 0,
                 "_seen_games": set(),
             }
@@ -1057,6 +1058,7 @@ class UserService:
                 game_key = str(game.get("game_code") or game.get("_id") or id(game))
                 played_at = self._optional_datetime(game.get("updated_at")) or self._optional_datetime(game.get("created_at"))
                 duration_seconds = self._game_duration_seconds(game)
+                has_non_timeout_ending = self._has_non_timeout_ending(game)
                 for color in ("white", "black"):
                     player = game.get(color) if isinstance(game.get(color), dict) else {}
                     guest_row = guests_by_id.get(str(player.get("user_id") or ""))
@@ -1066,6 +1068,8 @@ class UserService:
                     if game_key not in seen_games:
                         seen_games.add(game_key)
                         guest_row["number_of_games"] += 1
+                        if has_non_timeout_ending:
+                            guest_row["non_timeout_games"] += 1
                         guest_row["total_time_played_seconds"] += duration_seconds
                     last_game = guest_row["last_game"]
                     if played_at is not None and (last_game is None or played_at > last_game):
@@ -1081,6 +1085,7 @@ class UserService:
                     "day_started": guest_row["day_started"],
                     "last_game": last_game.isoformat() if isinstance(last_game, datetime) else None,
                     "number_of_games": guest_row["number_of_games"],
+                    "non_timeout_games": guest_row["non_timeout_games"],
                     "total_time_played_seconds": guest_row["total_time_played_seconds"],
                 }
             )
@@ -1091,6 +1096,11 @@ class UserService:
             "total": total_guests,
             "available_guest_accounts": max(self.guest_name_pool_size() - total_guests, 0),
         }
+
+    @classmethod
+    def _has_non_timeout_ending(cls, game: dict[str, Any]) -> bool:
+        reason = cls._normalized_result_reason(game)
+        return isinstance(reason, str) and reason.strip().lower() not in {"timeout", "time"}
 
     @staticmethod
     def _activity_time(game: dict[str, Any]) -> datetime | None:
