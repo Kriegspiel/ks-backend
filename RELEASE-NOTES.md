@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.48
+
+- **Guest Report API**: added a per-guest count of completed games that ended
+  for a non-timeout reason.
+
 ## ks-backend v. 1.3.47
 
 - **Engine Update**: bumped the pinned `kriegspiel` engine to `1.7.3`,

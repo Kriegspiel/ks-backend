@@ -1534,6 +1534,7 @@ async def test_get_guest_report_lists_guests_with_archive_and_live_game_counts()
                 "black": {"user_id": str(human_id), "username": "fil"},
                 "created_at": archived_at - timedelta(minutes=10),
                 "updated_at": archived_at,
+                "result": {"winner": "white", "reason": "checkmate"},
             },
             {
                 "_id": ObjectId(),
@@ -1542,6 +1543,7 @@ async def test_get_guest_report_lists_guests_with_archive_and_live_game_counts()
                 "black": {"user_id": str(guest_two_id), "username": "guest_judit_polgar"},
                 "created_at": archived_at - timedelta(days=1),
                 "updated_at": archived_at - timedelta(days=1),
+                "result": {"winner": "white", "reason": "timeout"},
             },
         ]
     )
@@ -1568,11 +1570,13 @@ async def test_get_guest_report_lists_guests_with_archive_and_live_game_counts()
         "day_started": "2026-04-01",
         "last_game": "2026-04-04T13:00:00+00:00",
         "number_of_games": 2,
+        "non_timeout_games": 1,
         "total_time_played_seconds": 900,
     }
     assert rows["guest_judit_polgar"]["day_started"] == "2026-04-02"
     assert rows["guest_judit_polgar"]["last_game"] == "2026-04-04T13:00:00+00:00"
     assert rows["guest_judit_polgar"]["number_of_games"] == 2
+    assert rows["guest_judit_polgar"]["non_timeout_games"] == 0
     assert rows["guest_judit_polgar"]["total_time_played_seconds"] == 300
 
 
@@ -1629,6 +1633,7 @@ async def test_get_guest_report_uses_clock_time_for_delayed_timeout_archive() ->
     row = report["guests"][0]
     assert row["username"] == "guest_soso_kupreichik"
     assert row["number_of_games"] == 1
+    assert row["non_timeout_games"] == 0
     assert row["last_game"] == archived_at.isoformat()
     assert row["total_time_played_seconds"] == 1524
 
