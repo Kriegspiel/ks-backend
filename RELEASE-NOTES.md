@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.50
+
+- **API Docs**: expose the backend app version in OpenAPI and mark
+  bearer-authenticated routes with a `BearerAuth` security scheme for bot
+  developers using Swagger or ReDoc.
+
 ## ks-backend v. 1.3.49
 
 - **Bot Registration**: allow public self-serve bot registration without the
