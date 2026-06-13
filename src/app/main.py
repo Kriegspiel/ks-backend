@@ -4,12 +4,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.routing import APIRoute
 import sentry_sdk
 import structlog
 
 from app.config import Settings, get_settings
 from app.db import close_db, get_db, init_db
+from app.dependencies import get_current_user
 from app.logging_config import configure_logging
 from app.monitoring import capture_backend_restart, configure_sentry
 from app.services.archive_turn_counts import run_archive_turn_count_migration_once
@@ -56,6 +59,49 @@ def is_app_api_ingress_request(request: Request) -> bool:
 
 def is_api_prefixed_path(path: str) -> bool:
     return path == "/api" or path.startswith("/api/")
+
+
+def _dependant_uses(dependant, dependency) -> bool:  # noqa: ANN001
+    if getattr(dependant, "call", None) is dependency:
+        return True
+    return any(_dependant_uses(child, dependency) for child in getattr(dependant, "dependencies", []))
+
+
+def configure_openapi(app: FastAPI, settings: Settings) -> None:
+    def custom_openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+
+        schema = get_openapi(
+            title=app.title,
+            version=settings.APP_VERSION,
+            description=app.description,
+            routes=app.routes,
+        )
+        components = schema.setdefault("components", {})
+        security_schemes = components.setdefault("securitySchemes", {})
+        security_schemes["BearerAuth"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "ksbot_<token-id>.<token-secret>",
+            "description": "Use the bot bearer token returned by POST /auth/bots/register.",
+        }
+
+        for route in app.routes:
+            if not isinstance(route, APIRoute) or not route.include_in_schema:
+                continue
+            if not _dependant_uses(route.dependant, get_current_user):
+                continue
+            path_item = schema.get("paths", {}).get(route.path_format, {})
+            for method in route.methods or []:
+                operation = path_item.get(method.lower())
+                if operation is not None:
+                    operation["security"] = [{"BearerAuth": []}]
+
+        app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = custom_openapi
 
 
 @asynccontextmanager
@@ -116,12 +162,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     sentry_enabled = configure_sentry(resolved_settings)
     app = FastAPI(
         title="Kriegspiel Chess API",
-        description="API for playing Kriegspiel chess",
+        description=(
+            "Public API for Kriegspiel.org. External clients should use "
+            "https://api.kriegspiel.org with prefix-free paths. Authenticated "
+            "bot calls use the bearer token returned by POST /auth/bots/register."
+        ),
+        version=resolved_settings.APP_VERSION,
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
     )
     app.state.settings = resolved_settings
+    configure_openapi(app, resolved_settings)
     logger.info("app_bootstrap", environment=resolved_settings.ENVIRONMENT, sentry_enabled=sentry_enabled)
 
     app.add_middleware(

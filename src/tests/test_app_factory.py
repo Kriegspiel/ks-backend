@@ -96,8 +96,10 @@ def test_api_health_mirrors_health_endpoint():
 def test_openapi_uses_prefixless_canonical_paths_and_hides_legacy_api_prefix():
     app = create_app(Settings())
 
-    paths = app.openapi()["paths"]
+    schema = app.openapi()
+    paths = schema["paths"]
 
+    assert schema["info"]["version"] == APP_VERSION
     assert "/auth/login" in paths
     assert "/game/stats" in paths
     assert "/bots" in paths
@@ -110,6 +112,25 @@ def test_openapi_uses_prefixless_canonical_paths_and_hides_legacy_api_prefix():
     assert "/api/user/{username}" not in paths
     assert "/api/tech/users-report" not in paths
     assert "/api/health" not in paths
+
+
+def test_openapi_marks_bearer_authenticated_routes_and_leaves_registration_public():
+    app = create_app(Settings())
+
+    schema = app.openapi()
+
+    assert schema["components"]["securitySchemes"]["BearerAuth"] == {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "ksbot_<token-id>.<token-secret>",
+        "description": "Use the bot bearer token returned by POST /auth/bots/register.",
+    }
+    assert schema["paths"]["/bots"]["get"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/game/open"]["get"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/auth/me"]["get"]["security"] == [{"BearerAuth": []}]
+    assert "security" not in schema["paths"]["/auth/bots/register"]["post"]
+    assert "security" not in schema["paths"]["/user/{username}"]["get"]
+    assert "security" not in schema["paths"]["/health"]["get"]
 
 
 def test_canonical_and_legacy_api_routes_are_both_available():
