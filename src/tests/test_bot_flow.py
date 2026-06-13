@@ -716,7 +716,7 @@ async def test_bot_registration_marks_e2e_bots_unlisted() -> None:
 
 
 def test_bot_registration_route_returns_api_token() -> None:
-    app = create_app(Settings(ENVIRONMENT="testing", BOT_REGISTRATION_KEY="secret-key"))
+    app = create_app(Settings(ENVIRONMENT="testing"))
     users = FakeUsersCollection()
 
     from app.routers import auth as auth_router_module
@@ -732,7 +732,6 @@ def test_bot_registration_route_returns_api_token() -> None:
                 "owner_email": "owner@example.com",
                 "description": "Plays random moves",
             },
-            headers={"X-Bot-Registration-Key": "secret-key"},
         )
 
     assert registered.status_code == 201
@@ -741,7 +740,7 @@ def test_bot_registration_route_returns_api_token() -> None:
 
 
 def test_bot_registration_route_requires_owner_email() -> None:
-    app = create_app(Settings(ENVIRONMENT="testing", BOT_REGISTRATION_KEY="secret-key"))
+    app = create_app(Settings(ENVIRONMENT="testing"))
     users = FakeUsersCollection()
 
     from app.routers import auth as auth_router_module
@@ -752,7 +751,6 @@ def test_bot_registration_route_requires_owner_email() -> None:
         registered = client.post(
             "/api/auth/bots/register",
             json={"username": "randobot", "display_name": "Random Bot", "description": "Plays random moves"},
-            headers={"X-Bot-Registration-Key": "secret-key"},
         )
 
     assert registered.status_code == 422
