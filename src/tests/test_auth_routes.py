@@ -264,11 +264,30 @@ def test_auth_endpoints_return_503_when_db_unavailable(monkeypatch: pytest.Monke
         assert guest.json()["detail"] == "Database unavailable"
 
 
-def test_bot_register_requires_matching_registration_key() -> None:
-    app = create_app(Settings(ENVIRONMENT="testing", BOT_REGISTRATION_KEY="expected-key"))
+def test_bot_register_is_self_serve_without_registration_key(app_no_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake_users = app_no_db
+
+    from app.routers import auth as auth_router_module
+
+    created_bot = SimpleNamespace(
+        id="bot-id",
+        username="randobot",
+        username_display="Random Bot",
+        bot_profile=SimpleNamespace(display_name="Random Bot", owner_email="owner@example.com"),
+    )
+    service = SimpleNamespace(create_bot=AsyncMock(return_value=(created_bot, "ksbot_token.secret")))
+
+    class FakeUserService:
+        def __init__(self, _users):
+            self._users = _users
+
+        async def create_bot(self, payload):
+            return await service.create_bot(payload)
+
+    monkeypatch.setattr(auth_router_module, "UserService", FakeUserService)
 
     with TestClient(app) as client:
-        missing = client.post(
+        registered = client.post(
             "/api/auth/bots/register",
             json={
                 "username": "randobot",
@@ -277,19 +296,20 @@ def test_bot_register_requires_matching_registration_key() -> None:
                 "description": "bot",
             },
         )
-        invalid = client.post(
+        legacy_header = client.post(
             "/api/auth/bots/register",
             headers={"x-bot-registration-key": "wrong-key"},
             json={
-                "username": "randobot",
-                "display_name": "Random Bot",
+                "username": "otherbot",
+                "display_name": "Other Bot",
                 "owner_email": "owner@example.com",
                 "description": "bot",
             },
         )
 
-    assert missing.status_code == 401
-    assert invalid.status_code == 401
+    assert registered.status_code == 201
+    assert registered.json()["api_token"] == "ksbot_token.secret"
+    assert legacy_header.status_code == 201
 
 
 @pytest.mark.integration

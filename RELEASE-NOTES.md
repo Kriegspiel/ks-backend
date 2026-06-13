@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.49
+
+- **Bot Registration**: allow public self-serve bot registration without the
+  shared `X-Bot-Registration-Key` gate.
+
 ## ks-backend v. 1.3.48
 
 - **Guest Report API**: added a per-guest count of completed games that ended

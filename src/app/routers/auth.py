@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 import structlog
 from app.dependencies import get_current_user, get_session_service, require_db
 from app.models.auth import (
@@ -43,10 +43,7 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     return RegisterResponse(user_id=user.id, username=user.username)
 
 @router.post('/bots/register', response_model=BotRegisterResponse, status_code=status.HTTP_201_CREATED)
-async def register_bot(payload: BotRegisterRequest, request: Request, x_bot_registration_key: str | None = Header(default=None)) -> BotRegisterResponse:
-    expected = request.app.state.settings.BOT_REGISTRATION_KEY
-    if not x_bot_registration_key or x_bot_registration_key != expected:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid bot registration key')
+async def register_bot(payload: BotRegisterRequest) -> BotRegisterResponse:
     db = require_db(); user_service = UserService(db.users)
     try: user, token = await user_service.create_bot(payload)
     except UserConflictError as exc:

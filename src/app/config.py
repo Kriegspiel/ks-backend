@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "info"
     SITE_ORIGIN: str = "http://localhost:5173"
-    BOT_REGISTRATION_KEY: str = "dev-bot-registration-key"
     SENTRY_DSN: str | None = None
     SENTRY_TRACES_SAMPLE_RATE: float = 0.0
     SENTRY_SEND_DEFAULT_PII: bool = False
