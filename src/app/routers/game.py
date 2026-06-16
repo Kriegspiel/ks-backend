@@ -7,7 +7,21 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from app.db import get_db
 from app.dependencies import get_current_user
-from app.models.game import AskAnyResponse, CreateGameRequest, CreateGameResponse, GameMetadataResponse, GameStateResponse, GameTranscriptResponse, JoinGameResponse, LobbyStatsResponse, MoveRequest, MoveResponse, OpenGamesResponse, RecentGamesResponse
+from app.models.game import (
+    AskAnyResponse,
+    CreateGameRequest,
+    CreateGameResponse,
+    GameMetadataResponse,
+    GameReviewResponse,
+    GameStateResponse,
+    GameTranscriptResponse,
+    JoinGameResponse,
+    LobbyStatsResponse,
+    MoveRequest,
+    MoveResponse,
+    OpenGamesResponse,
+    RecentGamesResponse,
+)
 from app.models.user import UserModel
 from app.services.game_service import GameConflictError, GameForbiddenError, GameNotFoundError, GameService, GameServiceError, GameValidationError
 
@@ -123,6 +137,17 @@ async def get_my_games(user: UserModel = Depends(get_current_user), game_service
 async def get_game_transcript(game_id: str, user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:
     try: return await game_service.get_game_transcript(game_id=game_id, user_id=user.id)
     except GameServiceError as exc: return _map_game_error(exc)
+
+@router.get('/{game_id}/review', response_model=GameReviewResponse)
+async def get_game_review(
+    game_id: str,
+    user: UserModel = Depends(get_current_user),
+    game_service: GameService = Depends(get_game_service),
+) -> Any:
+    try:
+        return await game_service.get_game_review(game_id=game_id, user_id=user.id)
+    except GameServiceError as exc:
+        return _map_game_error(exc)
 
 @router.get('/recent', response_model=RecentGamesResponse)
 async def get_recent_games(limit: int = 10, _: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:

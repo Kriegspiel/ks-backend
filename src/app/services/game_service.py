@@ -20,6 +20,7 @@ from app.models.game import (
     LobbyStatsResponse,
     GameState,
     GameMetadataResponse,
+    GameReviewResponse,
     GameStateResponse,
     GameTranscriptResponse,
     JoinGameResponse,
@@ -912,6 +913,18 @@ class GameService:
                     return doc
         return None
 
+    async def _find_archived_game_by_code(self, game_code: str) -> dict[str, Any] | None:
+        if self._archives is None:
+            return None
+        if hasattr(self._archives, "find_one"):
+            return await self._archives.find_one({"game_code": game_code})
+        docs = getattr(self._archives, "docs", None)
+        if isinstance(docs, list):
+            for doc in docs:
+                if doc.get("game_code") == game_code:
+                    return doc
+        return None
+
     async def _find_live_game_by_id(self, game_id: ObjectId) -> dict[str, Any] | None:
         if hasattr(self._games, "find_one"):
             return await self._games.find_one({"_id": game_id})
@@ -1122,8 +1135,29 @@ class GameService:
     async def _get_archived_game_document(self, *, game_id: str) -> dict[str, Any] | None:
         if self._archives is None:
             return None
-        oid = await self._resolve_archived_game_object_id(game_id)
+        try:
+            oid = self._id_query(game_id)
+        except GameNotFoundError:
+            normalized = str(game_id).strip().upper()
+            if not normalized:
+                raise
+            return await self._find_archived_game_by_code(normalized)
         return await self._find_archived_game_by_id(oid)
+
+    async def _get_live_or_archived_game_document(self, *, game_id: str) -> dict[str, Any]:
+        game: dict[str, Any] | None
+        try:
+            game = await self._get_live_game_document(game_id=game_id)
+        except GameNotFoundError:
+            game = None
+        if game is None:
+            try:
+                game = await self._get_archived_game_document(game_id=game_id)
+            except GameNotFoundError:
+                game = None
+        if game is None:
+            raise GameNotFoundError()
+        return game
 
     def _is_participant(self, *, game: dict[str, Any], user_id: str) -> bool:
         white = game.get("white") or {}
@@ -1947,20 +1981,30 @@ class GameService:
         return await self._get_my_games_from_sources(user_id=user_id, sources=sources, limit=limit)
 
     async def get_game(self, *, game_id: str) -> GameMetadataResponse:
-        game: dict[str, Any] | None
-        try:
-            game = await self._get_live_game_document(game_id=game_id)
-        except GameNotFoundError:
-            game = None
-        if game is None:
-            try:
-                game = await self._get_archived_game_document(game_id=game_id)
-            except GameNotFoundError:
-                game = None
-        if game is None:
-            raise GameNotFoundError()
-
+        game = await self._get_live_or_archived_game_document(game_id=game_id)
         return await self._to_metadata(game)
+
+    def _to_transcript_response(self, *, game: dict[str, Any], user_id: str) -> GameTranscriptResponse:
+        if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
+            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access an active game transcript")
+
+        viewer_color = self._player_color_for_user(game=game, user_id=user_id)
+        moves = self._review_history_moves(game)
+        replay_fens = self._build_replay_fens(moves)
+        transcript_moves = [
+            self._to_transcript_move(
+                move,
+                ply=index + 1,
+                replay_fen=replay_fens[index] if index < len(replay_fens) else None,
+            )
+            for index, move in enumerate(moves)
+        ]
+        return GameTranscriptResponse(
+            game_id=str(game["_id"]),
+            rule_variant=game.get("rule_variant", "berkeley_any"),
+            viewer_color=viewer_color,
+            moves=transcript_moves,
+        )
 
     async def get_game_state(self, *, game_id: str, user_id: str) -> GameStateResponse:
         game, entry, archived = await self._get_game_for_state(game_id=game_id)
@@ -2291,38 +2335,14 @@ class GameService:
         return {"result": {"winner": winner, "reason": "resignation"}}
 
     async def get_game_transcript(self, *, game_id: str, user_id: str) -> GameTranscriptResponse:
-        game: dict[str, Any] | None
-        try:
-            game = await self._get_live_game_document(game_id=game_id)
-        except GameNotFoundError:
-            game = None
-        if game is None:
-            try:
-                game = await self._get_archived_game_document(game_id=game_id)
-            except GameNotFoundError:
-                game = None
-        if game is None:
-            raise GameNotFoundError()
+        game = await self._get_live_or_archived_game_document(game_id=game_id)
+        return self._to_transcript_response(game=game, user_id=user_id)
 
-        if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
-            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access an active game transcript")
-
-        viewer_color = self._player_color_for_user(game=game, user_id=user_id)
-        moves = self._review_history_moves(game)
-        replay_fens = self._build_replay_fens(moves)
-        transcript_moves = [
-            self._to_transcript_move(
-                move,
-                ply=index + 1,
-                replay_fen=replay_fens[index] if index < len(replay_fens) else None,
-            )
-            for index, move in enumerate(moves)
-        ]
-        return GameTranscriptResponse(
-            game_id=str(game["_id"]),
-            rule_variant=game.get("rule_variant", "berkeley_any"),
-            viewer_color=viewer_color,
-            moves=transcript_moves,
+    async def get_game_review(self, *, game_id: str, user_id: str) -> GameReviewResponse:
+        game = await self._get_live_or_archived_game_document(game_id=game_id)
+        return GameReviewResponse(
+            game=await self._to_metadata(game),
+            transcript=self._to_transcript_response(game=game, user_id=user_id),
         )
 
     async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:

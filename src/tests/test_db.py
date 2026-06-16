@@ -105,6 +105,7 @@ async def test_init_db_creates_required_indexes(monkeypatch):
         (([("expires_at", 1)],), {"expireAfterSeconds": 0}),
     ]
     assert collections["game_archives"].create_index.await_args_list == [
+        (([("game_code", 1)],), {"unique": True}),
         (([("white.user_id", 1), ("created_at", 1)],), {}),
         (([("black.user_id", 1), ("created_at", 1)],), {}),
         (([("result.winner", 1), ("created_at", 1)],), {}),
@@ -169,7 +170,17 @@ async def test_init_db_integration_creates_indexes_when_mongo_available():
     assert any(spec.get("key") == [("black.user_id", 1), ("created_at", -1)] for spec in games_indexes.values())
 
     archives_indexes = await db.game_archives.index_information()
+    assert any(spec.get("key") == [("game_code", 1)] and spec.get("unique") for spec in archives_indexes.values())
     assert any(spec.get("key") == [("updated_at", -1)] for spec in archives_indexes.values())
+
+    for collection_name in ("games", "game_archives"):
+        explain = await db.command(
+            "explain",
+            {"find": collection_name, "filter": {"game_code": "A7K2M9"}, "projection": {"_id": 1}, "limit": 1},
+            verbosity="queryPlanner",
+        )
+        stages = _plan_stages(explain.get("queryPlanner", {}).get("winningPlan", {}))
+        assert "COLLSCAN" not in stages, f"{collection_name}.game_code used {stages}"
 
     now = datetime.now(UTC)
     for collection_name in ("games", "game_archives"):

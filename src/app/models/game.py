@@ -350,3 +350,10 @@ class GameMetadataResponse(BaseModel):
     updated_at: datetime
     result: dict[str, Any] | None = None
     rating_snapshot: dict[str, Any] | None = None
+
+
+class GameReviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    game: GameMetadataResponse
+    transcript: GameTranscriptResponse

@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.51
+
+- **Review Loading**: added a combined game-review API response and indexed
+  archived game lookups by `game_code` so completed reviews avoid duplicate
+  archive scans.
+
 ## ks-backend v. 1.3.50
 
 - **API Docs**: expose the backend app version in OpenAPI and mark
