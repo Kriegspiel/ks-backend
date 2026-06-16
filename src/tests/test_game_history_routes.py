@@ -155,6 +155,13 @@ async def test_get_game_transcript_access_matrix_for_live_and_archived_games(gam
     assert completed_public.game_id == str(archived["_id"])
     assert completed_public.viewer_color is None
 
+    review = await service.get_game_review(game_id=archived["game_code"], user_id="u3")
+    assert review.game.game_id == str(archived["_id"])
+    assert review.game.game_code == archived["game_code"]
+    assert review.game.result == {"winner": "white", "reason": "resignation"}
+    assert review.transcript.game_id == str(archived["_id"])
+    assert review.transcript.viewer_color is None
+
 
 @pytest.mark.asyncio
 async def test_get_game_transcript_filters_nonsense_attempts_and_renumbers_ply() -> None:
@@ -394,6 +401,45 @@ def app_with_history_service() -> tuple:
                 ],
             }
         ),
+        get_game_review=AsyncMock(
+            return_value={
+                "game": {
+                    "game_id": "gid1",
+                    "game_code": "A7K2M9",
+                    "rule_variant": "berkeley_any",
+                    "state": "completed",
+                    "white": {"username": "w", "connected": True},
+                    "black": {"username": "b", "connected": True},
+                    "turn": None,
+                    "move_number": 1,
+                    "created_at": datetime.now(UTC),
+                    "updated_at": datetime.now(UTC),
+                    "result": {"winner": "white", "reason": "checkmate"},
+                    "rating_snapshot": None,
+                },
+                "transcript": {
+                    "game_id": "gid1",
+                    "rule_variant": "berkeley_any",
+                    "viewer_color": "white",
+                    "moves": [
+                        {
+                            "ply": 1,
+                            "color": "white",
+                            "question_type": "COMMON",
+                            "uci": "e2e4",
+                            "answer": {"main": "REGULAR_MOVE", "capture_square": None, "special": None},
+                            "move_done": True,
+                            "timestamp": None,
+                            "replay_fen": {
+                                "full": "8/8/8/8/8/8/8/8 w - - 0 1",
+                                "white": "8/8/8/8/8/8/8/8 w - - 0 1",
+                                "black": "8/8/8/8/8/8/8/8 w - - 0 1",
+                            },
+                        }
+                    ],
+                },
+            }
+        ),
         get_recent_completed_games=AsyncMock(
             return_value={
                 "games": [
@@ -452,11 +498,15 @@ def test_history_routes_happy_path(app_with_history_service) -> None:
 
     with TestClient(app, raise_server_exceptions=False) as client:
         transcript = client.get("/api/game/gid1/moves")
+        review = client.get("/api/game/gid1/review")
         recent = client.get("/api/game/recent")
 
     assert transcript.status_code == 200
     assert transcript.json()["viewer_color"] == "white"
     assert transcript.json()["moves"][0]["answer"]["main"] == "REGULAR_MOVE"
+    assert review.status_code == 200
+    assert review.json()["game"]["game_code"] == "A7K2M9"
+    assert review.json()["transcript"]["viewer_color"] == "white"
     assert recent.status_code == 200
     assert len(recent.json()["games"]) == 1
 
