@@ -1200,6 +1200,16 @@ class GameService:
             count += 1
         return count
 
+    async def _estimated_document_count(self, collection: Any | None) -> int:
+        if collection is None:
+            return 0
+        if hasattr(collection, "estimated_document_count"):
+            return int(await collection.estimated_document_count())
+        docs = getattr(collection, "docs", None)
+        if isinstance(docs, list):
+            return len(docs)
+        return await self._count_documents(collection, {})
+
     @staticmethod
     def _visible_board_fen_from_board(board: chess.Board, viewer: PlayerColor) -> str:
         projected = board.copy(stack=False)
@@ -1311,9 +1321,19 @@ class GameService:
 
         active_games_now = await self._count_documents(self._games, {"state": "active"})
         completed_source = self._archives if self._archives is not None else self._games
-        completed_total = await self._count_documents(completed_source, {"state": "completed"})
-        completed_last_hour = await self._count_documents(completed_source, {"state": "completed", "updated_at": {"$gte": last_hour}})
-        completed_last_24_hours = await self._count_documents(completed_source, {"state": "completed", "updated_at": {"$gte": last_day}})
+        completed_total = (
+            await self._estimated_document_count(completed_source)
+            if self._archives is not None
+            else await self._count_documents(completed_source, {"state": "completed"})
+        )
+        completed_last_hour = await self._count_documents(
+            completed_source,
+            {"state": "completed", "updated_at": {"$gte": last_hour}},
+        )
+        completed_last_24_hours = await self._count_documents(
+            completed_source,
+            {"state": "completed", "updated_at": {"$gte": last_day}},
+        )
 
         return LobbyStatsResponse(
             active_games_now=active_games_now,
