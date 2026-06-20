@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.52
+
+- **Lobby Stats**: use MongoDB's archive collection estimate for the all-time
+  completed games total so lobby stats avoid scanning every archived game on
+  load.
+
 ## ks-backend v. 1.3.51
 
 - **Review Loading**: added a combined game-review API response and indexed

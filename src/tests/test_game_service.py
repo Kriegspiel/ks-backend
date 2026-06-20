@@ -938,6 +938,61 @@ async def test_get_lobby_stats_counts_active_and_completed_windows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_lobby_stats_uses_archive_estimate_for_completed_total() -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    now = datetime(2026, 6, 20, 22, 0, tzinfo=UTC)
+    games.docs.append({"_id": ObjectId(), "state": "active", "updated_at": now})
+    archives.docs.extend(
+        [
+            {"_id": ObjectId(), "state": "completed", "updated_at": now - timedelta(minutes=30)},
+            {"_id": ObjectId(), "state": "completed", "updated_at": now - timedelta(days=2)},
+            {"_id": ObjectId(), "state": "archiving", "updated_at": now},
+        ]
+    )
+    estimate_calls = 0
+
+    async def estimated_document_count() -> int:
+        nonlocal estimate_calls
+        estimate_calls += 1
+        return 99
+
+    archives.estimated_document_count = estimated_document_count  # type: ignore[attr-defined]
+    service = GameService(games, archives_collection=archives)
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    stats = await service.get_lobby_stats()
+
+    assert estimate_calls == 1
+    assert stats.active_games_now == 1
+    assert stats.completed_last_hour == 1
+    assert stats.completed_last_24_hours == 1
+    assert stats.completed_total == 99
+
+
+@pytest.mark.asyncio
+async def test_get_lobby_stats_counts_completed_total_exactly_without_archive_collection() -> None:
+    games = FakeGamesCollection()
+    now = datetime(2026, 6, 20, 22, 0, tzinfo=UTC)
+    games.docs.extend(
+        [
+            {"_id": ObjectId(), "state": "active", "updated_at": now},
+            {"_id": ObjectId(), "state": "completed", "updated_at": now - timedelta(minutes=30)},
+            {"_id": ObjectId(), "state": "waiting", "updated_at": now},
+        ]
+    )
+    service = GameService(games)
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    stats = await service.get_lobby_stats()
+
+    assert stats.active_games_now == 1
+    assert stats.completed_last_hour == 1
+    assert stats.completed_last_24_hours == 1
+    assert stats.completed_total == 1
+
+
+@pytest.mark.asyncio
 async def test_stored_scoresheets_prefers_engine_state_only() -> None:
     game = {
         "engine_state": serialize_game_state(create_new_game(any_rule=True)),
