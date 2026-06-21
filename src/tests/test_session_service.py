@@ -37,6 +37,25 @@ async def test_create_session_inserts_expected_document() -> None:
     assert payload["cookie_max_age_seconds"] == SessionService.SESSION_MAX_AGE_SECONDS
     assert payload["last_touched_at"] == payload["created_at"]
     assert payload["expires_at"] - payload["created_at"] == timedelta(seconds=SessionService.SESSION_MAX_AGE_SECONDS)
+    assert "attribution" not in payload
+
+
+@pytest.mark.asyncio
+async def test_create_session_inserts_attribution_snapshot() -> None:
+    sessions = SimpleNamespace(insert_one=AsyncMock())
+    service = SessionService(sessions)
+    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="playerone", role="user")
+    attribution = {
+        "attribution_id": "507f1f77bcf86cd799439099",
+        "utm": {"source": "reddit", "campaign": "ruleset-default"},
+        "landing_path": "/",
+        "referrer_host": "reddit.com",
+    }
+
+    await service.create_session(user=user, ip="127.0.0.1", user_agent="pytest", attribution=attribution)
+
+    payload = sessions.insert_one.await_args.args[0]
+    assert payload["attribution"] == attribution
 
 
 @pytest.mark.asyncio

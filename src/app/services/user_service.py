@@ -582,7 +582,7 @@ class UserService:
             },
         }
 
-    async def create_user(self, registration: RegisterRequest) -> UserModel:
+    async def create_user(self, registration: RegisterRequest, *, acquisition: dict[str, Any] | None = None) -> UserModel:
         username = self.canonical_username(registration.username)
         email = self.canonical_email(registration.email)
 
@@ -617,6 +617,8 @@ class UserService:
             "created_at": now,
             "updated_at": now,
         }
+        if acquisition is not None:
+            payload["acquisition"] = {**acquisition, "acquired_at": now}
 
         try:
             result = await self._users.insert_one(payload)
@@ -639,7 +641,7 @@ class UserService:
     def guest_name_pool_size(cls) -> int:
         return len(GUEST_FIRST_NAMES) * len(GUEST_LAST_NAMES)
 
-    async def create_guest_user(self) -> UserModel:
+    async def create_guest_user(self, *, acquisition: dict[str, Any] | None = None) -> UserModel:
         total_names = self.guest_name_pool_size()
         start_index = secrets.randbelow(total_names)
 
@@ -673,6 +675,8 @@ class UserService:
                 "created_at": now,
                 "updated_at": now,
             }
+            if acquisition is not None:
+                payload["acquisition"] = {**acquisition, "acquired_at": now}
 
             try:
                 result = await self._users.insert_one(payload)

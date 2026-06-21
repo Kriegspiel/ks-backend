@@ -23,6 +23,8 @@ from app.models.game import (
     RecentGamesResponse,
 )
 from app.models.user import UserModel
+from app.routers.analytics import attribution_snapshot_from_request, maybe_get_analytics_service
+from app.services.analytics_service import AnalyticsService
 from app.services.game_service import GameConflictError, GameForbiddenError, GameNotFoundError, GameService, GameServiceError, GameValidationError
 
 router = APIRouter(prefix='/game', tags=['game'])
@@ -51,8 +53,22 @@ def get_game_service(request: Request) -> GameService:
     return GameService(db.games, users_collection=db.users, archives_collection=db.game_archives, site_origin=request.app.state.settings.SITE_ORIGIN)
 
 @router.post('/create', response_model=CreateGameResponse, status_code=status.HTTP_201_CREATED)
-async def create_game(payload: CreateGameRequest, user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)) -> Any:
-    try: return await game_service.create_game(user_id=user.id, username=user.username, request=payload, role=user.role)
+async def create_game(
+    payload: CreateGameRequest,
+    request: Request,
+    user: UserModel = Depends(get_current_user),
+    game_service: GameService = Depends(get_game_service),
+    analytics_service: AnalyticsService | None = Depends(maybe_get_analytics_service),
+) -> Any:
+    attribution = await attribution_snapshot_from_request(request, analytics_service)
+    try:
+        return await game_service.create_game(
+            user_id=user.id,
+            username=user.username,
+            request=payload,
+            role=user.role,
+            attribution=attribution,
+        )
     except GameServiceError as exc: return _map_game_error(exc)
 
 @router.post('/join/{game_code}', response_model=JoinGameResponse)

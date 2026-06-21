@@ -35,7 +35,8 @@ async def reset_db_state():
 
 def _fake_db_collections():
     return {
-        name: SimpleNamespace(create_index=AsyncMock()) for name in ["users", "games", "game_archives", "audit_log", "sessions"]
+        name: SimpleNamespace(create_index=AsyncMock())
+        for name in ["users", "games", "game_archives", "audit_log", "sessions", "analytics_events"]
     }
 
 
@@ -93,6 +94,8 @@ async def test_init_db_creates_required_indexes(monkeypatch):
         (([("email", 1)],), {"unique": True, "sparse": True}),
         (([("stats.elo", -1)],), {}),
         (([("status", 1), ("last_active_at", 1)],), {}),
+        (([("acquisition.attribution_id", 1)],), {}),
+        (([("acquisition.utm.source", 1), ("acquisition.utm.campaign", 1)],), {}),
     ]
     assert collections["games"].create_index.await_args_list == [
         (([("game_code", 1)],), {"unique": True}),
@@ -102,6 +105,8 @@ async def test_init_db_creates_required_indexes(monkeypatch):
         (([("updated_at", -1)],), {}),
         (([("white.user_id", 1), ("created_at", -1)],), {}),
         (([("black.user_id", 1), ("created_at", -1)],), {}),
+        (([("attribution.attribution_id", 1)],), {}),
+        (([("attribution.utm.source", 1), ("attribution.utm.campaign", 1)],), {}),
         (([("expires_at", 1)],), {"expireAfterSeconds": 0}),
     ]
     assert collections["game_archives"].create_index.await_args_list == [
@@ -111,6 +116,8 @@ async def test_init_db_creates_required_indexes(monkeypatch):
         (([("result.winner", 1), ("created_at", 1)],), {}),
         (([("created_at", -1)],), {}),
         (([("updated_at", -1)],), {}),
+        (([("attribution.attribution_id", 1)],), {}),
+        (([("attribution.utm.source", 1), ("attribution.utm.campaign", 1)],), {}),
     ]
     assert collections["audit_log"].create_index.await_args_list[0] == (
         (([("timestamp", 1)],), {"expireAfterSeconds": 7_776_000})
@@ -118,6 +125,14 @@ async def test_init_db_creates_required_indexes(monkeypatch):
     assert collections["sessions"].create_index.await_args_list == [
         (([("expires_at", 1)],), {"expireAfterSeconds": 0}),
         (([("user_id", 1)],), {}),
+        (([("attribution.attribution_id", 1)],), {}),
+        (([("attribution.utm.source", 1), ("attribution.utm.campaign", 1)],), {}),
+    ]
+    assert collections["analytics_events"].create_index.await_args_list == [
+        (([("expires_at", 1)],), {"expireAfterSeconds": 0}),
+        (([("event_type", 1), ("occurred_at", -1)],), {}),
+        (([("attribution_id", 1)],), {"unique": True}),
+        (([("utm.source", 1), ("utm.campaign", 1), ("occurred_at", -1)],), {}),
     ]
 
 
