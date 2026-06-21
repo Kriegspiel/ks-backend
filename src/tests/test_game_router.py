@@ -12,6 +12,7 @@ from app.config import Settings
 from app.dependencies import get_current_user
 from app.main import create_app
 from app.models.user import UserModel
+from app.routers.analytics import maybe_get_analytics_service
 from app.routers.game import get_game_service
 from app.services.game_service import (
     GameConflictError,
@@ -145,6 +146,9 @@ def app_with_game_service() -> tuple:
 
     app.dependency_overrides[get_current_user] = lambda: _user()
     app.dependency_overrides[get_game_service] = lambda: service
+    app.dependency_overrides[maybe_get_analytics_service] = lambda: SimpleNamespace(
+        attribution_snapshot_for_id=AsyncMock(return_value=None)
+    )
     return app, service
 
 
@@ -164,6 +168,9 @@ def app_with_game_service() -> tuple:
 )
 def test_game_endpoints_require_auth(method: str, path: str, payload: dict | None) -> None:
     app = create_app(Settings(ENVIRONMENT="testing"))
+    app.dependency_overrides[maybe_get_analytics_service] = lambda: SimpleNamespace(
+        attribution_snapshot_for_id=AsyncMock(return_value=None)
+    )
 
     def raise_unauth():
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -206,6 +213,29 @@ def test_game_router_happy_path_shapes(app_with_game_service) -> None:
     assert isinstance(archived_mine.json()["games"], list)
     assert active_alias.status_code == 200
     assert archived_alias.status_code == 200
+
+
+def test_create_game_passes_attribution_snapshot(app_with_game_service) -> None:
+    app, service = app_with_game_service
+    attribution = {
+        "attribution_id": "507f1f77bcf86cd799439099",
+        "utm": {"source": "reddit", "campaign": "ruleset-default"},
+        "landing_path": "/lobby",
+        "referrer_host": "reddit.com",
+    }
+    app.dependency_overrides[maybe_get_analytics_service] = lambda: SimpleNamespace(
+        attribution_snapshot_for_id=AsyncMock(return_value=attribution)
+    )
+
+    with TestClient(app) as client:
+        client.cookies.set("ks_attribution_id", attribution["attribution_id"])
+        response = client.post(
+            "/api/game/create",
+            json={"rule_variant": "berkeley_any", "play_as": "white", "time_control": "rapid"},
+        )
+
+    assert response.status_code == 201
+    assert service.create_game.await_args.kwargs["attribution"] == attribution
 
 
 def test_game_router_maps_domain_errors_to_standard_envelope(app_with_game_service) -> None:

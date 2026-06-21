@@ -15,6 +15,8 @@ from app.models.auth import (
     RegisterResponse,
 )
 from app.models.user import UserModel
+from app.routers.analytics import attribution_snapshot_from_request, maybe_get_analytics_service
+from app.services.analytics_service import AnalyticsService
 from app.services.session_service import SessionService
 from app.services.user_service import UserConflictError, UserService
 
@@ -32,12 +34,24 @@ def _clear_session_cookie(request: Request, response: Response) -> None:
     response.delete_cookie(key=SessionService.COOKIE_NAME, httponly=True, secure=_secure_cookie(request), samesite='lax', path='/')
 
 @router.post('/register', response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
-async def register(payload: RegisterRequest, request: Request, response: Response, session_service: SessionService = Depends(get_session_service)) -> RegisterResponse:
+async def register(
+    payload: RegisterRequest,
+    request: Request,
+    response: Response,
+    session_service: SessionService = Depends(get_session_service),
+    analytics_service: AnalyticsService | None = Depends(maybe_get_analytics_service),
+) -> RegisterResponse:
     db = require_db(); user_service = UserService(db.users)
-    try: user = await user_service.create_user(payload)
+    attribution = await attribution_snapshot_from_request(request, analytics_service)
+    try: user = await user_service.create_user(payload, acquisition=attribution)
     except UserConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={'field': exc.field, 'code': exc.code, 'message': str(exc)}) from exc
-    session_id = await session_service.create_session(user=user, ip=_client_ip(request), user_agent=request.headers.get('user-agent'))
+    session_id = await session_service.create_session(
+        user=user,
+        ip=_client_ip(request),
+        user_agent=request.headers.get('user-agent'),
+        attribution=attribution,
+    )
     _set_session_cookie(request, response, session_id, user)
     logger.info('auth_register_success', user_id=user.id, username=user.username, source_ip=_client_ip(request))
     return RegisterResponse(user_id=user.id, username=user.username)
@@ -57,12 +71,24 @@ async def register_bot(payload: BotRegisterRequest) -> BotRegisterResponse:
     )
 
 @router.post('/login', response_model=LoginResponse)
-async def login(payload: LoginRequest, request: Request, response: Response, session_service: SessionService = Depends(get_session_service)) -> LoginResponse:
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    session_service: SessionService = Depends(get_session_service),
+    analytics_service: AnalyticsService | None = Depends(maybe_get_analytics_service),
+) -> LoginResponse:
     db = require_db(); user_service = UserService(db.users); user = await user_service.authenticate(payload.username, payload.password)
     if user is None:
         logger.warning('auth_login_failed', username=payload.username.strip(), source_ip=_client_ip(request))
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid username or password')
-    session_id = await session_service.create_session(user=user, ip=_client_ip(request), user_agent=request.headers.get('user-agent'))
+    attribution = await attribution_snapshot_from_request(request, analytics_service)
+    session_id = await session_service.create_session(
+        user=user,
+        ip=_client_ip(request),
+        user_agent=request.headers.get('user-agent'),
+        attribution=attribution,
+    )
     _set_session_cookie(request, response, session_id, user)
     return LoginResponse(user_id=user.id, username=user.username)
 
@@ -71,15 +97,22 @@ async def login_as_guest(
     request: Request,
     response: Response,
     session_service: SessionService = Depends(get_session_service),
+    analytics_service: AnalyticsService | None = Depends(maybe_get_analytics_service),
 ) -> GuestLoginResponse:
     db = require_db(); user_service = UserService(db.users)
-    try: user = await user_service.create_guest_user()
+    attribution = await attribution_snapshot_from_request(request, analytics_service)
+    try: user = await user_service.create_guest_user(acquisition=attribution)
     except UserConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={'field': exc.field, 'code': exc.code, 'message': str(exc)},
         ) from exc
-    session_id = await session_service.create_session(user=user, ip=_client_ip(request), user_agent=request.headers.get('user-agent'))
+    session_id = await session_service.create_session(
+        user=user,
+        ip=_client_ip(request),
+        user_agent=request.headers.get('user-agent'),
+        attribution=attribution,
+    )
     _set_session_cookie(request, response, session_id, user)
     logger.info('auth_guest_success', user_id=user.id, username=user.username, source_ip=_client_ip(request))
     return GuestLoginResponse(user_id=user.id, username=user.username)

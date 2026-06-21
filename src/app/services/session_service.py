@@ -184,7 +184,14 @@ class SessionService:
         await self._store_cached_session(session_id, touched_session, now=now)
         return self._copy_session(touched_session)
 
-    async def create_session(self, *, user: UserModel, ip: str | None, user_agent: str | None) -> str:
+    async def create_session(
+        self,
+        *,
+        user: UserModel,
+        ip: str | None,
+        user_agent: str | None,
+        attribution: dict[str, Any] | None = None,
+    ) -> str:
         now = self.utcnow()
         session_id = self.generate_session_id()
         max_age_seconds = self.max_age_seconds_for_user(user)
@@ -200,6 +207,8 @@ class SessionService:
             "max_age_seconds": max_age_seconds,
             "cookie_max_age_seconds": self.cookie_max_age_seconds_for_user(user),
         }
+        if attribution is not None:
+            document["attribution"] = dict(attribution)
         await self._sessions.insert_one(document)
         await self._store_cached_session(session_id, document, now=now)
         return session_id

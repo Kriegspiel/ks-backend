@@ -16,10 +16,12 @@ from app.dependencies import get_current_user
 from app.logging_config import configure_logging
 from app.monitoring import capture_backend_restart, configure_sentry
 from app.services.archive_turn_counts import run_archive_turn_count_migration_once
+from app.routers.analytics import router as analytics_router
 from app.routers.auth import router as auth_router
 from app.routers.bot import router as bot_router
 from app.routers.game import router as game_router
 from app.routers.user import router as user_router
+from app.services.analytics_service import AnalyticsService
 from app.services.game_service import GameService
 from app.services.session_service import SessionService
 
@@ -38,7 +40,14 @@ async def _run_archive_turn_count_migration(app: FastAPI) -> None:
 
 
 def build_cors_origins(settings: Settings) -> list[str]:
-    origins = [settings.SITE_ORIGIN, "https://app.kriegspiel.org", "http://localhost:5173", "http://localhost:3000"]
+    origins = [
+        settings.SITE_ORIGIN,
+        "https://kriegspiel.org",
+        "https://www.kriegspiel.org",
+        "https://app.kriegspiel.org",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ]
     if settings.ENVIRONMENT == "development":
         origins.append("http://localhost:8000")
 
@@ -110,6 +119,7 @@ async def lifespan(app: FastAPI):
     app.state.db_ready = False
     app.state.game_service = None
     app.state.session_service = None
+    app.state.analytics_service = None
     app.state.archive_turn_count_migration_task = None
 
     try:
@@ -117,6 +127,7 @@ async def lifespan(app: FastAPI):
         app.state.db = db
         app.state.db_ready = True
         app.state.session_service = SessionService(db.sessions)
+        app.state.analytics_service = AnalyticsService(db.analytics_events)
         app.state.game_service = GameService(
             db.games,
             users_collection=db.users,
@@ -136,6 +147,7 @@ async def lifespan(app: FastAPI):
         app.state.db = None
         app.state.db_ready = False
         app.state.session_service = None
+        app.state.analytics_service = None
 
     try:
         yield
@@ -190,7 +202,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"detail": "Not Found"}, status_code=status.HTTP_404_NOT_FOUND)
         return await call_next(request)
 
-    canonical_routers = (auth_router, bot_router, game_router, user_router)
+    canonical_routers = (analytics_router, auth_router, bot_router, game_router, user_router)
     for router in canonical_routers:
         app.include_router(router)
         app.include_router(router, prefix="/api", include_in_schema=False)

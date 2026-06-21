@@ -182,11 +182,12 @@ def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
         (),
         {
             "games": object(),
-            "users": object(),
-            "sessions": object(),
-            "game_archives": object(),
-        },
-    )()
+                "users": object(),
+                "sessions": object(),
+                "analytics_events": object(),
+                "game_archives": object(),
+            },
+        )()
     calls: list[str] = []
 
     class FakeGameService:

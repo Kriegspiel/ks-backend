@@ -256,6 +256,27 @@ async def test_create_game_assigns_black_when_requested() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_game_stores_attribution_snapshot() -> None:
+    games = FakeGamesCollection()
+    service = GameService(games, site_origin="https://kriegspiel.org")
+    attribution = {
+        "attribution_id": "507f1f77bcf86cd799439099",
+        "utm": {"source": "reddit", "campaign": "ruleset-default"},
+        "landing_path": "/lobby",
+        "referrer_host": "reddit.com",
+    }
+
+    await service.create_game(
+        user_id="u1",
+        username="creator",
+        request=CreateGameRequest(rule_variant="berkeley_any", play_as="white", time_control="rapid"),
+        attribution=attribution,
+    )
+
+    assert games.docs[0]["attribution"] == attribution
+
+
+@pytest.mark.asyncio
 async def test_create_game_random_uses_injected_rng_choice() -> None:
     games = FakeGamesCollection()
     rng = type("Rng", (), {"choice": lambda self, values: "white"})()

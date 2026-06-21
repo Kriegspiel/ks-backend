@@ -14,6 +14,7 @@ from app.db import get_db
 from app.dependencies import get_current_user, get_session_service
 from app.main import create_app
 from app.models.user import UserModel
+from app.routers.analytics import maybe_get_analytics_service
 from app.services.session_service import SessionService
 
 
@@ -61,6 +62,9 @@ def app_no_db(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(auth_router_module, "require_db", lambda: fake_db)
     app = create_app(Settings(ENVIRONMENT="testing"))
+    app.dependency_overrides[maybe_get_analytics_service] = lambda: SimpleNamespace(
+        attribution_snapshot_for_id=AsyncMock(return_value=None)
+    )
     return app, fake_users
 
 
@@ -83,11 +87,11 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
         def __init__(self, _users):
             self._users = _users
 
-        async def create_user(self, payload):
-            return await service.create_user(payload)
+        async def create_user(self, payload, *, acquisition=None):
+            return await service.create_user(payload, acquisition=acquisition)
 
-        async def create_guest_user(self):
-            return await service.create_guest_user()
+        async def create_guest_user(self, *, acquisition=None):
+            return await service.create_guest_user(acquisition=acquisition)
 
         async def convert_guest_to_user(self, db, user, payload):
             return await service.convert_guest_to_user(db, user, payload)
@@ -145,6 +149,57 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
 
         logout = client.post("/api/auth/logout")
         assert logout.status_code == 200
+
+
+def test_register_and_guest_store_attribution_snapshot(app_no_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake_users = app_no_db
+
+    from app.routers import auth as auth_router_module
+
+    created_user = UserModel.from_mongo(_user_doc())
+    guest_user = UserModel.from_mongo(_guest_doc())
+    attribution = {
+        "attribution_id": "507f1f77bcf86cd799439099",
+        "utm": {"source": "reddit", "medium": "post", "campaign": "ruleset-default"},
+        "landing_path": "/",
+        "referrer_host": "reddit.com",
+    }
+    attr_service = SimpleNamespace(attribution_snapshot_for_id=AsyncMock(return_value=attribution))
+    app.dependency_overrides[maybe_get_analytics_service] = lambda: attr_service
+
+    service = SimpleNamespace(
+        create_user=AsyncMock(return_value=created_user),
+        create_guest_user=AsyncMock(return_value=guest_user),
+    )
+
+    class FakeUserService:
+        def __init__(self, _users):
+            self._users = _users
+
+        async def create_user(self, payload, *, acquisition=None):
+            return await service.create_user(payload, acquisition=acquisition)
+
+        async def create_guest_user(self, *, acquisition=None):
+            return await service.create_guest_user(acquisition=acquisition)
+
+    monkeypatch.setattr(auth_router_module, "UserService", FakeUserService)
+    session_service = SimpleNamespace(create_session=AsyncMock(return_value="sess123"))
+    app.dependency_overrides[get_session_service] = lambda: session_service
+
+    with TestClient(app) as client:
+        client.cookies.set("ks_attribution_id", attribution["attribution_id"])
+        register = client.post(
+            "/api/auth/register",
+            json={"username": "PlayerOne", "email": "player@example.com", "password": "abc12345"},
+        )
+        guest = client.post("/api/auth/guest")
+
+    assert register.status_code == 201
+    assert guest.status_code == 201
+    assert service.create_user.await_args.kwargs["acquisition"] == attribution
+    assert service.create_guest_user.await_args.kwargs["acquisition"] == attribution
+    assert session_service.create_session.await_args_list[0].kwargs["attribution"] == attribution
+    assert session_service.create_session.await_args_list[1].kwargs["attribution"] == attribution
 
 
 def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
@@ -206,7 +261,7 @@ def test_cookie_secure_flag_in_production(monkeypatch: pytest.MonkeyPatch) -> No
         def __init__(self, _users):
             self._users = _users
 
-        async def create_user(self, payload):
+        async def create_user(self, payload, *, acquisition=None):
             return created_user
 
         async def authenticate(self, username, password):
@@ -218,6 +273,9 @@ def test_cookie_secure_flag_in_production(monkeypatch: pytest.MonkeyPatch) -> No
 
     app = create_app(Settings(ENVIRONMENT="production"))
     app.dependency_overrides[get_session_service] = lambda: session_service
+    app.dependency_overrides[maybe_get_analytics_service] = lambda: SimpleNamespace(
+        attribution_snapshot_for_id=AsyncMock(return_value=None)
+    )
     with TestClient(app) as client:
         register = client.post(
             "/api/auth/register",

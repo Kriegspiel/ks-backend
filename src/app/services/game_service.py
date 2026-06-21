@@ -1761,7 +1761,13 @@ class GameService:
                 )
 
     async def create_game(
-        self, *, user_id: str, username: str, request: CreateGameRequest, role: str = "user"
+        self,
+        *,
+        user_id: str,
+        username: str,
+        request: CreateGameRequest,
+        role: str = "user",
+        attribution: dict[str, Any] | None = None,
     ) -> CreateGameResponse:
         color = self._creator_color(request.play_as, self._rng)
         now = self.utcnow()
@@ -1792,6 +1798,8 @@ class GameService:
             "updated_at": now,
             "expires_at": now + WAITING_GAME_TTL,
         }
+        if attribution is not None:
+            document["attribution"] = dict(attribution)
 
         bot_payload: dict[str, str] | None = None
         state: Literal["waiting", "active"] = "waiting"

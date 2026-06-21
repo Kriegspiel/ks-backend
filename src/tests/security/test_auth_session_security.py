@@ -46,7 +46,7 @@ def test_register_sets_cookie_flags(monkeypatch) -> None:
         def __init__(self, _users):
             self._users = _users
 
-        async def create_user(self, _payload):
+        async def create_user(self, _payload, *, acquisition=None):
             return created_user
 
         async def authenticate(self, _username, _password):
