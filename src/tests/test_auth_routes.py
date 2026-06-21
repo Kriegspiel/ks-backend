@@ -215,6 +215,7 @@ def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
     assert body["username"] == "playerone"
     assert body["email"] == "player@example.com"
     assert body["is_guest"] is False
+    assert body["can_view_tech_reports"] is False
 
 
 def test_me_endpoint_reissues_guest_cookie_and_refreshes_session(app_no_db) -> None:

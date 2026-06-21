@@ -7,8 +7,16 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
+from app.config import Settings
 from app import dependencies as deps
-from app.dependencies import _bearer_token, get_current_user, get_session_service, require_db
+from app.dependencies import (
+    _bearer_token,
+    can_view_tech_reports,
+    get_current_user,
+    get_session_service,
+    require_db,
+    require_tech_report_access,
+)
 from app.models.user import UserModel
 from app.services.session_service import SessionService
 
@@ -126,6 +134,27 @@ def test_bearer_token_parses_and_rejects_invalid_headers() -> None:
     assert _bearer_token(SimpleNamespace(headers={"authorization": "Basic abc"})) is None
     assert _bearer_token(SimpleNamespace(headers={"authorization": "Bearer "})) is None
     assert _bearer_token(SimpleNamespace()) is None
+
+
+def test_can_view_tech_reports_uses_admin_role_and_allowlisted_regular_users() -> None:
+    settings = Settings(TECH_REPORT_USERNAMES=" PlayerOne, other ")
+
+    assert can_view_tech_reports(SimpleNamespace(username="playerone", role="user"), settings) is True
+    assert can_view_tech_reports(SimpleNamespace(username="someone", role="admin"), settings) is True
+    assert can_view_tech_reports(SimpleNamespace(username="playerone", role="guest"), settings) is False
+    assert can_view_tech_reports(SimpleNamespace(username="outsider", role="user"), settings) is False
+
+
+@pytest.mark.asyncio
+async def test_require_tech_report_access_rejects_authenticated_non_operators() -> None:
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=Settings(TECH_REPORT_USERNAMES="fil"))))
+    user = SimpleNamespace(username="outsider", role="user")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await require_tech_report_access(request, user)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Tech reports are private"
 
 
 @pytest.mark.asyncio

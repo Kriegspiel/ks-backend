@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Request, status
 
+from app.config import Settings, get_settings
 from app.db import get_db
 from app.models.user import UserModel
 from app.services.session_service import SessionService
@@ -64,3 +65,32 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
     return UserModel.from_mongo(user_doc)
+
+
+def _tech_report_username_allowlist(settings: Settings) -> set[str]:
+    return {
+        username.strip().lower()
+        for username in settings.TECH_REPORT_USERNAMES.split(",")
+        if username.strip()
+    }
+
+
+def can_view_tech_reports(user: UserModel, settings: Settings) -> bool:
+    role = user.role.lower()
+    if role == "admin":
+        return True
+    if role != "user":
+        return False
+    return user.username.lower() in _tech_report_username_allowlist(settings)
+
+
+async def require_tech_report_access(
+    request: Request,
+    user: UserModel = Depends(get_current_user),
+) -> UserModel:
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        settings = get_settings()
+    if not can_view_tech_reports(user, settings):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tech reports are private")
+    return user

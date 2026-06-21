@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
-from app.dependencies import get_current_user, require_db
+from app.dependencies import get_current_user, require_db, require_tech_report_access
 from app.models.user import UserModel
 from app.services.user_service import UserService
 
@@ -104,6 +104,7 @@ async def get_leaderboard(
 @router.get("/tech/bots-report")
 async def get_bots_report(
     days: int = Query(default=10, ge=1, le=31),
+    _tech_user: UserModel = Depends(require_tech_report_access),
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
@@ -112,6 +113,7 @@ async def get_bots_report(
 
 @router.get("/tech/guests-report")
 async def get_guests_report(
+    _tech_user: UserModel = Depends(require_tech_report_access),
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
@@ -120,6 +122,7 @@ async def get_guests_report(
 
 @router.get("/tech/users-report")
 async def get_users_report(
+    _tech_user: UserModel = Depends(require_tech_report_access),
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
