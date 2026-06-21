@@ -128,6 +128,8 @@ def test_openapi_marks_bearer_authenticated_routes_and_leaves_registration_publi
     assert schema["paths"]["/bots"]["get"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/game/open"]["get"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/auth/me"]["get"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/tech/users-report"]["get"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/tech/acquisition-report"]["get"]["security"] == [{"BearerAuth": []}]
     assert "security" not in schema["paths"]["/auth/bots/register"]["post"]
     assert "security" not in schema["paths"]["/user/{username}"]["get"]
     assert "security" not in schema["paths"]["/health"]["get"]

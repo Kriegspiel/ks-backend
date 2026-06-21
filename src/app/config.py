@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     SENTRY_DSN: str | None = None
     SENTRY_TRACES_SAMPLE_RATE: float = 0.0
     SENTRY_SEND_DEFAULT_PII: bool = False
+    TECH_REPORT_USERNAMES: str = "fil"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from app.dependencies import get_current_user
 from app.config import Settings
 from app.main import create_app
 from app.models.analytics import AcquisitionReportResponse, CampaignVisitRequest
@@ -97,7 +98,7 @@ def test_campaign_visit_request_rejects_protocol_relative_landing_path() -> None
 
 
 def test_acquisition_report_endpoint_returns_aggregate_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    app = create_app(Settings(ENVIRONMENT="testing"))
+    app = create_app(Settings(ENVIRONMENT="testing", TECH_REPORT_USERNAMES="playerone"))
 
     from app.routers import analytics as analytics_router_module
 
@@ -112,6 +113,7 @@ def test_acquisition_report_endpoint_returns_aggregate_rows(monkeypatch: pytest.
             )
 
     app.dependency_overrides[get_analytics_service] = lambda: FakeAnalyticsService()
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(username="playerone", role="user")
 
     with TestClient(app) as client:
         response = client.get("/api/tech/acquisition-report?days=7")
@@ -129,6 +131,18 @@ def test_acquisition_report_endpoint_returns_aggregate_rows(monkeypatch: pytest.
             "games_completed": 0,
         }
     ]
+
+
+def test_acquisition_report_endpoint_rejects_non_operators() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing", TECH_REPORT_USERNAMES="fil"))
+    app.dependency_overrides[get_analytics_service] = lambda: SimpleNamespace()
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(username="outsider", role="user")
+
+    with TestClient(app) as client:
+        response = client.get("/api/tech/acquisition-report")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Tech reports are private"
 
 
 def test_acquisition_report_user_pipeline_reads_user_acquisition() -> None:

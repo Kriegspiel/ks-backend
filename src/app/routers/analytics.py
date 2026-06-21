@@ -4,8 +4,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
-from app.dependencies import require_db
+from app.dependencies import require_db, require_tech_report_access
 from app.models.analytics import AcquisitionReportResponse, CampaignVisitRequest, CampaignVisitResponse
+from app.models.user import UserModel
 from app.services.analytics_service import AnalyticsService
 
 router = APIRouter(tags=["analytics"])
@@ -72,6 +73,7 @@ async def record_campaign_visit(
 @router.get("/tech/acquisition-report", response_model=AcquisitionReportResponse)
 async def get_acquisition_report(
     days: int = Query(default=30, ge=1, le=395),
+    _tech_user: UserModel = Depends(require_tech_report_access),
     analytics_service: AnalyticsService = Depends(get_analytics_service),
 ) -> AcquisitionReportResponse:
     db = require_db()

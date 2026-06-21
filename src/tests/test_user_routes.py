@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
@@ -47,7 +48,19 @@ class StubService:
         self.get_rating_history = AsyncMock(return_value={"track": "overall", "points": []})
         self.get_leaderboard = AsyncMock(
             return_value=(
-                [{"rank": 1, "username": "alpha", "display_name": "Alpha", "role": "user", "is_bot": False, "profile_path": "/players/alpha", "elo": 1500, "games_played": 10, "win_rate": 0.6}],
+                [
+                    {
+                        "rank": 1,
+                        "username": "alpha",
+                        "display_name": "Alpha",
+                        "role": "user",
+                        "is_bot": False,
+                        "profile_path": "/players/alpha",
+                        "elo": 1500,
+                        "games_played": 10,
+                        "win_rate": 0.6,
+                    }
+                ],
                 1,
             )
         )
@@ -122,7 +135,7 @@ class StubService:
         return username.lower()
 
 
-def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gate() -> None:
+def test_user_routes_profile_games_leaderboard_and_settings_auth_gate() -> None:
     app = create_app(Settings(ENVIRONMENT="testing"))
     app.dependency_overrides[get_user_service] = lambda: StubService()
 
@@ -140,9 +153,6 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
         profile = client.get("/api/user/playerone")
         history = client.get("/api/user/playerone/games?page=1&per_page=20")
         leaderboard = client.get("/api/leaderboard?page=1&per_page=20")
-        bots_report = client.get("/api/tech/bots-report?days=10")
-        guests_report = client.get("/api/tech/guests-report")
-        users_report = client.get("/api/tech/users-report")
         unauth = client.patch("/api/user/settings", json={"board_theme": "dark"})
 
     assert profile.status_code == 200
@@ -153,6 +163,24 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
 
     assert leaderboard.status_code == 200
     assert leaderboard.json()["players"][0]["rank"] == 1
+
+    assert unauth.status_code == 401
+
+
+def test_tech_report_routes_require_operator_access() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing", TECH_REPORT_USERNAMES="playerone"))
+    app.dependency_overrides[get_user_service] = lambda: StubService()
+
+    class FakeDB:
+        sessions = object()
+
+    dependencies.get_db = lambda: FakeDB()
+    app.dependency_overrides[dependencies.get_current_user] = lambda: SimpleNamespace(username="playerone", role="user")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        bots_report = client.get("/api/tech/bots-report?days=10")
+        guests_report = client.get("/api/tech/guests-report")
+        users_report = client.get("/api/tech/users-report")
 
     assert bots_report.status_code == 200
     assert bots_report.json()["bots"][0]["username"] == "gptnano"
@@ -167,7 +195,20 @@ def test_user_routes_profile_games_leaderboard_bots_report_and_settings_auth_gat
     assert users_report.json()["sections"][0]["key"] == "dau"
     assert users_report.json()["last_games"][0]["game_code"] == "USER01"
 
-    assert unauth.status_code == 401
+    app.dependency_overrides[dependencies.get_current_user] = lambda: SimpleNamespace(username="outsider", role="user")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        forbidden = client.get("/api/tech/users-report")
+
+    assert forbidden.status_code == 403
+    assert forbidden.json()["detail"] == "Tech reports are private"
+
+    app.dependency_overrides.pop(dependencies.get_current_user)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        unauthenticated = client.get("/api/tech/users-report")
+
+    assert unauthenticated.status_code == 401
 
 
 def test_user_games_defaults_to_100_per_page() -> None:
