@@ -19,6 +19,7 @@ from app.services.engine_adapter import (
     _deserialize_color,
     _deserialize_question,
     _deserialize_scoresheet_turn,
+    _is_canonical_engine_state,
     _repair_possible_to_ask,
     _serialize_legacy_game_state,
     _serialize_answer,
@@ -54,6 +55,11 @@ def test_create_new_game_and_legal_move_succeeds() -> None:
 
     assert result["move_done"] is True
     assert result["announcement"] in {"REGULAR_MOVE", "CAPTURE_DONE"}
+
+
+def test_create_new_game_rejects_unknown_rule_variant() -> None:
+    with pytest.raises(ValueError, match="Unsupported rule variant"):
+        create_new_game(rule_variant="standard")
 
 
 def test_attempt_move_surfaces_double_check_component_announcements() -> None:
@@ -262,6 +268,15 @@ def test_deserialize_game_state_validates_board_and_repairs_missing_move_lists()
         _repair_possible_to_ask(RepairStub(must_use_pawns=True))
 
 
+def test_deserialize_legacy_game_state_defaults_ruleset_from_any_rule() -> None:
+    payload = _serialize_legacy_game_state(create_new_game(any_rule=False))
+    payload.pop("ruleset_id")
+
+    restored = deserialize_game_state(payload)
+
+    assert restored.ruleset_id == "berkeley"
+
+
 def test_extract_stored_scoresheets_supports_canonical_and_legacy_payloads() -> None:
     game = create_new_game(any_rule=True)
     attempt_move(game, "e2e4")
@@ -282,6 +297,25 @@ def test_extract_stored_scoresheets_supports_canonical_and_legacy_payloads() -> 
     assert legacy_scoresheets["white"]["moves_own"]
     assert previous_canonical_scoresheets is not None
     assert previous_canonical_scoresheets["white"]["moves_own"]
+
+
+def test_extract_stored_scoresheets_rejects_incomplete_payload_shapes() -> None:
+    assert extract_stored_scoresheets(None) is None
+    assert extract_stored_scoresheets({"schema_version": CANONICAL_ENGINE_STATE_SCHEMA_VERSION, "game_state": "bad"}) is None
+    assert extract_stored_scoresheets(
+        {
+            "schema_version": CANONICAL_ENGINE_STATE_SCHEMA_VERSION,
+            "game_state": {"white_scoresheet": {}, "black_scoresheet": "bad"},
+        }
+    ) is None
+    assert extract_stored_scoresheets({"white_scoresheet": {}, "black_scoresheet": "bad"}) is None
+    assert _is_canonical_engine_state({"schema_version": CANONICAL_ENGINE_STATE_SCHEMA_VERSION, "game_state": {}}) is True
+
+
+def test_extract_stored_scoresheets_defensively_rejects_bad_canonical_game_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.engine_adapter.is_supported_canonical_engine_state", lambda _payload: True)
+
+    assert extract_stored_scoresheets({"game_state": "bad"}) is None
 
 
 def test_engine_adapter_private_serializers_cover_fallback_shapes() -> None:
@@ -317,6 +351,43 @@ def test_deserialize_answer_handles_capture_and_special_cases() -> None:
         }
     )
     assert special_answer.special_announcement == SpecialCaseAnnouncement.CHECK_DOUBLE
+
+
+def test_deserialize_answer_handles_all_optional_metadata_fields() -> None:
+    capture = _deserialize_answer(
+        {
+            "main_announcement": "CAPTURE_DONE",
+            "capture_square": "d4",
+            "captured_piece_announcement": "PAWN",
+            "promotion_announced": True,
+        }
+    )
+    drop = _deserialize_answer(
+        {
+            "main_announcement": "REGULAR_MOVE",
+            "dropped_piece_announcement": "KNIGHT",
+            "next_turn_pawn_tries": 2,
+        }
+    )
+    next_turn_binary = _deserialize_answer(
+        {
+            "main_announcement": "REGULAR_MOVE",
+            "next_turn_has_pawn_capture": True,
+        }
+    )
+    next_turn_squares = _deserialize_answer(
+        {
+            "main_announcement": "REGULAR_MOVE",
+            "next_turn_pawn_try_squares": [chess.E4, chess.C2],
+        }
+    )
+
+    assert capture.captured_piece_announcement == CapturedPieceAnnouncement.PAWN
+    assert capture.promotion_announced is True
+    assert drop.dropped_piece_announcement == CapturedPieceAnnouncement.KNIGHT
+    assert drop.next_turn_pawn_tries == 2
+    assert next_turn_binary.next_turn_has_pawn_capture is True
+    assert next_turn_squares.next_turn_pawn_try_squares == (chess.C2, chess.E4)
 
 
 def test_answer_serializers_cover_named_checks_and_non_double_specials() -> None:

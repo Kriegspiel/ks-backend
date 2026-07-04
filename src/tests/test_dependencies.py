@@ -158,6 +158,17 @@ async def test_require_tech_report_access_rejects_authenticated_non_operators() 
 
 
 @pytest.mark.asyncio
+async def test_require_tech_report_access_uses_global_settings_when_app_state_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(deps, "get_settings", lambda: Settings(TECH_REPORT_USERNAMES="playerone"))
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    user = SimpleNamespace(username="playerone", role="user")
+
+    assert await require_tech_report_access(request, user) is user
+
+
+@pytest.mark.asyncio
 async def test_get_current_user_returns_authenticated_bot_for_bearer_token(monkeypatch: pytest.MonkeyPatch) -> None:
     bot_doc = {
         "_id": "507f1f77bcf86cd799439099",

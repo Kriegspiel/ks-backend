@@ -279,6 +279,20 @@ async def test_create_guest_user_skips_existing_guest_name(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
+async def test_create_guest_user_raises_when_small_name_pool_is_exhausted(monkeypatch: pytest.MonkeyPatch) -> None:
+    users = FakeUsersCollection()
+    users.docs.append({"_id": ObjectId(), "username": "guest_taken"})
+    monkeypatch.setattr(UserService, "guest_name_pool_size", classmethod(lambda cls: 1))
+    monkeypatch.setattr(UserService, "_guest_username_for_index", classmethod(lambda cls, index: "guest_taken"))
+    monkeypatch.setattr(user_service_module.secrets, "randbelow", lambda _upper: 0)
+
+    with pytest.raises(UserConflictError) as exc:
+        await UserService(users).create_guest_user()
+
+    assert exc.value.code == "GUEST_NAME_POOL_EXHAUSTED"
+
+
+@pytest.mark.asyncio
 async def test_convert_guest_to_user_claims_account_and_updates_player_refs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(user_service_module.secrets, "randbelow", lambda _upper: 0)
     users = FakeUsersCollection()
@@ -287,8 +301,18 @@ async def test_convert_guest_to_user_claims_account_and_updates_player_refs(monk
     service = UserService(users)
     guest = await service.create_guest_user()
     user_id = guest.id
-    games.docs.append({"white": {"user_id": user_id, "username": guest.username, "role": "guest"}, "black": {"user_id": "other", "username": "other", "role": "user"}})
-    game_archives.docs.append({"white": {"user_id": "other", "username": "other", "role": "user"}, "black": {"user_id": user_id, "username": guest.username, "role": "guest"}})
+    games.docs.append(
+        {
+            "white": {"user_id": user_id, "username": guest.username, "role": "guest"},
+            "black": {"user_id": "other", "username": "other", "role": "user"},
+        }
+    )
+    game_archives.docs.append(
+        {
+            "white": {"user_id": "other", "username": "other", "role": "user"},
+            "black": {"user_id": user_id, "username": guest.username, "role": "guest"},
+        }
+    )
 
     converted = await service.convert_guest_to_user(
         FakeDB(users=users, games=games, game_archives=game_archives),
@@ -346,6 +370,131 @@ async def test_convert_guest_to_user_rejects_duplicate_email(monkeypatch: pytest
         )
 
     assert exc.value.code == "EMAIL_TAKEN"
+
+
+@pytest.mark.asyncio
+async def test_create_user_and_guest_user_attach_acquisition_and_guest_retries_duplicate_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    users = FakeUsersCollection()
+    service = UserService(users)
+
+    created = await service.create_user(
+        RegisterRequest(username="Acquired", email="acquired@example.com", password="abc12345"),
+        acquisition={"utm": {"source": "reddit"}},
+    )
+
+    assert created.username == "acquired"
+    assert users.docs[0]["acquisition"]["utm"] == {"source": "reddit"}
+    assert isinstance(users.docs[0]["acquisition"]["acquired_at"], datetime)
+
+    class DuplicateOnceGuests(FakeUsersCollection):
+        def __init__(self) -> None:
+            super().__init__()
+            self.insert_attempts = 0
+
+        async def insert_one(self, payload: dict):
+            self.insert_attempts += 1
+            if self.insert_attempts == 1:
+                raise DuplicateKeyError("guest username race")
+            return await super().insert_one(payload)
+
+    monkeypatch.setattr(user_service_module.secrets, "randbelow", lambda _upper: 0)
+    guest_users = DuplicateOnceGuests()
+    guest = await UserService(guest_users).create_guest_user(acquisition={"landing_path": "/play"})
+
+    assert guest.username == UserService._guest_username_for_index(1)
+    assert guest_users.insert_attempts == 2
+    assert guest_users.docs[0]["acquisition"]["landing_path"] == "/play"
+
+
+def _guest_user_model(
+    *,
+    username: str = "guest_mikhail_tal",
+    role: str = "guest",
+    user_id: ObjectId | None = None,
+) -> UserModel:
+    now = datetime(2026, 5, 9, tzinfo=UTC)
+    return UserModel.from_mongo(
+        {
+            "_id": user_id or ObjectId(),
+            "username": username,
+            "username_display": username,
+            "email": f"{username}@guests.kriegspiel.local",
+            "email_verified": True,
+            "password_hash": "hash",
+            "auth_providers": ["guest"],
+            "profile": {"bio": "Guest player", "avatar_url": None, "country": None},
+            "bot_profile": None,
+            "stats": default_user_stats_payload(),
+            "settings": {"board_theme": "default", "piece_set": "cburnett", "sound_enabled": True, "auto_ask_any": False},
+            "role": role,
+            "status": "active",
+            "last_active_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_convert_guest_to_user_rejects_non_guest_invalid_guest_duplicate_key_and_missing_update() -> None:
+    payload = ConvertGuestRequest(email="converted@example.com", password="abc12345")
+
+    with pytest.raises(ValueError, match="Only guest accounts can be converted"):
+        await UserService(FakeUsersCollection()).convert_guest_to_user(
+            FakeDB(users=FakeUsersCollection(), games=FakeUsersCollection(), game_archives=FakeUsersCollection()),
+            _guest_user_model(role="user"),
+            payload,
+        )
+
+    with pytest.raises(ValueError, match="Guest username cannot be converted"):
+        await UserService(FakeUsersCollection()).convert_guest_to_user(
+            FakeDB(users=FakeUsersCollection(), games=FakeUsersCollection(), game_archives=FakeUsersCollection()),
+            _guest_user_model(username="guest_"),
+            payload,
+        )
+
+    class DuplicateConvertUsers(FakeUsersCollection):
+        def __init__(self, message: str) -> None:
+            super().__init__()
+            self.message = message
+
+        async def find_one_and_update(self, query: dict, update: dict, return_document=None):  # noqa: ARG002
+            raise DuplicateKeyError(self.message)
+
+    with pytest.raises(UserConflictError) as username_exc:
+        duplicate_username_users = DuplicateConvertUsers("duplicate username index")
+        await UserService(duplicate_username_users).convert_guest_to_user(
+            FakeDB(users=duplicate_username_users, games=FakeUsersCollection(), game_archives=FakeUsersCollection()),
+            _guest_user_model(),
+            payload,
+        )
+    assert username_exc.value.field == "username"
+
+    with pytest.raises(UserConflictError) as email_exc:
+        duplicate_email_users = DuplicateConvertUsers("duplicate email index")
+        await UserService(duplicate_email_users).convert_guest_to_user(
+            FakeDB(users=duplicate_email_users, games=FakeUsersCollection(), game_archives=FakeUsersCollection()),
+            _guest_user_model(),
+            payload,
+        )
+    assert email_exc.value.field == "email"
+
+    missing_users = FakeUsersCollection()
+    with pytest.raises(ValueError, match="Only guest accounts can be converted"):
+        await UserService(missing_users).convert_guest_to_user(
+            FakeDB(users=missing_users, games=FakeUsersCollection(), game_archives=FakeUsersCollection()),
+            _guest_user_model(),
+            payload,
+        )
+
+    games = FakeUsersCollection()
+    await UserService(FakeUsersCollection())._update_guest_player_references(
+        type("PartialDB", (), {"games": games, "game_archives": None})(),
+        user_id="guest-id",
+        username="converted",
+    )
 
 
 @pytest.mark.asyncio
@@ -429,6 +578,40 @@ async def test_authenticate_rehashes_legacy_bcrypt_password_hash() -> None:
     assert users.docs[0]["password_hash"] != legacy_hash
     assert UserService.needs_password_rehash(users.docs[0]["password_hash"]) is False
     assert service.verify_password("abc12345", users.docs[0]["password_hash"]) is True
+
+
+@pytest.mark.asyncio
+async def test_authenticate_tolerates_failed_rehash_update() -> None:
+    class NoUpdateUsers(FakeUsersCollection):
+        async def find_one_and_update(self, query: dict, update: dict, return_document=None):  # noqa: ARG002
+            return None
+
+    users = NoUpdateUsers()
+    legacy_hash = bcrypt.hashpw("abc12345".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    users.docs.append(
+        {
+            "_id": ObjectId(),
+            "username": "playerone",
+            "username_display": "PlayerOne",
+            "email": "one@example.com",
+            "password_hash": legacy_hash,
+            "auth_providers": ["local"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "bot_profile": None,
+            "stats": default_user_stats_payload(),
+            "settings": {"board_theme": "default", "piece_set": "cburnett", "sound_enabled": True, "auto_ask_any": False},
+            "role": "user",
+            "status": "active",
+            "last_active_at": datetime.now(UTC),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+
+    authenticated = await UserService(users).authenticate("PLAYERONE", "abc12345")
+
+    assert authenticated is not None
+    assert users.docs[0]["password_hash"] == legacy_hash
 
 
 @pytest.mark.asyncio
@@ -659,8 +842,23 @@ async def test_get_public_bot_profile_includes_generic_bot_metrics() -> None:
     assert metrics["vs_humans"] == {"total_games": 1, "wins": 0, "losses": 1, "draws": 0, "win_rate": 0.0}
     assert metrics["as_white"] == {"total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
     assert metrics["as_black"] == {"total_games": 1, "wins": 0, "losses": 1, "draws": 0, "win_rate": 0.0}
-    assert metrics["opponents"][0] == {"username": "randobot", "role": "bot", "total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
-    assert metrics["rulesets"][0] == {"rule_variant": "wild16", "total_games": 2, "wins": 1, "losses": 0, "draws": 1, "win_rate": 0.5}
+    assert metrics["opponents"][0] == {
+        "username": "randobot",
+        "role": "bot",
+        "total_games": 2,
+        "wins": 1,
+        "losses": 0,
+        "draws": 1,
+        "win_rate": 0.5,
+    }
+    assert metrics["rulesets"][0] == {
+        "rule_variant": "wild16",
+        "total_games": 2,
+        "wins": 1,
+        "losses": 0,
+        "draws": 1,
+        "win_rate": 0.5,
+    }
     assert archives.find_calls[0][0] == {"$or": [{"white.user_id": str(bot_id)}, {"black.user_id": str(bot_id)}]}
     assert "moves" not in archives.find_calls[0][1]
 
@@ -967,8 +1165,22 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
                 "black": {"user_id": str(other_id), "username": "rival-a", "role": "bot"},
                 "result": {"winner": "white", "reason": "checkmate"},
                 "rating_snapshot": {
-                    "overall": {"white_before": 1200, "white_after": 1216, "white_delta": 16, "black_before": 1200, "black_after": 1184, "black_delta": -16},
-                    "specific": {"white_before": 1200, "white_after": 1216, "white_delta": 16, "black_before": 1200, "black_after": 1184, "black_delta": -16},
+                    "overall": {
+                        "white_before": 1200,
+                        "white_after": 1216,
+                        "white_delta": 16,
+                        "black_before": 1200,
+                        "black_after": 1184,
+                        "black_delta": -16,
+                    },
+                    "specific": {
+                        "white_before": 1200,
+                        "white_after": 1216,
+                        "white_delta": 16,
+                        "black_before": 1200,
+                        "black_after": 1184,
+                        "black_delta": -16,
+                    },
                     "white_track": "vs_bots",
                     "black_track": "vs_humans",
                 },
@@ -1173,6 +1385,139 @@ def test_helper_edges_cover_password_parsing_datetime_and_result_reasoning() -> 
     )
     assert UserService._normalized_result_reason({"moves": [{"special_announcement": "STALEMATE_BLACK_WINS"}]}) == "stalemate"
     assert UserService._normalized_result_reason({"moves": [{"special_announcement": "CHECKMATE_BLACK_WINS"}]}) == "checkmate"
+
+
+def test_remaining_user_service_helper_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    naive = datetime(2026, 5, 9, 12)
+    generated_id = ObjectId()
+    inconsistent_stats = default_user_stats_payload()
+    inconsistent_stats["games_played"] = 99
+
+    assert UserService._optional_datetime(naive) == naive.replace(tzinfo=UTC)
+    assert UserService._created_day({"_id": generated_id}) == generated_id.generation_time.date().isoformat()
+    assert UserService._result_tracks_are_consistent(inconsistent_stats) is False
+    assert (
+        UserService._bot_metric_play_as(
+            {"white": None, "black": {"username": "MetricBot"}},
+            user_id="missing",
+            username="metricbot",
+        )
+        == "black"
+    )
+    assert UserService._bot_metric_play_as({"white": None, "black": None}, user_id="missing", username="metricbot") is None
+    assert UserService._bot_metric_turn_count({"turn_count": "bad", "move_count": 5}) == 5
+    assert UserService._bot_metric_turn_count({"turn_count": "bad", "move_count": "bad"}) == 0
+    assert UserService._activity_game_has_completed_move({"moves": [{"move_done": True}]}) is True
+    assert (
+        UserService._activity_game_has_completed_move(
+            {"move_number": "bad", "move_count": "bad", "turn_count": "bad"}
+        )
+        is False
+    )
+    assert UserService._game_clock_duration_seconds({"moves": []}) is None
+    assert UserService._positive_float("bad", default=3.0) == 3.0
+    assert UserService._positive_float(float("inf"), default=3.0) == 3.0
+    assert UserService._positive_float(-1, default=3.0) == 3.0
+    assert UserService._activity_player_key({"username": " PlayerOne "}) == "username:playerone"
+    assert UserService._activity_player_key({"username": " "}) is None
+
+    original_optional_datetime = UserService._optional_datetime
+    flaky_timestamp_calls = iter([datetime(2026, 5, 9, tzinfo=UTC), None])
+
+    def flaky_optional_datetime(value):  # noqa: ANN001
+        if value == "flaky":
+            return next(flaky_timestamp_calls)
+        return original_optional_datetime(value)
+
+    monkeypatch.setattr(UserService, "_optional_datetime", staticmethod(flaky_optional_datetime))
+    assert UserService._game_clock_duration_seconds({"moves": [{"timestamp": "flaky", "color": "white"}]}) == 0
+
+
+def test_game_clock_duration_handles_invalid_colors_and_pending_attempts() -> None:
+    started_at = datetime(2026, 5, 9, 12, tzinfo=UTC)
+
+    assert (
+        UserService._game_clock_duration_seconds(
+            {
+                "state": "completed",
+                "result": {"reason": "timeout"},
+                "time_control": {"base": 20, "increment": 2},
+                "moves": [
+                    {"timestamp": started_at, "color": "white", "move_done": True},
+                    {"timestamp": started_at + timedelta(seconds=5), "color": "green", "move_done": True},
+                    {"timestamp": started_at + timedelta(seconds=9), "color": "black", "move_done": False},
+                ],
+            }
+        )
+        == 20
+    )
+    assert (
+        UserService._game_clock_duration_seconds(
+            {
+                "moves": [
+                    {"timestamp": started_at, "color": "green", "move_done": True},
+                    {"timestamp": started_at + timedelta(seconds=5), "color": "white", "move_done": False},
+                ],
+            }
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_bot_profile_metrics_skips_unmatched_games_and_uses_username_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bot_id = ObjectId()
+    archive_docs = [
+        {
+            "_id": ObjectId(),
+            "state": "active",
+            "white": {"username": "metricbot", "role": "bot"},
+            "black": {"username": "human", "role": "user"},
+        },
+        {
+            "_id": ObjectId(),
+            "state": "completed",
+            "white": {"username": "someoneelse", "role": "bot"},
+            "black": {"username": "human", "role": "user"},
+        },
+        {
+            "_id": ObjectId(),
+            "state": "completed",
+            "rule_variant": "wild16",
+            "white": {"username": " MetricBot ", "role": "bot"},
+            "black": {"username": "human", "role": "user"},
+            "result": {"winner": "white"},
+            "move_count": "bad",
+            "turn_count": 7,
+            "created_at": datetime(2026, 5, 9, 12, tzinfo=UTC),
+            "updated_at": datetime(2026, 5, 9, 12, 5, tzinfo=UTC),
+        },
+        {
+            "_id": ObjectId(),
+            "state": "completed",
+            "rule_variant": "wild16",
+            "white": {"username": " MetricBot ", "role": "bot"},
+            "black": {"username": "human", "role": "user"},
+            "result": {"winner": "black"},
+            "turn_count": 1,
+            "created_at": datetime(2026, 5, 8, 12, tzinfo=UTC),
+            "updated_at": datetime(2026, 5, 8, 12, 1, tzinfo=UTC),
+        },
+    ]
+    service = UserService(FakeUsersCollection())
+    monkeypatch.setattr(service, "_find", lambda collection, query, projection=None: FakeCursor(archive_docs))  # noqa: ARG005
+
+    metrics = await service._bot_profile_metrics(
+        FakeDB(users=FakeUsersCollection(), game_archives=FakeUsersCollection()),
+        {"_id": bot_id, "username": "metricbot"},
+    )
+
+    assert metrics["completed_games"] == 2
+    assert metrics["overall"]["wins"] == 1
+    assert metrics["average_turn_count"] == 4.0
+    assert metrics["opponents"][0]["username"] == "human"
 
 
 def test_find_and_aggregate_series_cover_projection_fallbacks() -> None:
@@ -1488,7 +1833,10 @@ async def test_get_listed_bot_daily_report_returns_empty_when_no_bots_are_listed
         ]
     )
 
-    report = await UserService(users).get_listed_bot_daily_report(FakeDB(users=users, game_archives=FakeUsersCollection()), days=5)
+    report = await UserService(users).get_listed_bot_daily_report(
+        FakeDB(users=users, game_archives=FakeUsersCollection()),
+        days=5,
+    )
 
     assert report == {"timezone": "America/New_York", "bots": []}
 
@@ -1556,6 +1904,16 @@ async def test_get_guest_report_lists_guests_with_archive_and_live_game_counts()
             "black": {"user_id": str(guest_two_id), "username": "guest_judit_polgar"},
             "created_at": live_at - timedelta(minutes=5),
             "updated_at": live_at,
+        }
+    )
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "DONE01",
+            "white": {"user_id": str(guest_one_id), "username": "guest_mikhail_tal"},
+            "black": {"user_id": str(human_id), "username": "fil"},
+            "created_at": archived_at - timedelta(hours=2),
+            "updated_at": archived_at - timedelta(hours=1),
         }
     )
 
@@ -1642,6 +2000,7 @@ async def test_get_guest_report_uses_clock_time_for_delayed_timeout_archive() ->
 async def test_get_guest_report_returns_empty_without_guest_accounts() -> None:
     users = FakeUsersCollection()
     users.docs.append({"_id": ObjectId(), "username": "human", "role": "user", "created_at": datetime(2026, 4, 1, tzinfo=UTC)})
+    users.docs.append({"_id": None, "username": "", "role": "guest", "created_at": datetime(2026, 4, 1, tzinfo=UTC)})
 
     report = await UserService(users).get_guest_report(FakeDB(users=users, game_archives=FakeUsersCollection()))
 
@@ -1778,6 +2137,102 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_user_activity_report_skips_edge_rows_and_caps_recent_games(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    users = object()
+    archives = object()
+    service = UserService(FakeUsersCollection())
+    now = datetime(2026, 5, 1, 12, tzinfo=UTC)
+
+    class TolerantCursor(FakeCursor):
+        @staticmethod
+        def _resolve(doc: dict, key: str):
+            value = FakeCursor._resolve(doc, key)
+            return value if value is not None else datetime.min.replace(tzinfo=UTC)
+
+    activity_docs = [
+        {"_id": ObjectId(), "game_code": "NODATE", "white": {}, "black": {}},
+        {
+            "_id": ObjectId(),
+            "game_code": "DUPACT",
+            "updated_at": datetime(2026, 5, 1, 10, tzinfo=UTC),
+            "white": {"username": "newer"},
+            "black": {},
+        },
+        {
+            "_id": ObjectId(),
+            "game_code": "DUPACT",
+            "updated_at": datetime(2026, 5, 1, 9, tzinfo=UTC),
+            "white": {"username": "older"},
+            "black": {},
+        },
+        {
+            "_id": ObjectId(),
+            "game_code": "OLD",
+            "updated_at": datetime(2024, 1, 1, tzinfo=UTC),
+            "white": {"username": "old"},
+            "black": {},
+        },
+        {
+            "_id": ObjectId(),
+            "game_code": "NOPLAYER",
+            "updated_at": datetime(2026, 5, 1, 10, tzinfo=UTC),
+            "white": {},
+            "black": {},
+        },
+    ]
+    recent_docs = [
+        {
+            "_id": ObjectId(),
+            "game_code": f"USER{index:03d}",
+            "updated_at": now - timedelta(minutes=index),
+            "white": {"username": f"user{index}", "role": "user"},
+            "black": {"username": "human-opponent", "role": "user"},
+        }
+        for index in range(101)
+    ]
+    recent_docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "DUPRECENT",
+                "updated_at": now - timedelta(days=1),
+                "white": {"username": "newer", "role": "user"},
+                "black": {"username": "human-opponent", "role": "user"},
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "DUPRECENT",
+                "updated_at": now - timedelta(days=2),
+                "white": {"username": "older", "role": "user"},
+                "black": {"username": "human-opponent", "role": "user"},
+            },
+        ]
+    )
+    recent_docs.append({"_id": ObjectId(), "game_code": "RECENT-NODATE", "white": {}, "black": {}})
+
+    def fake_find(collection, query, projection=None):  # noqa: ANN001
+        if collection is users:
+            return TolerantCursor([])
+        assert collection is archives
+        if "updated_at" in query:
+            return TolerantCursor(activity_docs)
+        return TolerantCursor(recent_docs)
+
+    monkeypatch.setattr(service, "_find", fake_find)
+
+    report = await service.get_user_activity_report(
+        FakeDB(users=users, game_archives=archives, games=None),
+        now=now,
+    )
+
+    assert len(report["last_games"]) == 100
+    assert report["last_games"][0]["game_code"] == "USER000"
+    assert report["last_games"][-1]["game_code"] == "USER099"
+
+
+@pytest.mark.asyncio
 async def test_get_listed_bot_daily_report_aggregates_daily_win_rates(monkeypatch: pytest.MonkeyPatch) -> None:
     users = object()
     archives = object()
@@ -1816,7 +2271,7 @@ async def test_get_listed_bot_daily_report_aggregates_daily_win_rates(monkeypatc
         },
         {
             "updated_at": (previous_midday_local - timedelta(days=30)).astimezone(UTC),
-            "white": {"username": "outsider", "role": "user"},
+            "white": {"username": "gptnano", "role": "bot"},
             "black": {"username": "human", "role": "user"},
             "result": {"winner": "white"},
         },

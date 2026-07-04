@@ -60,6 +60,12 @@ def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_
         )
         == "Pawn try from E6"
     )
+    assert projection._format_pawn_try_square("not-a-square") == ""
+    assert projection._format_pawn_try_square(99) == ""
+    assert projection._special_announcement_codes("CHECK_DOUBLE", ["UNKNOWN", "CHECK_FILE"]) == [
+        "CHECK_DOUBLE",
+        "CHECK_FILE",
+    ]
     assert projection._scoresheet_answer_texts(
         {
             "main_announcement": "REGULAR_MOVE",
@@ -281,6 +287,12 @@ def test_state_projection_possible_actions_and_referee_log_cover_remaining_publi
                 "special_announcement": "CHECK_RANK",
                 "capture_square": None,
                 "timestamp": None,
+            },
+            {
+                "ply": "unknown",
+                "announcement": "REGULAR_MOVE",
+                "next_turn_pawn_tries": 1,
+                "timestamp": None,
             }
         ]
     )
@@ -308,7 +320,64 @@ def test_state_projection_possible_actions_and_referee_log_cover_remaining_publi
         rule_variant="crazykrieg",
     ) == ["ask_any"]
     assert projection._build_turn_announcement({"announcement": "NONSENSE"}, perspective="own") is None
-    assert [item["announcement"] for item in referee_log] == ["REGULAR_MOVE", "CHECK_FILE", "CHECK_RANK"]
+    assert [item["announcement"] for item in referee_log] == [
+        "REGULAR_MOVE",
+        "CHECK_FILE",
+        "CHECK_RANK",
+        "REGULAR_MOVE",
+        "1 pawn try",
+    ]
+    assert referee_log[-1]["ply"] is None
+
+
+def test_state_projection_referee_turns_add_next_turn_status() -> None:
+    assert projection.build_referee_turns(
+        [
+            {
+                "ply": 1,
+                "color": "white",
+                "question_type": "COMMON",
+                "announcement": "REGULAR_MOVE",
+                "next_turn_pawn_tries": 1,
+            }
+        ]
+    ) == [
+        {
+            "turn": 1,
+            "white": [
+                {
+                    "kind": "move",
+                    "actor": "self",
+                    "prompt": "Move attempt",
+                    "message": "Move attempt — Move complete",
+                    "messages": ["Move complete"],
+                    "move_uci": None,
+                    "question_type": "COMMON",
+                }
+            ],
+            "black": [
+                {
+                    "kind": "status",
+                    "actor": "self",
+                    "prompt": None,
+                    "message": "1 pawn try",
+                    "messages": ["1 pawn try"],
+                    "move_uci": None,
+                    "question_type": None,
+                }
+            ],
+        }
+    ]
+
+
+def test_state_projection_move_messages_include_drop_and_promotion() -> None:
+    assert projection._move_messages(
+        {
+            "announcement": "REGULAR_MOVE",
+            "dropped_piece_announcement": "QUEEN",
+            "promotion_announced": True,
+        }
+    ) == ["Move complete", "Queen dropped", "Promotion"]
 
 
 def test_state_projection_viewer_scoresheet_skips_empty_turns() -> None:
@@ -331,6 +400,28 @@ def test_state_projection_viewer_scoresheet_skips_empty_turns() -> None:
     )
 
     assert [turn["turn"] for turn in scoresheet["turns"]] == [2]
+
+
+def test_state_projection_viewer_scoresheet_ignores_empty_raw_entries() -> None:
+    assert projection.build_viewer_scoresheet(
+        viewer_color="white",
+        stored_scoresheet={
+            "color": "white",
+            "last_move_number": 1,
+            "moves_own": [[None]],
+            "moves_opponent": [[]],
+        },
+    )["turns"] == []
+
+    assert projection.build_viewer_scoresheet(
+        viewer_color="white",
+        stored_scoresheet={
+            "color": "white",
+            "last_move_number": 1,
+            "moves_own": [[{"question": {"question_type": "COMMON"}, "answer": {"main_announcement": "SECRET"}}]],
+            "moves_opponent": [],
+        },
+    )["turns"] == []
 
 
 def test_state_projection_black_viewer_orders_turn_start_status_before_black_attempts() -> None:

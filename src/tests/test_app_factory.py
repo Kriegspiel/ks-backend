@@ -1,5 +1,10 @@
-from fastapi.testclient import TestClient
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
+import pytest
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
@@ -135,6 +140,24 @@ def test_openapi_marks_bearer_authenticated_routes_and_leaves_registration_publi
     assert "security" not in schema["paths"]["/health"]["get"]
 
 
+def test_configure_openapi_uses_cached_schema_and_ignores_missing_operations(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.main as main_module
+
+    app = FastAPI()
+
+    @app.get("/private")
+    async def private_route(_user=Depends(main_module.get_current_user)):  # noqa: ANN001
+        return {}
+
+    monkeypatch.setattr(main_module, "get_openapi", lambda **kwargs: {"paths": {"/private": {}}})
+    main_module.configure_openapi(app, Settings())
+
+    schema = app.openapi()
+
+    assert schema["components"]["securitySchemes"]["BearerAuth"]["scheme"] == "bearer"
+    assert app.openapi() is schema
+
+
 def test_canonical_and_legacy_api_routes_are_both_available():
     app = create_app(Settings())
 
@@ -219,3 +242,85 @@ def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
         assert app.state.session_service is not None
 
     assert calls == ["start", "restart:testing", "shutdown", "close_db"]
+
+
+@pytest.mark.asyncio
+async def test_archive_turn_count_migration_logs_success_and_propagates_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.main as main_module
+
+    app = FastAPI()
+    app.state.db = object()
+    runner = AsyncMock(return_value={"updated": 3, "scanned": 4})
+    monkeypatch.setattr(main_module, "run_archive_turn_count_migration_once", runner)
+
+    await main_module._run_archive_turn_count_migration(app)
+
+    runner.assert_awaited_once_with(app.state.db)
+
+    async def cancelled(_db):  # noqa: ANN001
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(main_module, "run_archive_turn_count_migration_once", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await main_module._run_archive_turn_count_migration(app)
+
+
+def test_lifespan_cancels_pending_archive_turn_count_migration_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.main as main_module
+
+    fake_db = type(
+        "FakeDB",
+        (),
+        {
+            "games": object(),
+            "users": object(),
+            "sessions": object(),
+            "analytics_events": object(),
+            "game_archives": object(),
+        },
+    )()
+    calls: list[str] = []
+
+    class PendingTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            calls.append("cancel")
+
+        def __await__(self):
+            async def raise_cancelled():
+                raise asyncio.CancelledError
+
+            return raise_cancelled().__await__()
+
+    class FakeGameService:
+        def __init__(self, games, *, users_collection, archives_collection, site_origin) -> None:  # noqa: ANN001
+            self.start = AsyncMock(side_effect=lambda: calls.append("start"))
+            self.shutdown = AsyncMock(side_effect=lambda: calls.append("shutdown"))
+
+    pending_task = PendingTask()
+
+    def fake_create_task(coro, *, name: str):  # noqa: ANN001
+        coro.close()
+        calls.append(f"task:{name}")
+        return pending_task
+
+    monkeypatch.setattr(main_module, "init_db", AsyncMock(return_value=fake_db))
+    monkeypatch.setattr(main_module, "close_db", AsyncMock(side_effect=lambda: calls.append("close_db")))
+    monkeypatch.setattr(main_module, "GameService", FakeGameService)
+    monkeypatch.setattr(
+        main_module,
+        "asyncio",
+        SimpleNamespace(CancelledError=asyncio.CancelledError, create_task=fake_create_task),
+    )
+    monkeypatch.setattr(main_module, "capture_backend_restart", lambda settings: "evt")  # noqa: ARG005
+
+    app = create_app(Settings(ENVIRONMENT="testing"))
+
+    with TestClient(app):
+        assert app.state.archive_turn_count_migration_task is pending_task
+
+    assert calls == ["start", "task:archive-turn-count-migration", "shutdown", "cancel", "close_db"]

@@ -86,6 +86,9 @@ def test_bot_profile_sync_request_validates_supported_rule_variants() -> None:
     payload = BotProfileSyncRequest(supported_rule_variants=["wild16", "berkeley_any", "wild16"])
     assert payload.supported_rule_variants == ["wild16", "berkeley_any"]
 
+    with pytest.raises(ValueError, match="At least one supported rule variant is required"):
+        BotProfileSyncRequest.validate_supported_rule_variants(None)
+
     with pytest.raises(ValueError, match="Unsupported rule variant"):
         BotProfileSyncRequest(supported_rule_variants=["standard"])
 
