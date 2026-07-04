@@ -43,6 +43,7 @@ testpaths = ["src/tests"]
 asyncio_mode = "auto"
 markers = [
     "integration: requires disposable MongoDB",
+    "performance: performance and query-shape regression tests",
 ]
 
 [tool.black]
