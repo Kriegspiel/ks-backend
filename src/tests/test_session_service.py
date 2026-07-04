@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services.session_service import SessionService
+from app.services.session_service import CachedSessionEntry, SessionService, _CACHE_MISS
 
 
 class FrozenSessionService(SessionService):
@@ -289,3 +289,141 @@ async def test_get_active_session_supports_naive_datetime_from_mongo() -> None:
 
     assert active is not None
     assert sessions.update_one.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cache_disabled_always_misses() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    service = FrozenSessionService(
+        SimpleNamespace(),
+        cache_ttl_seconds=0,
+        negative_cache_ttl_seconds=0,
+    )
+    service._cache["sid"] = CachedSessionEntry(
+        session={"_id": "sid"},
+        cached_until=FrozenSessionService.now + timedelta(minutes=1),
+    )
+
+    assert await service._get_cached_session("sid", now=FrozenSessionService.now) is _CACHE_MISS
+
+
+@pytest.mark.asyncio
+async def test_get_cached_session_evicts_expired_entry_and_returns_negative_cache_hit() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    service = FrozenSessionService(SimpleNamespace())
+    service._cache["expired"] = CachedSessionEntry(
+        session={"_id": "expired"},
+        cached_until=FrozenSessionService.now - timedelta(seconds=1),
+    )
+    service._cache["missing"] = CachedSessionEntry(
+        session=None,
+        cached_until=FrozenSessionService.now + timedelta(seconds=1),
+    )
+
+    assert await service._get_cached_session("expired", now=FrozenSessionService.now) is _CACHE_MISS
+    assert "expired" not in service._cache
+    assert await service._get_cached_session("missing", now=FrozenSessionService.now) is None
+
+
+@pytest.mark.asyncio
+async def test_store_cached_session_prunes_expired_and_oldest_entries() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    service = FrozenSessionService(SimpleNamespace(), cache_max_entries=2)
+    service._cache["expired"] = CachedSessionEntry(
+        session={"_id": "expired"},
+        cached_until=FrozenSessionService.now - timedelta(seconds=1),
+    )
+    service._cache["oldest"] = CachedSessionEntry(
+        session={"_id": "oldest"},
+        cached_until=FrozenSessionService.now + timedelta(minutes=1),
+    )
+    service._cache["newer"] = CachedSessionEntry(
+        session={"_id": "newer"},
+        cached_until=FrozenSessionService.now + timedelta(minutes=1),
+    )
+
+    await service._store_cached_session(
+        "fresh",
+        {"_id": "fresh", "expires_at": FrozenSessionService.now + timedelta(minutes=5)},
+        now=FrozenSessionService.now,
+    )
+
+    assert "expired" not in service._cache
+    assert "oldest" not in service._cache
+    assert set(service._cache) == {"newer", "fresh"}
+
+
+@pytest.mark.asyncio
+async def test_store_cached_session_respects_disabled_cache_modes() -> None:
+    now = datetime(2026, 5, 9, tzinfo=UTC)
+    no_cache = SessionService(SimpleNamespace(), cache_max_entries=0)
+    no_negative = SessionService(SimpleNamespace(), negative_cache_ttl_seconds=0)
+    no_positive = SessionService(SimpleNamespace(), cache_ttl_seconds=0)
+
+    await no_cache._store_cached_session("sid", {"_id": "sid"}, now=now)
+    await no_negative._store_cached_session("missing", None, now=now)
+    await no_positive._store_cached_session("sid", {"_id": "sid"}, now=now)
+
+    assert no_cache._cache == {}
+    assert no_negative._cache == {}
+    assert no_positive._cache == {}
+
+
+@pytest.mark.asyncio
+async def test_touch_session_evicts_cache_when_update_matches_no_document() -> None:
+    now = datetime(2026, 5, 9, tzinfo=UTC)
+    sessions = SimpleNamespace(update_one=AsyncMock(return_value=SimpleNamespace(matched_count=0)))
+    service = SessionService(sessions)
+    service._cache["sid"] = CachedSessionEntry(session={"_id": "sid"}, cached_until=now + timedelta(minutes=1))
+
+    touched = await service._touch_session(
+        "sid",
+        {"_id": "sid", "expires_at": now + timedelta(minutes=1)},
+        now=now,
+    )
+
+    assert touched is None
+    assert "sid" not in service._cache
+
+
+@pytest.mark.asyncio
+async def test_update_session_for_user_evicts_cache_when_update_matches_no_document() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    sessions = SimpleNamespace(update_one=AsyncMock(return_value=SimpleNamespace(matched_count=0)))
+    service = FrozenSessionService(sessions)
+    service._cache["sid"] = CachedSessionEntry(
+        session={"_id": "sid"},
+        cached_until=FrozenSessionService.now + timedelta(minutes=1),
+    )
+    user = SimpleNamespace(id="507f1f77bcf86cd799439011", username="playerone", role="user")
+
+    await service.update_session_for_user("sid", user)
+
+    assert "sid" not in service._cache
+
+
+@pytest.mark.asyncio
+async def test_get_active_session_deletes_expired_cached_session() -> None:
+    FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
+    sessions = SimpleNamespace(find_one=AsyncMock(), update_one=AsyncMock(), delete_one=AsyncMock())
+    service = FrozenSessionService(sessions)
+    service._cache["sid"] = CachedSessionEntry(
+        session={"_id": "sid", "expires_at": FrozenSessionService.now - timedelta(seconds=1)},
+        cached_until=FrozenSessionService.now + timedelta(minutes=1),
+    )
+
+    assert await service.get_active_session("sid") is None
+    sessions.delete_one.assert_awaited_once_with({"_id": "sid"})
+    assert sessions.find_one.await_count == 0
+
+
+def test_should_touch_session_is_true_when_touch_interval_disabled() -> None:
+    service = SessionService(SimpleNamespace(), touch_interval_seconds=0)
+
+    assert (
+        service._should_touch_session(
+            {"last_touched_at": datetime(2026, 5, 9, tzinfo=UTC)},
+            now=datetime(2026, 5, 9, tzinfo=UTC),
+        )
+        is True
+    )

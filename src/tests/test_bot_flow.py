@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from bson import ObjectId
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.models.bot import BotAvailabilityReportRequest, BotProfileSyncRequest
 from app.models.game import CreateGameRequest
+from app.routers.bot import report_bot_availability, sync_bot_profile
 from app.services.bot_service import BotService
 from app.services.game_service import GameConflictError, GameForbiddenError, GameService, GameValidationError
 from app.services.user_service import UserService
@@ -115,6 +119,106 @@ async def test_create_game_with_bot_immediately_activates() -> None:
     assert games.docs[0]["state"] == "active"
 
 
+def test_bot_service_datetime_and_query_helpers_cover_invalid_inputs() -> None:
+    naive = datetime(2026, 6, 1, 12, 0, 0)
+
+    assert BotService._normalize_utc_datetime(None) is None
+    assert BotService._normalize_utc_datetime(naive) == naive.replace(tzinfo=UTC)
+    assert BotService._active_bot_queries("not-an-object-id") == [
+        {"_id": "not-an-object-id", "role": "bot", "status": "active"}
+    ]
+
+
+def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports() -> None:
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+
+    assert BotService.bot_can_start_games({"username": "randobot"}, now=now) is True
+    assert BotService.bot_can_start_games({"username": "gptnano"}, now=now) is False
+    assert (
+        BotService.bot_can_start_games(
+            {
+                "username": "gptnano",
+                "bot_profile": {
+                    "model_availability": {"provider": "anthropic", "ready": True, "checked_at": now}
+                },
+            },
+            now=now,
+        )
+        is False
+    )
+    assert (
+        BotService.bot_can_start_games(
+            {
+                "username": "gptnano",
+                "bot_profile": {"model_availability": {"provider": "openai", "ready": False, "checked_at": now}},
+            },
+            now=now,
+        )
+        is False
+    )
+    assert (
+        BotService.bot_can_start_games(
+            {"username": "gptnano", "bot_profile": {"model_availability": {"provider": "openai", "ready": True}}},
+            now=now,
+        )
+        is False
+    )
+    assert (
+        BotService.bot_can_start_games(
+            {
+                "username": "gptnano",
+                "bot_profile": {
+                    "model_availability": {
+                        "provider": "openai",
+                        "ready": True,
+                        "checked_at": now - timedelta(seconds=121),
+                    }
+                },
+            },
+            now=now,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_bot_profile_updates_return_none_when_no_active_bot_matches() -> None:
+    service = BotService(FakeUsersCollection(), now_factory=lambda: datetime(2026, 6, 1, tzinfo=UTC))
+
+    assert await service.report_model_availability(user_id="missing", provider="openai", ready=True, reason="ok") is None
+    assert await service.sync_supported_rule_variants(user_id="missing", supported_rule_variants=["berkeley"]) is None
+
+
+@pytest.mark.asyncio
+async def test_bot_routes_reject_non_bot_users_and_missing_bot_updates() -> None:
+    user = type("User", (), {"id": "u1", "role": "user"})()
+    bot_user = type("User", (), {"id": "bot1", "role": "bot"})()
+    availability = BotAvailabilityReportRequest(provider="openai", ready=True, reason="ok")
+    profile = BotProfileSyncRequest(supported_rule_variants=["berkeley"])
+    bot_service = type(
+        "BotServiceStub",
+        (),
+        {
+            "report_model_availability": AsyncMock(return_value=None),
+            "sync_supported_rule_variants": AsyncMock(return_value=None),
+        },
+    )()
+
+    with pytest.raises(HTTPException) as availability_forbidden:
+        await report_bot_availability(availability, user=user, bot_service=bot_service)
+    with pytest.raises(HTTPException) as profile_forbidden:
+        await sync_bot_profile(profile, user=user, bot_service=bot_service)
+    with pytest.raises(HTTPException) as availability_missing:
+        await report_bot_availability(availability, user=bot_user, bot_service=bot_service)
+    with pytest.raises(HTTPException) as profile_missing:
+        await sync_bot_profile(profile, user=bot_user, bot_service=bot_service)
+
+    assert availability_forbidden.value.status_code == 403
+    assert profile_forbidden.value.status_code == 403
+    assert availability_missing.value.status_code == 404
+    assert profile_missing.value.status_code == 404
+
+
 @pytest.mark.asyncio
 async def test_create_game_with_bot_rejects_unsupported_ruleset() -> None:
     games = FakeGamesCollection()
@@ -141,7 +245,13 @@ async def test_create_game_with_bot_rejects_unsupported_ruleset() -> None:
         await service.create_game(
             user_id="u1",
             username="creator",
-            request=CreateGameRequest(rule_variant="berkeley", opponent_type="bot", bot_id=str(bot_id), play_as="white", time_control="rapid"),
+            request=CreateGameRequest(
+                rule_variant="berkeley",
+                opponent_type="bot",
+                bot_id=str(bot_id),
+                play_as="white",
+                time_control="rapid",
+            ),
         )
 
     assert exc.value.code == "BOT_RULE_VARIANT_UNSUPPORTED"

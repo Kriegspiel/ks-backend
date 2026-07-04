@@ -63,6 +63,16 @@ def test_before_send_redacts_sensitive_request_headers() -> None:
     }
 
 
+def test_before_send_ignores_events_without_request_header_dicts() -> None:
+    no_request = {"message": "hello"}
+    non_dict_request = {"request": "bad"}
+    non_dict_headers = {"request": {"headers": ["bad"]}}
+
+    assert monitoring.before_send(no_request, {}) is no_request
+    assert monitoring.before_send(non_dict_request, {}) is non_dict_request
+    assert monitoring.before_send(non_dict_headers, {}) is non_dict_headers
+
+
 def test_capture_backend_restart_skips_without_dsn(monkeypatch) -> None:
     messages: list[tuple[str, str]] = []
     monkeypatch.setattr(monitoring.sentry_sdk, "capture_message", lambda message, level: messages.append((message, level)))

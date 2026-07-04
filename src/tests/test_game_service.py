@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from bson import ObjectId
@@ -1551,7 +1553,13 @@ async def test_count_documents_and_game_id_resolution_cover_fallback_paths() -> 
     )
 
     assert await service._count_documents(None, {"state": "completed"}) == 0
-    assert await service._count_documents(list_only, {"state": "completed", "updated_at": {"$gte": now - timedelta(hours=1)}}) == 1
+    assert (
+        await service._count_documents(
+            list_only,
+            {"state": "completed", "updated_at": {"$gte": now - timedelta(hours=1)}},
+        )
+        == 1
+    )
     assert await service._count_documents(cursor_only, {"state": "completed"}) == 2
 
     games = FakeGamesCollection()
@@ -1603,7 +1611,9 @@ def test_result_scoresheet_and_bot_variant_helpers_cover_uncommon_branches() -> 
     assert engine_scoresheets["white"]["color"] == "white"
     assert set(empty_scoresheets) == {"white", "black"}
 
-    bootstrap = GameService(FakeGamesCollection())._load_or_bootstrap_engine({"state": "waiting", "rule_variant": "berkeley_any"})
+    bootstrap = GameService(FakeGamesCollection())._load_or_bootstrap_engine(
+        {"state": "waiting", "rule_variant": "berkeley_any"}
+    )
     assert bootstrap is not None
 
     class PawnStub:
@@ -2499,3 +2509,655 @@ async def test_misc_branch_helpers_cover_timeout_passthrough_and_replay_edge_cas
     assert len(replay) == 2
 
     assert not GameService._matches_query({"white": None}, {"white.user_id": "u1"})
+
+
+@pytest.mark.asyncio
+async def test_event_queue_publish_and_close_helpers_cover_edge_paths() -> None:
+    service = GameService(FakeGamesCollection())
+    gid = ObjectId()
+
+    queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=1)
+    GameService._queue_game_event(queue, {"type": "old"})
+    GameService._queue_game_event(queue, {"type": "new"})
+    assert queue.get_nowait() == {"type": "new"}
+
+    class AlwaysFullQueue:
+        def put_nowait(self, event: dict) -> None:  # noqa: ARG002
+            raise asyncio.QueueFull
+
+        def get_nowait(self) -> dict:
+            raise asyncio.QueueEmpty
+
+    GameService._queue_game_event(AlwaysFullQueue(), {"type": "dropped"})
+
+    payload = GameService._game_event_payload(
+        {"_id": gid, "game_code": "ABC123", "state": "active", "updated_at": "later"},
+        event_type="custom",
+    )
+    assert payload["updated_at"] == "later"
+
+    await service._publish_game_event({"_id": "not-an-object-id"})
+    subscriber: asyncio.Queue[dict] = asyncio.Queue()
+    service._event_subscribers[gid] = {subscriber}
+    await service._publish_game_event({"_id": gid, "game_code": "ABC123", "state": "active"}, event_type="changed")
+    assert (await subscriber.get())["type"] == "changed"
+
+    await service.unsubscribe_game_events(SimpleNamespace(game_id=ObjectId(), queue=subscriber))
+    service._event_subscribers[gid] = {subscriber}
+    await service._close_event_subscribers()
+    assert (await subscriber.get())["type"] == "shutdown"
+    assert service._event_subscribers == {}
+
+
+@pytest.mark.asyncio
+async def test_expiry_and_timeout_sweeps_cover_cache_and_collection_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 5, 9, 12, tzinfo=UTC)
+
+    class ListOnlyGames:
+        def __init__(self, docs: list[dict]) -> None:
+            self.docs = docs
+
+    waiting_id = ObjectId()
+    waiting_doc = {"_id": waiting_id, "state": "waiting", "expires_at": now - timedelta(seconds=1)}
+    waiting_games = ListOnlyGames([waiting_doc])
+    waiting_service = GameService(waiting_games)
+    waiting_service._cache[waiting_id] = CachedGameEntry(game=dict(waiting_doc), dirty=False, version=0)
+
+    await waiting_service._expire_waiting_games(now=now)
+
+    assert waiting_games.docs == []
+    assert waiting_id not in waiting_service._cache
+
+    class DuplicateFindGames:
+        def __init__(self, doc: dict) -> None:
+            self.doc = doc
+            self.delete_calls = 0
+
+        def find(self, query: dict):  # noqa: ARG002
+            return FakeCursor([self.doc])
+
+        async def delete_one(self, query: dict):  # noqa: ARG002
+            self.delete_calls += 1
+            return FakeDeleteResult(1)
+
+    duplicate_id = ObjectId()
+    duplicate_doc = {"_id": duplicate_id, "state": "waiting", "expires_at": now - timedelta(seconds=1)}
+    duplicate_games = DuplicateFindGames(duplicate_doc)
+    duplicate_service = GameService(duplicate_games)
+    duplicate_service._cache[duplicate_id] = CachedGameEntry(game=dict(duplicate_doc), dirty=False, version=0)
+
+    await duplicate_service._expire_waiting_games(now=now)
+
+    assert duplicate_games.delete_calls == 1
+
+    class DeleteZeroGames:
+        def __init__(self, docs: list[dict] | None = None) -> None:
+            self.docs = docs or []
+
+        def find(self, query: dict):  # noqa: ARG002
+            return FakeCursor(list(self.docs))
+
+        async def delete_one(self, query: dict):  # noqa: ARG002
+            return FakeDeleteResult(0)
+
+    pre_start_id = ObjectId()
+    old_active = {
+        "_id": pre_start_id,
+        "state": "active",
+        "move_number": 1,
+        "updated_at": now - PRE_START_ACTIVE_GAME_TTL - timedelta(seconds=1),
+        "time_control": {"active_color": None},
+        "moves": [],
+    }
+    pre_start_service = GameService(DeleteZeroGames())
+    pre_start_service._cache[ObjectId()] = CachedGameEntry(
+        game={**old_active, "_id": ObjectId(), "updated_at": now},
+        dirty=False,
+        version=0,
+    )
+    pre_start_service._cache["bad-id"] = CachedGameEntry(game={**old_active, "_id": "bad-id"}, dirty=False, version=0)
+    pre_start_service._cache[pre_start_id] = CachedGameEntry(game=dict(old_active), dirty=False, version=0)
+
+    await pre_start_service._expire_pre_start_active_games(now=now)
+
+    assert pre_start_id in pre_start_service._cache
+
+    list_pre_start_id = ObjectId()
+    list_pre_start_games = ListOnlyGames(
+        [
+            {**old_active, "_id": "bad-id"},
+            {**old_active, "_id": list_pre_start_id},
+        ]
+    )
+    await GameService(list_pre_start_games)._expire_pre_start_active_games(now=now)
+    assert list_pre_start_games.docs == [{**old_active, "_id": "bad-id"}]
+
+    find_pre_start_id = ObjectId()
+    find_pre_start_games = DeleteZeroGames([{**old_active, "_id": find_pre_start_id}])
+    await GameService(find_pre_start_games)._expire_pre_start_active_games(now=now)
+    assert find_pre_start_games.docs
+
+    timeout_service = GameService(object())
+    timeout_service._cache[ObjectId()] = CachedGameEntry(game={"_id": ObjectId(), "state": "waiting"}, dirty=False, version=0)
+    timeout_service._cache[ObjectId()] = CachedGameEntry(
+        game={"_id": ObjectId(), "state": "active", "time_control": {"active_color": "white"}},
+        dirty=False,
+        version=0,
+    )
+    monkeypatch.setattr(timeout_service._clock, "check_timeout", lambda **kwargs: None)
+    await timeout_service._sweep_timeouts(now=now)
+
+
+@pytest.mark.asyncio
+async def test_collection_fallback_and_small_game_helpers_cover_remaining_branches() -> None:
+    now = datetime(2026, 5, 9, 12, tzinfo=UTC)
+    service = GameService(FakeGamesCollection())
+    oid = ObjectId()
+
+    class ListOnlyCollection:
+        def __init__(self, docs: list[dict]) -> None:
+            self.docs = docs
+
+    archives = ListOnlyCollection([{"_id": oid, "game_code": "ABC123", "state": "completed"}])
+    games = ListOnlyCollection([{"_id": oid, "state": "completed"}])
+    list_service = GameService(games, archives_collection=archives)
+
+    assert await GameService(FakeGamesCollection(), archives_collection=None)._find_archived_game_by_id(oid) is None
+    assert await GameService(FakeGamesCollection(), archives_collection=None)._find_archived_game_by_code("ABC123") is None
+    assert await list_service._find_archived_game_by_id(oid) == archives.docs[0]
+    assert await list_service._find_archived_game_by_code("ABC123") == archives.docs[0]
+    assert await list_service._find_live_game_by_id(oid) == games.docs[0]
+    assert await list_service._find_archived_game_by_id(ObjectId()) is None
+    assert await list_service._find_archived_game_by_code("MISS00") is None
+    assert await list_service._find_live_game_by_id(ObjectId()) is None
+    assert await list_service._get_archived_game_document(game_id="ABC123") == archives.docs[0]
+
+    with pytest.raises(GameNotFoundError):
+        empty_archive_service = GameService(FakeGamesCollection(), archives_collection=ListOnlyCollection([]))
+        await empty_archive_service._get_live_or_archived_game_document(game_id="   ")
+
+    assert await service._count_documents(None, {}) == 0
+    assert await service._estimated_document_count(None) == 0
+    assert await service._estimated_document_count(ListOnlyCollection([{}, {}])) == 2
+
+    class CursorOnlyCollection:
+        def find(self, query: dict):  # noqa: ARG002
+            return FakeCursor([{"state": "active"}, {"state": "waiting"}])
+
+    assert await service._count_documents(CursorOnlyCollection(), {"state": "active"}) == 2
+    assert await service._estimated_document_count(CursorOnlyCollection()) == 2
+
+    assert GameService._metadata_created_at({"created_at": "bad"}) == datetime.min.replace(tzinfo=UTC)
+    assert (
+        GameService._scoresheet_entry_to_history_move(entry={"question": {}, "answer": {}}, color="white")
+        is None
+    )
+    assert GameService._merge_public_history_metadata(
+        detailed_moves=[{"move_done": True, "uci": "e2e4", "announcement": "REGULAR_MOVE", "question_type": "COMMON"}],
+        public_moves=[{"move_done": True, "uci": "d2d4", "announcement": "REGULAR_MOVE", "question_type": "COMMON"}],
+    )[0].get("timestamp") is None
+    assert GameService._review_history_moves(
+        {
+            "state": "completed",
+            "rule_variant": "wild16",
+            "moves": [{"question_type": "COMMON", "move_done": True, "uci": "not-uci"}],
+        }
+    )[0]["uci"] == "not-uci"
+    assert GameService._clock_active_color_for_game({"state": "active", "move_number": "bad", "turn": "white"}) is None
+    assert GameService._is_pre_start_active_game_expired(game={"state": "waiting"}, now=now) is False
+    assert (
+        GameService._is_pre_start_active_game_expired(
+            game={"state": "active", "updated_at": now, "time_control": {"active_color": None}},
+            now=now,
+        )
+        is False
+    )
+    assert (
+        GameService._is_pre_start_active_game_expired(
+            game={
+                "state": "active",
+                "updated_at": now - PRE_START_ACTIVE_GAME_TTL - timedelta(seconds=1),
+                "time_control": {"active_color": "white"},
+            },
+            now=now,
+        )
+        is False
+    )
+    assert GameService._has_completed_move({"moves": [{"move_done": True}]}) is True
+    assert GameService._has_completed_move({"move_number": "bad"}) is False
+    assert GameService._matches_pre_start_delete_query(doc={"_id": ObjectId()}, query={"_id": oid}) is False
+    assert (
+        GameService._matches_pre_start_delete_query(
+            doc={"_id": oid, "state": "active", "move_number": "bad"},
+            query={"_id": oid, "updated_at": {"$lte": now}},
+        )
+        is False
+    )
+    assert (
+        GameService._matches_pre_start_delete_query(
+            doc={"_id": oid, "state": "active", "move_number": 1, "updated_at": now, "time_control": {"active_color": None}},
+            query={"_id": oid, "updated_at": {"$lte": now}},
+        )
+        is True
+    )
+    assert GameService._normalized_result(result=None, moves=[{"special_announcement": None}]) is None
+    assert GameService._normalized_result(result={}, moves=[{"special_announcement": "UNKNOWN"}]) == {}
+
+    class EngineWithoutPawnFactory:
+        must_use_pawns = True
+
+    GameService._repair_forced_pawn_capture_state(
+        game={"state": "active", "moves": [{"question_type": "ASK_ANY", "announcement": "HAS_ANY", "move_done": False}]},
+        engine=EngineWithoutPawnFactory(),
+    )
+
+    state_service = GameService(
+        FakeGamesCollection(),
+        archives_collection=ListOnlyCollection([{"_id": oid, "state": "active"}]),
+    )
+    with pytest.raises(GameNotFoundError):
+        await state_service._get_game_for_state(game_id=str(oid))
+
+
+@pytest.mark.asyncio
+async def test_additional_game_service_branch_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 5, 10, 12, tzinfo=UTC)
+    service = GameService(FakeGamesCollection())
+
+    service._flush_loop_task = SimpleNamespace(done=lambda: False)
+    monkeypatch.setattr(service, "_maybe_expire_waiting_games", AsyncMock())
+    monkeypatch.setattr(service, "_maybe_expire_pre_start_active_games", AsyncMock())
+    monkeypatch.setattr(service, "_maybe_sweep_timeouts", AsyncMock())
+    await service.start()
+    assert service._flush_loop_task is not None
+
+    waiting_id = ObjectId()
+    service._cache[waiting_id] = CachedGameEntry(
+        game={"_id": waiting_id, "state": "waiting", "expires_at": now + timedelta(minutes=1)},
+        dirty=False,
+        version=0,
+    )
+    await service._expire_waiting_games(now=now)
+    assert waiting_id in service._cache
+
+    class WaitingFindEdges:
+        def find(self, query: dict):  # noqa: ARG002
+            return FakeCursor(
+                [
+                    {"_id": "bad-id", "state": "waiting", "expires_at": now - timedelta(seconds=1)},
+                    {"_id": ObjectId(), "state": "waiting", "expires_at": now + timedelta(minutes=1)},
+                ]
+            )
+
+        async def delete_one(self, query: dict):  # noqa: ARG002
+            return FakeDeleteResult(1)
+
+    await GameService(WaitingFindEdges())._expire_waiting_games(now=now)
+    await GameService(SimpleNamespace(docs=()))._expire_waiting_games(now=now)
+
+    interval_service = GameService(FakeGamesCollection())
+    interval_service._last_pre_start_active_game_sweep_at = interval_service.utcnow()
+    await interval_service._maybe_expire_pre_start_active_games()
+
+    old_active = {
+        "_id": ObjectId(),
+        "state": "active",
+        "move_number": 1,
+        "updated_at": now - PRE_START_ACTIVE_GAME_TTL - timedelta(seconds=1),
+        "time_control": {"active_color": None},
+        "moves": [],
+    }
+
+    class PreStartFindEdges:
+        def find(self, query: dict):  # noqa: ARG002
+            return FakeCursor([{**old_active, "updated_at": now}, old_active])
+
+        async def delete_one(self, query: dict):  # noqa: ARG002
+            return FakeDeleteResult(0)
+
+    await GameService(PreStartFindEdges())._expire_pre_start_active_games(now=now)
+    await GameService(SimpleNamespace(docs=()))._expire_pre_start_active_games(now=now)
+
+    flush_service = GameService(FakeGamesCollection())
+    flush_entry = CachedGameEntry(game={"_id": ObjectId(), "state": "active"}, dirty=False, version=0)
+    flush_service._cache[flush_entry.game["_id"]] = flush_entry
+    await flush_service._flush_due_entries()
+
+    sweep_service = GameService(FakeGamesCollection())
+    monkeypatch.setattr(
+        sweep_service,
+        "_active_games_not_in_cache",
+        AsyncMock(return_value=[{"_id": ObjectId(), "state": "active"}]),
+    )
+    monkeypatch.setattr(
+        sweep_service,
+        "_adjudicate_timeout_if_needed",
+        AsyncMock(return_value={"_id": ObjectId(), "state": "active"}),
+    )
+    await sweep_service._sweep_timeouts(now=now)
+
+    queue_one: asyncio.Queue[dict] = asyncio.Queue()
+    queue_two: asyncio.Queue[dict] = asyncio.Queue()
+    event_service = GameService(FakeGamesCollection())
+    event_id = ObjectId()
+    event_service._event_subscribers[event_id] = {queue_one, queue_two}
+    await event_service.unsubscribe_game_events(SimpleNamespace(game_id=event_id, queue=queue_one))
+    assert event_service._event_subscribers[event_id] == {queue_two}
+
+    class DocsOnly:
+        def __init__(self, docs: list[dict] | tuple = ()) -> None:
+            self.docs = docs
+
+    persist_id = ObjectId()
+    persist_docs = DocsOnly([{"_id": ObjectId(), "state": "active"}])
+    await GameService(persist_docs)._persist_game_document({"_id": persist_id, "state": "active"})
+    assert persist_docs.docs[-1]["_id"] == persist_id
+
+    flush_race_service = GameService(FakeGamesCollection(), archives_collection=FakeGamesCollection())
+    flush_race_entry = CachedGameEntry(
+        game={
+            "_id": ObjectId(),
+            "game_code": "RACE01",
+            "rule_variant": "berkeley_any",
+            "state": "completed",
+            "white": {"user_id": "u1", "username": "white", "role": "bot"},
+            "black": {"user_id": "u2", "username": "black", "role": "bot"},
+            "result": {"winner": "white", "reason": "checkmate"},
+            "moves": [],
+            "created_at": now,
+            "updated_at": now,
+        },
+        dirty=True,
+        version=1,
+    )
+
+    async def finalize_none(_game: dict) -> None:
+        flush_race_entry.version += 1
+        return None
+
+    monkeypatch.setattr(flush_race_service, "_finalize_completed_game", finalize_none)
+    await flush_race_service._flush_entry(flush_race_entry, reason="race")
+    assert flush_race_entry.dirty is True
+    assert flush_race_entry.game["state"] == "completed"
+
+    with pytest.raises(GameValidationError):
+        await GameService(SimpleNamespace(docs=()))._persist_terminal_entry(
+            CachedGameEntry(game={"_id": ObjectId(), "state": "active"}, dirty=True, version=1),
+            expected_previous_state="active",
+        )
+    with pytest.raises(GameValidationError):
+        await GameService(DocsOnly([]))._persist_terminal_entry(
+            CachedGameEntry(game={"_id": ObjectId(), "state": "active"}, dirty=True, version=1),
+            expected_previous_state="active",
+        )
+
+    terminal_race_id = ObjectId()
+    terminal_race_docs = DocsOnly([{"_id": terminal_race_id, "state": "active", "moves": []}])
+    terminal_race_service = GameService(terminal_race_docs)
+    terminal_race_entry = CachedGameEntry(
+        game={
+            "_id": terminal_race_id,
+            "state": "completed",
+            "moves": [],
+            "white": {"role": "bot"},
+            "black": {"role": "bot"},
+        },
+        dirty=True,
+        version=1,
+    )
+
+    async def finalize_with_version_race(game: dict) -> dict:
+        terminal_race_entry.version += 1
+        return game
+
+    monkeypatch.setattr(terminal_race_service, "_finalize_completed_game", finalize_with_version_race)
+    terminal_race_persisted = await terminal_race_service._persist_terminal_entry(
+        terminal_race_entry,
+        expected_previous_state="active",
+    )
+    assert terminal_race_persisted["state"] == "completed"
+    assert terminal_race_entry.dirty is True
+
+    class FindOneOnly:
+        async def find_one(self, query: dict):  # noqa: ARG002
+            return {"_id": ObjectId(), "state": "active"}
+
+    await GameService(FindOneOnly())._assert_active_game_still_current(game_id=ObjectId(), now=now)
+
+    with monkeypatch.context() as scoresheet_patch:
+        scoresheet_patch.setattr(
+            GameService,
+            "_stored_scoresheets",
+            classmethod(
+                lambda cls, game: {
+                    "white": {"moves_own": [["bad-entry"]]},
+                    "black": {"moves_own": []},
+                }
+            ),
+        )
+        assert GameService._scoresheet_history_moves({"moves": []}) == []
+
+    await GameService(FakeGamesCollection(), archives_collection=None)._upsert_archive({"_id": ObjectId()})
+    await GameService(FakeGamesCollection(), archives_collection=SimpleNamespace(docs=()))._upsert_archive({"_id": ObjectId()})
+    archive_id = ObjectId()
+    archive_docs = DocsOnly([{"_id": ObjectId()}, {"_id": archive_id, "state": "old"}])
+    await GameService(FakeGamesCollection(), archives_collection=archive_docs)._upsert_archive(
+        {"_id": archive_id, "state": "new"}
+    )
+    assert archive_docs.docs[1]["state"] == "new"
+
+    assert await GameService(FakeGamesCollection(), archives_collection=SimpleNamespace(docs=()))._find_archived_game_by_id(
+        ObjectId()
+    ) is None
+    assert await GameService(FakeGamesCollection(), archives_collection=SimpleNamespace(docs=()))._find_archived_game_by_code(
+        "ABC123"
+    ) is None
+    assert await GameService(SimpleNamespace(docs=()))._find_live_game_by_id(ObjectId()) is None
+
+    delete_docs = DocsOnly(({"_id": ObjectId()},))
+    await GameService(delete_docs)._delete_completed_live_game_document(game_id=ObjectId())
+    empty_delete_docs = DocsOnly([])
+    await GameService(empty_delete_docs)._delete_completed_live_game_document(game_id=ObjectId())
+    nonmatch_delete_docs = DocsOnly([{"_id": ObjectId()}])
+    await GameService(nonmatch_delete_docs)._delete_completed_live_game_document(game_id=ObjectId())
+
+    claim_id = ObjectId()
+    claim_service = GameService(
+        DocsOnly(
+            [
+                {"_id": ObjectId(), "state": "completed"},
+                {"_id": claim_id, "state": "completed", "stats_recorded_at": now},
+                {
+                    "_id": claim_id,
+                    "state": "completed",
+                    "stats_recorded_at": None,
+                    "stats_recording_started_at": now - timedelta(days=1),
+                },
+            ]
+        )
+    )
+    assert claim_service._stats_recording_is_claimable({"stats_recorded_at": now}, now=now) is False
+    assert await claim_service._claim_completed_game_stats_recording(game_id=claim_id, now=now) is None
+    fresh_claim_id = ObjectId()
+    fresh_claim_service = GameService(
+        DocsOnly(
+            [
+                {
+                    "_id": fresh_claim_id,
+                    "state": "completed",
+                    "stats_recorded_at": None,
+                    "stats_recording_started_at": now - timedelta(days=1),
+                }
+            ]
+        )
+    )
+    assert await fresh_claim_service._claim_completed_game_stats_recording(game_id=fresh_claim_id, now=now) is not None
+    assert (
+        await GameService(SimpleNamespace(docs=()))._claim_completed_game_stats_recording(game_id=ObjectId(), now=now)
+        is None
+    )
+    assert await GameService(DocsOnly([]))._claim_completed_game_stats_recording(game_id=ObjectId(), now=now) is None
+
+    assert not GameService._matches_query({"updated_at": now}, {"updated_at": {"$lt": now}})
+    with pytest.raises(GameNotFoundError):
+        await GameService(FakeGamesCollection(), archives_collection=None)._resolve_archived_game_object_id("ABC123")
+
+    public_service = GameService(FakeGamesCollection(), users_collection=FakeUsersCollection([]))
+    public_player = await public_service._public_player(
+        {"user_id": str(ObjectId()), "username": "missing", "connected": True},
+        user_doc_cache={},
+    )
+    assert public_player["username"] == "missing"
+    public_player_without_id = await public_service._public_player({"username": "embedded", "connected": False})
+    assert public_player_without_id["username"] == "embedded"
+
+    class EmptyRepairEngine:
+        must_use_pawns = True
+
+        def __init__(self) -> None:
+            self.prepared = False
+
+        def _prepare_players_board(self) -> None:
+            self.prepared = True
+
+        def _generate_possible_pawn_captures(self) -> list:
+            return []
+
+    repair_engine = EmptyRepairEngine()
+    GameService._repair_forced_pawn_capture_state(
+        game={"state": "active", "moves": [{"question_type": "ASK_ANY", "announcement": "HAS_ANY", "move_done": False}]},
+        engine=repair_engine,
+    )
+    assert repair_engine.prepared is True
+
+    await GameService(SimpleNamespace(docs=()))._delete_waiting_game_document(game_id=ObjectId())
+    await GameService(DocsOnly([]))._delete_waiting_game_document(game_id=ObjectId())
+    await GameService(DocsOnly([{"_id": ObjectId(), "state": "active"}]))._delete_waiting_game_document(game_id=ObjectId())
+    assert await GameService(SimpleNamespace(docs=()))._delete_pre_start_active_game_document(
+        game_id=ObjectId(),
+        cutoff=now,
+    ) is False
+    assert await GameService(DocsOnly([]))._delete_pre_start_active_game_document(
+        game_id=ObjectId(),
+        cutoff=now,
+    ) is False
+    pre_start_query_id = ObjectId()
+    assert not GameService._matches_pre_start_delete_query(
+        doc={"_id": pre_start_query_id, "state": "active", "move_number": 2},
+        query={"_id": pre_start_query_id, "updated_at": {"$lte": now}},
+    )
+
+    waiting_games = FakeGamesCollection()
+    waiting_games.docs.append(
+        {
+            "_id": "bad-id",
+            "state": "waiting",
+            "white": {"user_id": "bot"},
+            "expires_at": now - timedelta(seconds=1),
+        }
+    )
+    waiting_service = GameService(waiting_games)
+    waiting_service.utcnow = lambda: now  # type: ignore[method-assign]
+    assert await waiting_service._find_waiting_game_for_creator(user_id="bot") is None
+
+    cooldown_user_id = str(ObjectId())
+    cooldown_users = FakeUsersCollection([{"_id": cooldown_user_id, "bot_profile": {}}])
+    await GameService(FakeGamesCollection(), users_collection=cooldown_users)._set_bot_join_cooldown(
+        user_id=cooldown_user_id,
+        now=now,
+    )
+    assert cooldown_users.docs[0]["bot_profile"]["last_bot_game_joined_at"] == now
+
+    with pytest.raises(GameConflictError):
+        await GameService(FakeGamesCollection())._enforce_bot_join_rules(
+            user_id="bot",
+            game={"creator_color": "white", "white": None},
+            now=now,
+        )
+
+    join_games = FakeGamesCollection()
+    join_games.docs.append(
+        {
+            "_id": "bad-id",
+            "game_code": "BADID1",
+            "state": "waiting",
+            "expires_at": now - timedelta(seconds=1),
+        }
+    )
+    join_service = GameService(join_games)
+    join_service.utcnow = lambda: now  # type: ignore[method-assign]
+    with pytest.raises(GameNotFoundError):
+        await join_service.join_game(user_id="u2", username="joiner", game_code="BADID1")
+
+    missing_creator_games = FakeGamesCollection()
+    missing_creator_games.docs.append(
+        {"_id": ObjectId(), "game_code": "MISSCR", "state": "waiting", "creator_color": "white"}
+    )
+    with pytest.raises(GameConflictError):
+        await GameService(missing_creator_games).join_game(user_id="u2", username="joiner", game_code="MISSCR")
+
+    open_games = FakeGamesCollection()
+    open_games.docs.append(
+        {"_id": ObjectId(), "game_code": "MISSCR", "state": "waiting", "creator_color": "white", "created_at": now}
+    )
+    assert (await GameService(open_games).get_open_games()).games == []
+
+    assert await GameService(FakeGamesCollection(), archives_collection=None).get_my_archived_games(user_id="u1") == []
+
+    duplicate_id = ObjectId()
+    duplicate_games = FakeGamesCollection()
+    duplicate_games.docs.extend(
+        [
+            {
+                "_id": duplicate_id,
+                "game_code": "DUP222",
+                "rule_variant": "berkeley_any",
+                "state": "active",
+                "white": {"user_id": "u1", "username": "one"},
+                "black": {"user_id": "u2", "username": "two"},
+                "turn": "white",
+                "move_number": 1,
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "_id": duplicate_id,
+                "game_code": "DUP222",
+                "rule_variant": "berkeley_any",
+                "state": "active",
+                "white": {"user_id": "u1", "username": "one"},
+                "black": {"user_id": "u2", "username": "two"},
+                "turn": "white",
+                "move_number": 1,
+                "created_at": now - timedelta(days=1),
+                "updated_at": now - timedelta(days=1),
+            },
+        ]
+    )
+    mine = await GameService(duplicate_games)._get_my_games_from_sources(user_id="u1", sources=[duplicate_games])
+    assert len(mine) == 1
+
+    waiting_state_id = ObjectId()
+    waiting_state_games = FakeGamesCollection()
+    waiting_state_games.docs.append(
+        {
+            "_id": waiting_state_id,
+            "game_code": "WAIT01",
+            "rule_variant": "berkeley_any",
+            "white": {"user_id": "u1", "username": "white", "connected": True},
+            "black": None,
+            "state": "waiting",
+            "turn": None,
+            "move_number": 1,
+            "moves": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    waiting_state = await GameService(waiting_state_games).get_game_state(
+        game_id=str(waiting_state_id),
+        user_id="u1",
+    )
+    assert waiting_state.state == "waiting"

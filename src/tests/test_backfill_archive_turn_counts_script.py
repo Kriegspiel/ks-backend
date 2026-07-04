@@ -105,6 +105,17 @@ class FakeDB:
         self.maintenance_state = FakeMaintenanceCollection()
 
 
+class FailingArchiveCollection(FakeArchiveCollection):
+    async def update_many(self, query: dict, update: list[dict]):  # noqa: ARG002
+        raise RuntimeError("update failed")
+
+
+class FailingDB(FakeDB):
+    def __init__(self):
+        self.game_archives = FailingArchiveCollection([])
+        self.maintenance_state = FakeMaintenanceCollection()
+
+
 class FakeMaintenanceCollection:
     def __init__(self):
         self.docs: dict[str, dict] = {}
@@ -171,6 +182,27 @@ async def test_backfill_archive_turn_counts_apply_updates_in_batches() -> None:
 
 
 @pytest.mark.asyncio
+async def test_backfill_archive_turn_counts_applies_final_partial_batch_and_limit() -> None:
+    first = {"_id": ObjectId(), "game_code": "ABC123", "moves": [{"move_done": True}]}
+    second = {"_id": ObjectId(), "game_code": "DEF456", "moves": [{"move_done": True}]}
+    db = FakeDB([first, second])
+
+    summary = await backfill_archive_turn_counts(db, apply=True, batch_size=10, limit=1, max_details=0)
+
+    assert summary["scanned"] == 1
+    assert summary["would_update"] == 1
+    assert summary["updated"] == 1
+    assert len(db.game_archives.bulk_calls) == 1
+    assert db.game_archives.docs[0]["move_count"] == 1
+    assert "move_count" not in db.game_archives.docs[1]
+
+    missing_db = FakeDB([{"_id": ObjectId(), "game_code": "MISS12"}])
+    missing_summary = await backfill_archive_turn_counts(missing_db, apply=False, max_details=0)
+    assert missing_summary["missing_moves_list"] == 1
+    assert missing_summary["missing_moves_examples"] == []
+
+
+@pytest.mark.asyncio
 async def test_backfill_archive_turn_counts_server_side_updates_only_missing_counts() -> None:
     first = {"_id": ObjectId(), "game_code": "ABC123", "moves": [{"move_done": True}, {"move_done": True}]}
     current = {"_id": ObjectId(), "game_code": "CUR123", "moves": [], "move_count": 0, "turn_count": 0}
@@ -207,3 +239,15 @@ async def test_run_archive_turn_count_migration_once_records_completion_marker()
     assert db.game_archives.find_calls == []
     assert len(db.game_archives.update_many_calls) == 1
     assert second_summary["skipped"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_archive_turn_count_migration_once_records_failed_marker() -> None:
+    db = FailingDB()
+
+    with pytest.raises(RuntimeError, match="update failed"):
+        await run_archive_turn_count_migration_once(db)
+
+    marker = next(iter(db.maintenance_state.docs.values()))
+    assert marker["status"] == "failed"
+    assert marker["error"] == "RuntimeError"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +10,7 @@ from app.dependencies import get_current_user
 from app.config import Settings
 from app.main import create_app
 from app.models.analytics import AcquisitionReportResponse, CampaignVisitRequest
-from app.routers.analytics import get_analytics_service
+from app.routers.analytics import get_analytics_service, maybe_get_analytics_service
 from app.services.analytics_service import AnalyticsService
 
 
@@ -26,6 +26,32 @@ class MemoryEventsCollection:
             if all(doc.get(key) == value for key, value in query.items()):
                 return doc
         return None
+
+
+class FakeAggregateCursor:
+    def __init__(self, rows: list[dict]):
+        self.rows = rows
+
+    async def to_list(self, length=None):  # noqa: ANN001
+        return list(self.rows)
+
+
+class FakeAggregateCollection:
+    def __init__(self, rows: list[dict]):
+        self.rows = rows
+        self.pipelines: list[list[dict]] = []
+
+    def aggregate(self, pipeline: list[dict]):
+        self.pipelines.append(pipeline)
+        return FakeAggregateCursor(self.rows)
+
+
+class FrozenAnalyticsService(AnalyticsService):
+    now = datetime(2026, 6, 21, tzinfo=UTC)
+
+    @classmethod
+    def utcnow(cls) -> datetime:
+        return cls.now
 
 
 @pytest.mark.asyncio
@@ -49,6 +75,71 @@ async def test_analytics_service_records_minimal_campaign_visit_and_resolves_sna
     assert snapshot["referrer_host"] == "reddit.com"
     assert "ip" not in events.docs[0]
     assert "user_agent" not in events.docs[0]
+
+
+@pytest.mark.asyncio
+async def test_attribution_snapshot_returns_none_for_invalid_or_missing_event() -> None:
+    events = MemoryEventsCollection()
+    service = AnalyticsService(events)
+
+    assert await service.attribution_snapshot_for_id("not-an-object-id") is None
+    assert await service.attribution_snapshot_for_id("507f1f77bcf86cd799439099") is None
+
+
+@pytest.mark.asyncio
+async def test_acquisition_report_merges_all_sources_and_orders_rows() -> None:
+    reddit_key = {"source": "reddit", "medium": "post", "campaign": "ruleset-default"}
+    organic_key = {"source": None, "medium": "search", "campaign": None}
+    db = SimpleNamespace(
+        analytics_events=FakeAggregateCollection([{"_id": reddit_key, "count": 3}]),
+        sessions=FakeAggregateCollection([{"_id": reddit_key, "count": 2}]),
+        users=FakeAggregateCollection([{"_id": reddit_key, "count": 1}]),
+        games=FakeAggregateCollection([{"_id": organic_key, "count": 0}]),
+        game_archives=FakeAggregateCollection([{"_id": organic_key, "count": 5}]),
+    )
+    service = FrozenAnalyticsService(MemoryEventsCollection())
+
+    report = await service.acquisition_report(db, days=7)
+
+    assert report.days == 7
+    assert report.generated_at == FrozenAnalyticsService.now
+    assert [(row.source, row.medium, row.campaign) for row in report.rows] == [
+        ("reddit", "post", "ruleset-default"),
+        (None, "search", None),
+    ]
+    assert report.rows[0].visits == 3
+    assert report.rows[0].sessions == 2
+    assert report.rows[0].acquired_users == 1
+    assert report.rows[1].games_created == 0
+    assert report.rows[1].games_completed == 5
+    assert db.analytics_events.pipelines[0][0]["$match"] == {
+        "event_type": "campaign_visit",
+        "occurred_at": {"$gte": FrozenAnalyticsService.now - timedelta(days=7)},
+    }
+    assert db.sessions.pipelines[0][0]["$match"]["attribution"] == {"$exists": True}
+    assert db.game_archives.pipelines[0][0]["$match"]["attribution"] == {"$exists": True}
+
+
+def test_acquisition_report_field_helpers_cover_all_collection_shapes() -> None:
+    assert AnalyticsService._row_key("reddit", "post", "launch") == ("reddit", "post", "launch")
+    assert AnalyticsService._field_path("analytics_events", "source") == "$utm.source"
+    assert AnalyticsService._field_path("games", "source") == "$attribution.utm.source"
+
+
+def test_analytics_dependency_helpers_prefer_app_state_and_fallback_to_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    app_state_service = AnalyticsService(MemoryEventsCollection())
+    request_with_service = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(analytics_service=app_state_service)))
+    request_without_service = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(analytics_service=None)))
+    fake_db = SimpleNamespace(analytics_events=MemoryEventsCollection())
+
+    from app.routers import analytics as analytics_router_module
+
+    monkeypatch.setattr(analytics_router_module, "require_db", lambda: fake_db)
+
+    assert get_analytics_service(request_with_service) is app_state_service
+    assert maybe_get_analytics_service(request_with_service) is app_state_service
+    assert isinstance(get_analytics_service(request_without_service), AnalyticsService)
+    assert maybe_get_analytics_service(request_without_service) is None
 
 
 def test_campaign_visit_endpoint_sets_one_year_opaque_cookie() -> None:

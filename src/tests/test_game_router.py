@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,7 +14,7 @@ from app.dependencies import get_current_user
 from app.main import create_app
 from app.models.user import UserModel
 from app.routers.analytics import maybe_get_analytics_service
-from app.routers.game import get_game_service
+from app.routers.game import _sse_frame, game_events, get_game_review, get_game_service, get_lobby_stats, get_recent_games
 from app.services.game_service import (
     GameConflictError,
     GameForbiddenError,
@@ -93,6 +94,7 @@ def app_with_game_service() -> tuple:
                 ]
             }
         ),
+        get_lobby_stats=AsyncMock(return_value={"waiting_games": 1, "active_games": 2, "completed_games": 3}),
         get_my_games=AsyncMock(
             return_value=[
                 {
@@ -140,6 +142,8 @@ def app_with_game_service() -> tuple:
                 "updated_at": datetime.now(UTC),
             }
         ),
+        get_game_review=AsyncMock(return_value={"game_id": "gid1", "moves": [], "result": None}),
+        get_recent_completed_games=AsyncMock(return_value={"games": []}),
         resign_game=AsyncMock(return_value={"result": {"winner": "black", "reason": "resignation"}}),
         delete_waiting_game=AsyncMock(return_value=None),
     )
@@ -283,6 +287,97 @@ def test_game_events_route_maps_subscribe_errors(app_with_game_service) -> None:
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_game_events_stream_yields_keepalive_shutdown_and_unsubscribes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.routers.game as game_router_module
+
+    subscription = SimpleNamespace(queue=asyncio.Queue())
+    service = SimpleNamespace(
+        subscribe_game_events=AsyncMock(return_value=subscription),
+        unsubscribe_game_events=AsyncMock(),
+    )
+    request = SimpleNamespace(is_disconnected=AsyncMock(side_effect=[False, False]))
+    wait_results = iter([TimeoutError, {"type": "shutdown", "game_id": "gid1"}])
+
+    async def fake_wait_for(awaitable, timeout: float):  # noqa: ANN001
+        awaitable.close()
+        result = next(wait_results)
+        if result is TimeoutError:
+            raise TimeoutError
+        return result
+
+    monkeypatch.setattr(game_router_module, "asyncio", SimpleNamespace(wait_for=fake_wait_for))
+
+    response = await game_events(request, "gid1", user=_user(), game_service=service)
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+    assert chunks[0] == ": keepalive\n\n"
+    assert chunks[1] == 'event: shutdown\ndata: {"type":"shutdown","game_id":"gid1"}\n\n'
+    service.unsubscribe_game_events.assert_awaited_once_with(subscription)
+
+
+@pytest.mark.asyncio
+async def test_game_events_stream_handles_disconnect_and_non_shutdown_events() -> None:
+    subscription = SimpleNamespace(queue=asyncio.Queue())
+    service = SimpleNamespace(
+        subscribe_game_events=AsyncMock(return_value=subscription),
+        unsubscribe_game_events=AsyncMock(),
+    )
+
+    disconnected = SimpleNamespace(is_disconnected=AsyncMock(return_value=True))
+    disconnected_response = await game_events(disconnected, "gid1", user=_user(), game_service=service)
+    assert [chunk async for chunk in disconnected_response.body_iterator] == []
+    service.unsubscribe_game_events.assert_awaited_once_with(subscription)
+
+    subscription = SimpleNamespace(queue=asyncio.Queue())
+    await subscription.queue.put({"type": "game_changed", "game_id": "gid1"})
+    service = SimpleNamespace(
+        subscribe_game_events=AsyncMock(return_value=subscription),
+        unsubscribe_game_events=AsyncMock(),
+    )
+    request = SimpleNamespace(is_disconnected=AsyncMock(side_effect=[False, True]))
+
+    response = await game_events(request, "gid1", user=_user(), game_service=service)
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks == ['event: game_changed\ndata: {"type":"game_changed","game_id":"gid1"}\n\n']
+    service.unsubscribe_game_events.assert_awaited_once_with(subscription)
+
+
+def test_sse_frame_uses_message_event_type_by_default() -> None:
+    assert _sse_frame({"payload": "ok"}) == 'event: message\ndata: {"payload":"ok"}\n\n'
+
+
+@pytest.mark.asyncio
+async def test_stats_review_and_recent_routes_cover_success_and_error_paths() -> None:
+    user = _user()
+    service = SimpleNamespace(
+        get_lobby_stats=AsyncMock(return_value={"waiting_games": 0, "active_games": 1, "completed_games": 2}),
+        get_game_review=AsyncMock(return_value={"game_id": "gid1", "moves": []}),
+        get_recent_completed_games=AsyncMock(return_value={"games": []}),
+    )
+
+    assert await get_lobby_stats(user, game_service=service) == {"waiting_games": 0, "active_games": 1, "completed_games": 2}
+    assert await get_game_review("gid1", user=user, game_service=service) == {"game_id": "gid1", "moves": []}
+    assert await get_recent_games(limit=5, game_service=service) == {"games": []}
+
+    service.get_lobby_stats = AsyncMock(side_effect=GameValidationError(code="BAD_STATS", message="bad stats"))
+    service.get_game_review = AsyncMock(side_effect=GameForbiddenError(code="FORBIDDEN", message="forbidden"))
+    service.get_recent_completed_games = AsyncMock(side_effect=GameConflictError(code="CONFLICT", message="conflict"))
+
+    stats_error = await get_lobby_stats(user, game_service=service)
+    review_error = await get_game_review("gid1", user=user, game_service=service)
+    recent_error = await get_recent_games(limit=5, game_service=service)
+
+    assert stats_error.status_code == 400
+    assert review_error.status_code == 403
+    assert recent_error.status_code == 409
 
 
 @pytest.mark.parametrize(

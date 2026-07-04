@@ -134,6 +134,14 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
         service.convert_guest_to_user.assert_awaited_once()
         session_service.update_session_for_user.assert_awaited_once_with("sess123", created_user)
 
+        client.cookies.clear()
+        convert_no_cookie = client.post(
+            "/api/auth/guest/convert",
+            json={"email": "player@example.com", "password": "abc12345"},
+        )
+        assert convert_no_cookie.status_code == 200
+        assert session_service.update_session_for_user.await_count == 1
+
         service.authenticate = AsyncMock(return_value=None)
         invalid = client.post("/api/auth/login", json={"username": "playerone", "password": "wrong"})
         assert invalid.status_code == 401
@@ -147,8 +155,14 @@ def test_register_and_login_set_cookie_and_errors(app_no_db, monkeypatch: pytest
         )
         assert conflict.status_code == 409
 
+        client.cookies.set(SessionService.COOKIE_NAME, "sess123")
         logout = client.post("/api/auth/logout")
         assert logout.status_code == 200
+        session_service.delete_session.assert_awaited_once_with("sess123")
+
+        client.cookies.clear()
+        logout_no_cookie = client.post("/api/auth/logout")
+        assert logout_no_cookie.status_code == 200
 
 
 def test_register_and_guest_store_attribution_snapshot(app_no_db, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,6 +230,20 @@ def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
     assert body["email"] == "player@example.com"
     assert body["is_guest"] is False
     assert body["can_view_tech_reports"] is False
+
+
+def test_session_status_without_cookie_uses_current_user(app_no_db) -> None:
+    app, _ = app_no_db
+    app.dependency_overrides[get_current_user] = lambda: UserModel.from_mongo(_user_doc())
+    session_service = SimpleNamespace(update_session_for_user=AsyncMock())
+    app.dependency_overrides[get_session_service] = lambda: session_service
+
+    with TestClient(app) as client:
+        response = client.get("/api/auth/session")
+
+    assert response.status_code == 200
+    assert response.json()["authenticated"] is True
+    assert session_service.update_session_for_user.await_count == 0
 
 
 def test_me_endpoint_reissues_guest_cookie_and_refreshes_session(app_no_db) -> None:
@@ -369,6 +397,116 @@ def test_bot_register_is_self_serve_without_registration_key(app_no_db, monkeypa
     assert registered.status_code == 201
     assert registered.json()["api_token"] == "ksbot_token.secret"
     assert legacy_header.status_code == 201
+
+
+def test_bot_register_uses_payload_fallbacks_and_surfaces_conflicts(app_no_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake_users = app_no_db
+
+    from app.routers import auth as auth_router_module
+    from app.services.user_service import UserConflictError
+
+    created_bot = SimpleNamespace(
+        id="bot-id",
+        username="fallbackbot",
+        username_display="Fallback Bot",
+        bot_profile=None,
+    )
+    service = SimpleNamespace(create_bot=AsyncMock(return_value=(created_bot, "ksbot_token.secret")))
+
+    class FakeUserService:
+        def __init__(self, _users):
+            self._users = _users
+
+        async def create_bot(self, payload):
+            return await service.create_bot(payload)
+
+    monkeypatch.setattr(auth_router_module, "UserService", FakeUserService)
+
+    with TestClient(app) as client:
+        registered = client.post(
+            "/api/auth/bots/register",
+            json={
+                "username": "fallbackbot",
+                "display_name": "Fallback Bot",
+                "owner_email": "OWNER@EXAMPLE.COM",
+                "description": "bot",
+            },
+        )
+        service.create_bot = AsyncMock(
+            side_effect=UserConflictError(field="username", code="USERNAME_TAKEN", message="Username already exists")
+        )
+        conflict = client.post(
+            "/api/auth/bots/register",
+            json={
+                "username": "fallbackbot",
+                "display_name": "Fallback Bot",
+                "owner_email": "owner@example.com",
+                "description": "bot",
+            },
+        )
+
+    assert registered.status_code == 201
+    assert registered.json()["display_name"] == "Fallback Bot"
+    assert registered.json()["owner_email"] == "owner@example.com"
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "USERNAME_TAKEN"
+
+
+def test_guest_login_surfaces_name_pool_exhaustion(app_no_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake_users = app_no_db
+
+    from app.routers import auth as auth_router_module
+    from app.services.user_service import UserConflictError
+
+    class FakeUserService:
+        def __init__(self, _users):
+            self._users = _users
+
+        async def create_guest_user(self, *, acquisition=None):  # noqa: ARG002
+            raise UserConflictError(field="username", code="GUEST_NAME_POOL_EXHAUSTED", message="No names left")
+
+    monkeypatch.setattr(auth_router_module, "UserService", FakeUserService)
+    app.dependency_overrides[get_session_service] = lambda: SimpleNamespace(create_session=AsyncMock())
+
+    with TestClient(app) as client:
+        response = client.post("/api/auth/guest")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "GUEST_NAME_POOL_EXHAUSTED"
+
+
+def test_guest_conversion_surfaces_conflict_and_validation_errors(app_no_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _fake_users = app_no_db
+
+    from app.routers import auth as auth_router_module
+    from app.services.user_service import UserConflictError
+
+    guest_user = UserModel.from_mongo(_guest_doc())
+    outcomes = [
+        UserConflictError(field="email", code="EMAIL_TAKEN", message="Email already exists"),
+        ValueError("Guest account is inactive"),
+    ]
+
+    class FakeUserService:
+        def __init__(self, _users):
+            self._users = _users
+
+        async def convert_guest_to_user(self, db, user, payload):  # noqa: ANN001, ARG002
+            outcome = outcomes.pop(0)
+            raise outcome
+
+    monkeypatch.setattr(auth_router_module, "UserService", FakeUserService)
+    app.dependency_overrides[get_current_user] = lambda: guest_user
+    app.dependency_overrides[get_session_service] = lambda: SimpleNamespace(update_session_for_user=AsyncMock())
+
+    with TestClient(app) as client:
+        conflict = client.post("/api/auth/guest/convert", json={"email": "player@example.com", "password": "abc12345"})
+        validation = client.post("/api/auth/guest/convert", json={"email": "player@example.com", "password": "abc12345"})
+
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "EMAIL_TAKEN"
+    assert validation.status_code == 400
+    assert validation.json()["detail"] == "Guest account is inactive"
 
 
 @pytest.mark.integration
