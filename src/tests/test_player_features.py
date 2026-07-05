@@ -311,16 +311,27 @@ def test_history_out_of_range_returns_empty_with_stable_total() -> None:
     assert out.json()["pagination"]["total"] == 2
 
 
-def test_history_and_leaderboard_per_page_above_100_rejected() -> None:
+def test_history_accepts_large_pages_but_leaderboard_stays_capped_at_100() -> None:
     app, db, _ = _build_app_and_db()
     dependencies.get_db = lambda: db
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        history = client.get("/api/user/playerone/games?page=1&per_page=101")
+        history = client.get("/api/user/playerone/games?page=1&per_page=10000")
         leaderboard = client.get("/api/leaderboard?page=1&per_page=101")
 
-    assert history.status_code == 422
+    assert history.status_code == 200
+    assert history.json()["pagination"] == {"page": 1, "per_page": 10000, "total": 2, "pages": 1}
     assert leaderboard.status_code == 422
+
+
+def test_history_per_page_above_10000_rejected() -> None:
+    app, db, _ = _build_app_and_db()
+    dependencies.get_db = lambda: db
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        history = client.get("/api/user/playerone/games?page=1&per_page=10001")
+
+    assert history.status_code == 422
 
 
 def test_leaderboard_orders_by_elo_and_filters_min_games() -> None:

@@ -1220,6 +1220,33 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
 
 
 @pytest.mark.asyncio
+async def test_get_game_history_clamps_direct_service_calls_to_10000_per_page() -> None:
+    user_id = ObjectId()
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    archives.docs.extend(
+        {
+            "_id": ObjectId(),
+            "game_code": f"G{idx:05d}",
+            "white": {"user_id": str(user_id), "username": "playerone", "role": "user"},
+            "black": {"user_id": str(ObjectId()), "username": f"rival-{idx}", "role": "bot"},
+            "created_at": datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=idx),
+            "updated_at": datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=idx),
+            "result": {"winner": "white", "reason": "checkmate"},
+            "moves": [],
+        }
+        for idx in range(10005)
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    page, total = await service.get_game_history(db, str(user_id), page=1, per_page=10001)
+
+    assert total == 10005
+    assert len(page) == 10000
+
+
+@pytest.mark.asyncio
 async def test_get_game_history_handles_null_result_documents() -> None:
     users = FakeUsersCollection()
     archives = FakeUsersCollection()

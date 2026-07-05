@@ -11,6 +11,8 @@ from app.services.user_service import UserService
 
 router = APIRouter(tags=["user"])
 
+USER_GAMES_MAX_PER_PAGE = 10000
+
 
 class SettingsPatch(dict):
     allowed_keys = {"board_theme", "piece_set", "sound_enabled", "auto_ask_any"}
@@ -46,7 +48,7 @@ async def get_public_profile(
 async def get_user_games(
     username: str,
     page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=100, ge=1, le=100),
+    per_page: int = Query(default=100, ge=1, le=USER_GAMES_MAX_PER_PAGE),
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()

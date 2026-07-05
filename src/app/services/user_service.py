@@ -21,6 +21,7 @@ from app.models.user import UserModel, default_user_stats_payload, normalize_use
 from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
 
 DEFAULT_BOT_OWNER_EMAIL = "bots@kriegspiel.org"
+USER_GAME_HISTORY_MAX_PER_PAGE = 10000
 PASSWORD_HASH_SCHEME_BCRYPT_SHA256 = "bcrypt_sha256$"
 
 
@@ -903,7 +904,7 @@ class UserService:
 
     async def get_game_history(self, db: Any, user_id: str, page: int, per_page: int) -> tuple[list[dict[str, Any]], int]:
         bounded_page = max(page, 1)
-        bounded_per_page = min(max(per_page, 1), 100)
+        bounded_per_page = min(max(per_page, 1), USER_GAME_HISTORY_MAX_PER_PAGE)
         offset = (bounded_page - 1) * bounded_per_page
 
         query = {

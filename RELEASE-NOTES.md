@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.57
+
+- **Game History API**: allow user game-history requests to page up to 10,000
+  archived games while keeping leaderboard pagination capped at 100 rows.
+
 ## ks-backend v. 1.3.56
 
 - **LLM Bot Identity Rename**: updated backend LLM bot policy, provider
