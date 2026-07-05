@@ -23,6 +23,34 @@ from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
 DEFAULT_BOT_OWNER_EMAIL = "bots@kriegspiel.org"
 USER_GAME_HISTORY_MAX_PER_PAGE = 10000
 PASSWORD_HASH_SCHEME_BCRYPT_SHA256 = "bcrypt_sha256$"
+BOT_MATRIX_PERIOD_DAY_WINDOWS = {
+    "week": 7,
+    "month": 30,
+    "year": 365,
+}
+BOT_MATRIX_PERIODS = frozenset({"today", "week", "month", "year", "lifetime"})
+BOT_MATRIX_PLAYER_ORDER = (
+    "llm_haiku",
+    "llm_gptnano",
+    "llm_gemini25_lite",
+    "llm_deepseekv4_flash",
+    "llm_gptoss120b",
+    "llm_qwen36_flash",
+    "llm_gemini31_lite",
+    "llm_llama31_8b",
+    "randobot",
+    "randobotany",
+    "simpleheuristics",
+)
+BOT_MATRIX_END_CONDITION_ORDER = (
+    "timeout",
+    "resignation",
+    "checkmate",
+    "stalemate",
+    "insufficient",
+    "too_many_reversible_moves",
+    "unknown",
+)
 
 
 class UserConflictError(Exception):
@@ -135,6 +163,14 @@ class UserService:
             return value.replace(tzinfo=UTC)
         return value
 
+    @staticmethod
+    def _utc_datetime(value: Any) -> datetime | None:
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
     @classmethod
     def _created_day(cls, doc: dict[str, Any]) -> str | None:
         created_at = cls._optional_datetime(doc.get("created_at"))
@@ -184,6 +220,94 @@ class UserService:
             if special in {"CHECKMATE_WHITE_WINS", "CHECKMATE_BLACK_WINS"}:
                 return "checkmate"
         return None
+
+    @staticmethod
+    def _bot_matrix_period_cutoff(*, period: str, now: datetime) -> datetime | None:
+        if period == "lifetime":
+            return None
+        if period == "today":
+            return datetime(now.year, now.month, now.day, tzinfo=UTC)
+        days = BOT_MATRIX_PERIOD_DAY_WINDOWS.get(period)
+        return now - timedelta(days=days) if days else None
+
+    @staticmethod
+    def _bot_matrix_display_name(user: dict[str, Any]) -> str:
+        profile = user.get("bot_profile") if isinstance(user.get("bot_profile"), dict) else {}
+        for value in (profile.get("display_name"), user.get("username_display"), user.get("username")):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return "Unknown bot"
+
+    @staticmethod
+    def _bot_matrix_ply_count(game: dict[str, Any]) -> int:
+        for key in ("move_count", "ply_count"):
+            try:
+                value = int(game.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                return value
+
+        moves = game.get("moves")
+        if isinstance(moves, list):
+            return len(moves)
+
+        try:
+            turn_count = int(game.get("turn_count", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, turn_count * 2)
+
+    @staticmethod
+    def _bot_matrix_empty_summary() -> dict[str, int]:
+        return {"games": 0, "wins": 0, "draws": 0, "losses": 0, "plies": 0}
+
+    @staticmethod
+    def _bot_matrix_record_result(summary: dict[str, int], *, outcome: str, plies: int) -> None:
+        summary["games"] += 1
+        summary["plies"] += plies
+        if outcome == "win":
+            summary["wins"] += 1
+        elif outcome == "loss":
+            summary["losses"] += 1
+        else:
+            summary["draws"] += 1
+
+    @staticmethod
+    def _bot_matrix_public_summary(summary: dict[str, int]) -> dict[str, Any]:
+        games = int(summary["games"])
+        avg_plies = (float(summary["plies"]) / games) if games else None
+        return {
+            "games": games,
+            "wins": int(summary["wins"]),
+            "draws": int(summary["draws"]),
+            "losses": int(summary["losses"]),
+            "record": f"{int(summary['wins'])}-{int(summary['draws'])}-{int(summary['losses'])}",
+            "average_plies": avg_plies,
+            "avg_plies": avg_plies,
+            "avg_calls": None,
+            "avg_tokens": None,
+            "avg_cost": None,
+            "player_tokens": None,
+            "player_cost": None,
+            "opponent_tokens": None,
+            "opponent_cost": None,
+            "win_share": (float(summary["wins"]) / games) if games else None,
+            "draw_share": (float(summary["draws"]) / games) if games else None,
+            "loss_share": (float(summary["losses"]) / games) if games else None,
+        }
+
+    @staticmethod
+    def _bot_matrix_condition_label(condition: str) -> str:
+        return {
+            "checkmate": "Checkmate",
+            "insufficient": "Insufficient material",
+            "resignation": "Resignation",
+            "stalemate": "Stalemate",
+            "timeout": "Timeout",
+            "too_many_reversible_moves": "Too many reversible moves",
+            "unknown": "Unknown",
+        }.get(condition, condition.replace("_", " ").title())
 
     @staticmethod
     def _completed_turn_count(game: dict[str, Any]) -> int:
@@ -452,9 +576,18 @@ class UserService:
         raw_stats = user.get("stats") if isinstance(user.get("stats"), dict) else {}
         raw_results = raw_stats.get("results") if isinstance(raw_stats.get("results"), dict) else None
         result_keys = ("overall", "vs_humans", "vs_bots")
-        has_results_shape = raw_results is not None and all(isinstance(raw_results.get(key), dict) for key in result_keys)
-        has_nonzero_summary = any(int(raw_stats.get(field, 0) or 0) for field in ("games_played", "games_won", "games_lost", "games_drawn"))
-        if has_results_shape and (raw_stats.get("results_synced_at") or has_nonzero_summary) and self._result_tracks_are_consistent(stats):
+        has_results_shape = raw_results is not None and all(
+            isinstance(raw_results.get(key), dict) for key in result_keys
+        )
+        has_nonzero_summary = any(
+            int(raw_stats.get(field, 0) or 0)
+            for field in ("games_played", "games_won", "games_lost", "games_drawn")
+        )
+        if (
+            has_results_shape
+            and (raw_stats.get("results_synced_at") or has_nonzero_summary)
+            and self._result_tracks_are_consistent(stats)
+        ):
             user["stats"] = stats
             return user
 
@@ -534,8 +667,16 @@ class UserService:
                 continue
             snapshots, overall_snapshot = self._history_rating_snapshot_for_player(game, play_as=play_as)
             selected_snapshot = snapshots.get(track) or {}
-            elo_after = selected_snapshot.get("elo_after") if track != "overall" else selected_snapshot.get("elo_after", overall_snapshot.get(f"{play_as}_after"))
-            elo_delta = selected_snapshot.get("elo_delta") if track != "overall" else selected_snapshot.get("elo_delta", overall_snapshot.get(f"{play_as}_delta"))
+            elo_after = (
+                selected_snapshot.get("elo_after")
+                if track != "overall"
+                else selected_snapshot.get("elo_after", overall_snapshot.get(f"{play_as}_after"))
+            )
+            elo_delta = (
+                selected_snapshot.get("elo_delta")
+                if track != "overall"
+                else selected_snapshot.get("elo_delta", overall_snapshot.get(f"{play_as}_delta"))
+            )
             if not isinstance(elo_after, (int, float)):
                 continue
             played_at = self._safe_datetime(game.get("updated_at") or game.get("created_at"))
@@ -786,8 +927,9 @@ class UserService:
             display_name=registration.display_name.strip(),
             description=registration.description.strip(),
         )
-        supported_rule_variants = getattr(registration, "supported_rule_variants", None) or self._default_supported_rule_variants(
-            username=username
+        supported_rule_variants = (
+            getattr(registration, "supported_rule_variants", None)
+            or self._default_supported_rule_variants(username=username)
         )
         payload = {
             "username": username,
@@ -1431,7 +1573,228 @@ class UserService:
 
         return {"timezone": timezone_name, "sections": public_sections, "last_games": user_games}
 
-    async def get_listed_bot_daily_report(self, db: Any, *, days: int = 10, timezone_name: str = "America/New_York") -> dict[str, Any]:
+    async def get_bot_matrix_report(
+        self,
+        db: Any,
+        *,
+        period: str = "lifetime",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        normalized_period = period if period in BOT_MATRIX_PERIODS else "lifetime"
+        generated_at = (now or datetime.now(UTC)).astimezone(UTC)
+        cutoff = self._bot_matrix_period_cutoff(period=normalized_period, now=generated_at)
+
+        listed_bot_docs = [
+            user
+            async for user in self._find(
+                db.users,
+                {"role": "bot", "bot_profile.listed": True},
+                {
+                    "_id": 1,
+                    "username": 1,
+                    "username_display": 1,
+                    "bot_profile.display_name": 1,
+                    "bot_profile.listed": 1,
+                },
+            )
+            if isinstance(user.get("username"), str) and user["username"].strip()
+        ]
+        all_bot_docs = [
+            user
+            async for user in self._find(db.users, {"role": "bot"}, {"username": 1, "_id": 1})
+            if isinstance(user.get("username"), str) and user["username"].strip()
+        ]
+        all_bot_usernames = {user["username"].strip() for user in all_bot_docs}
+        all_bot_user_ids = {str(user.get("_id") or "") for user in all_bot_docs if user.get("_id") is not None}
+
+        order_index = {username: index for index, username in enumerate(BOT_MATRIX_PLAYER_ORDER)}
+        players = sorted(
+            [
+                {
+                    "username": user["username"].strip(),
+                    "user_id": str(user.get("_id") or ""),
+                    "name": self._bot_matrix_display_name(user),
+                    "profile_path": f"/user/{user['username'].strip()}",
+                }
+                for user in listed_bot_docs
+            ],
+            key=lambda player: (order_index.get(player["username"], len(order_index)), player["name"].lower()),
+        )
+        listed_usernames = [player["username"] for player in players]
+        listed_username_set = set(listed_usernames)
+        listed_user_ids = [player["user_id"] for player in players if player["user_id"]]
+        listed_username_by_id = {player["user_id"]: player["username"] for player in players if player["user_id"]}
+        listed_username_by_name = {player["username"]: player["username"] for player in players}
+
+        empty_matrix = {
+            row: {column: self._bot_matrix_empty_summary() for column in listed_usernames}
+            for row in listed_usernames
+        }
+        matrix_totals = {username: self._bot_matrix_empty_summary() for username in listed_usernames}
+        total_buckets = {
+            scope: {username: self._bot_matrix_empty_summary() for username in listed_usernames}
+            for scope in ("all", "humans", "bots")
+        }
+        end_conditions: dict[str, int] = {}
+        matrix_game_count = 0
+        matrix_row_record_count = 0
+
+        if not listed_usernames:
+            return {
+                "period": normalized_period,
+                "generated_at": generated_at.isoformat(),
+                "players": [],
+                "matrix_rows": [],
+                "end_condition_rows": [],
+                "total_rows": {"all": [], "humans": [], "bots": []},
+                "unique_game_count": 0,
+                "row_record_count": 0,
+                "usage_available": False,
+            }
+
+        query: dict[str, Any] = {
+            "state": "completed",
+            "$or": [
+                {"white.user_id": {"$in": listed_user_ids}},
+                {"black.user_id": {"$in": listed_user_ids}},
+            ],
+        }
+        if cutoff is not None:
+            query["updated_at"] = {"$gte": cutoff, "$lte": generated_at}
+
+        projection = {
+            "_id": 1,
+            "game_code": 1,
+            "white": 1,
+            "black": 1,
+            "result": 1,
+            "updated_at": 1,
+            "created_at": 1,
+            "move_count": 1,
+            "ply_count": 1,
+            "turn_count": 1,
+        }
+
+        def listed_username_for(player: dict[str, Any]) -> str | None:
+            user_id = str(player.get("user_id") or "").strip()
+            if user_id in listed_username_by_id:
+                return listed_username_by_id[user_id]
+            username = str(player.get("username") or "").strip()
+            return listed_username_by_name.get(username)
+
+        cursor = self._find(db.game_archives, query, projection)
+        if hasattr(cursor, "batch_size"):
+            cursor = cursor.batch_size(1000)
+
+        async for game in cursor:
+            played_at = self._utc_datetime(game.get("updated_at")) or self._utc_datetime(game.get("created_at"))
+            if cutoff is not None and (played_at is None or not (cutoff <= played_at <= generated_at)):
+                continue
+
+            white = game.get("white") if isinstance(game.get("white"), dict) else {}
+            black = game.get("black") if isinstance(game.get("black"), dict) else {}
+            white_username = listed_username_for(white)
+            black_username = listed_username_for(black)
+            plies = self._bot_matrix_ply_count(game)
+            result = game.get("result") if isinstance(game.get("result"), dict) else {}
+            winner = result.get("winner")
+
+            participants = (
+                ("white", white, white_username, black, black_username),
+                ("black", black, black_username, white, white_username),
+            )
+            for color, player, username, opponent, opponent_username in participants:
+                if username not in listed_username_set:
+                    continue
+                opponent_role = str(opponent.get("role") or "").strip().lower()
+                opponent_id = str(opponent.get("user_id") or "").strip()
+                opponent_name = str(opponent.get("username") or "").strip()
+                opponent_is_bot = (
+                    opponent_role == "bot"
+                    or opponent_id in all_bot_user_ids
+                    or opponent_name in all_bot_usernames
+                )
+                outcome = self._winner_result(winner, color)
+                self._bot_matrix_record_result(total_buckets["all"][username], outcome=outcome, plies=plies)
+                scope = "bots" if opponent_is_bot else "humans"
+                self._bot_matrix_record_result(total_buckets[scope][username], outcome=outcome, plies=plies)
+
+                if opponent_username in listed_username_set:
+                    self._bot_matrix_record_result(empty_matrix[username][opponent_username], outcome=outcome, plies=plies)
+                    self._bot_matrix_record_result(matrix_totals[username], outcome=outcome, plies=plies)
+                    matrix_row_record_count += 1
+
+            if white_username in listed_username_set and black_username in listed_username_set:
+                matrix_game_count += 1
+                condition = self._normalized_result_reason(game) or "unknown"
+                end_conditions[condition] = end_conditions.get(condition, 0) + 1
+
+        player_by_username = {player["username"]: player for player in players}
+        matrix_rows = []
+        for row_username in listed_usernames:
+            matrix_rows.append(
+                {
+                    "player": player_by_username[row_username],
+                    "cells": [
+                        {
+                            "opponent": player_by_username[column_username],
+                            "summary": None
+                            if row_username == column_username
+                            else self._bot_matrix_public_summary(empty_matrix[row_username][column_username]),
+                        }
+                        for column_username in listed_usernames
+                    ],
+                    "average": self._bot_matrix_public_summary(matrix_totals[row_username]),
+                }
+            )
+
+        ordered_conditions = sorted(
+            end_conditions,
+            key=lambda condition: (
+                BOT_MATRIX_END_CONDITION_ORDER.index(condition)
+                if condition in BOT_MATRIX_END_CONDITION_ORDER
+                else len(BOT_MATRIX_END_CONDITION_ORDER),
+                condition,
+            ),
+        )
+        total_rows = {
+            scope: [
+                {
+                    **self._bot_matrix_public_summary(total_buckets[scope][username]),
+                    "player": player_by_username[username],
+                    "username": username,
+                }
+                for username in listed_usernames
+            ]
+            for scope in ("all", "humans", "bots")
+        }
+
+        return {
+            "period": normalized_period,
+            "generated_at": generated_at.isoformat(),
+            "players": players,
+            "matrix_rows": matrix_rows,
+            "end_condition_rows": [
+                {
+                    "condition": condition,
+                    "label": self._bot_matrix_condition_label(condition),
+                    "games": end_conditions[condition],
+                }
+                for condition in ordered_conditions
+            ],
+            "total_rows": total_rows,
+            "unique_game_count": matrix_game_count,
+            "row_record_count": matrix_row_record_count,
+            "usage_available": False,
+        }
+
+    async def get_listed_bot_daily_report(
+        self,
+        db: Any,
+        *,
+        days: int = 10,
+        timezone_name: str = "America/New_York",
+    ) -> dict[str, Any]:
         bounded_days = max(1, min(days, 31))
         tz = ZoneInfo(timezone_name)
         now_local = datetime.now(tz)

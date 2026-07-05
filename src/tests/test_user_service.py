@@ -2260,6 +2260,110 @@ async def test_get_user_activity_report_skips_edge_rows_and_caps_recent_games(
 
 
 @pytest.mark.asyncio
+async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_period() -> None:
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {
+                "_id": "haiku-id",
+                "username": "llm_haiku",
+                "username_display": "LLM Haiku (bot)",
+                "role": "bot",
+                "bot_profile": {"listed": True, "display_name": "LLM Haiku (bot)"},
+            },
+            {
+                "_id": "nano-id",
+                "username": "llm_gptnano",
+                "username_display": "LLM GPT-Nano (bot)",
+                "role": "bot",
+                "bot_profile": {"listed": True, "display_name": "LLM GPT-Nano (bot)"},
+            },
+            {
+                "_id": "hidden-id",
+                "username": "hiddenbot",
+                "username_display": "Hidden Bot",
+                "role": "bot",
+                "bot_profile": {"listed": False, "display_name": "Hidden Bot"},
+            },
+            {
+                "_id": "human-id",
+                "username": "playerone",
+                "username_display": "Player One",
+                "role": "user",
+            },
+        ]
+    )
+    now = datetime(2026, 7, 5, 12, tzinfo=UTC)
+    archives = FakeUsersCollection()
+    archives.docs.extend(
+        [
+            {
+                "state": "completed",
+                "game_code": "OLD001",
+                "updated_at": datetime(2026, 7, 4, 12, tzinfo=UTC),
+                "white": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
+                "black": {"user_id": "nano-id", "username": "llm_gptnano", "role": "bot"},
+                "result": {"winner": "white", "reason": "checkmate"},
+                "move_count": 20,
+            },
+            {
+                "state": "completed",
+                "game_code": "TODAY1",
+                "updated_at": datetime(2026, 7, 5, 9, tzinfo=UTC),
+                "white": {"user_id": "nano-id", "username": "llm_gptnano", "role": "bot"},
+                "black": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
+                "result": {"winner": None, "reason": "insufficient"},
+                "move_count": 10,
+            },
+            {
+                "state": "completed",
+                "game_code": "HUMAN1",
+                "updated_at": datetime(2026, 7, 5, 10, tzinfo=UTC),
+                "white": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
+                "black": {"user_id": "human-id", "username": "playerone", "role": "user"},
+                "result": {"winner": "black", "reason": "resignation"},
+                "move_count": 8,
+            },
+            {
+                "state": "completed",
+                "game_code": "HID001",
+                "updated_at": datetime(2026, 7, 5, 11, tzinfo=UTC),
+                "white": {"user_id": "hidden-id", "username": "hiddenbot", "role": "bot"},
+                "black": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
+                "result": {"winner": "black", "reason": "timeout"},
+                "move_count": 6,
+            },
+        ]
+    )
+
+    report = await UserService(users).get_bot_matrix_report(
+        FakeDB(users=users, game_archives=archives),
+        period="today",
+        now=now,
+    )
+
+    assert report["period"] == "today"
+    assert report["unique_game_count"] == 1
+    assert report["row_record_count"] == 2
+    assert [player["username"] for player in report["players"]] == ["llm_haiku", "llm_gptnano"]
+    assert report["end_condition_rows"] == [{"condition": "insufficient", "label": "Insufficient material", "games": 1}]
+
+    haiku_row = report["matrix_rows"][0]
+    nano_cell = haiku_row["cells"][1]["summary"]
+    assert nano_cell["games"] == 1
+    assert nano_cell["record"] == "0-1-0"
+    assert nano_cell["average_plies"] == 10
+
+    haiku_all = report["total_rows"]["all"][0]
+    assert haiku_all["games"] == 3
+    assert haiku_all["record"] == "1-1-1"
+    assert haiku_all["avg_plies"] == 8
+    assert haiku_all["avg_calls"] is None
+    assert report["total_rows"]["bots"][0]["games"] == 2
+    assert report["total_rows"]["humans"][0]["record"] == "0-0-1"
+
+
+@pytest.mark.asyncio
 async def test_get_listed_bot_daily_report_aggregates_daily_win_rates(monkeypatch: pytest.MonkeyPatch) -> None:
     users = object()
     archives = object()
