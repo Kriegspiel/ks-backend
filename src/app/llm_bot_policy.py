@@ -48,8 +48,8 @@ LLM_BOT_TIER_ALIASES: dict[str, LlmBotTier] = {
 
 KNOWN_LLM_BOT_USERNAMES = frozenset(
     {
-        "gptnano",
-        "haiku",
+        "llm_gptnano",
+        "llm_haiku",
         "openrouterbot",
         "openrouter_gemini25_lite",
         "openrouter_deepseekv4_flash",
@@ -58,13 +58,13 @@ KNOWN_LLM_BOT_USERNAMES = frozenset(
         "openrouter_gemini31_lite",
         "openrouter_deepseekv4_pro",
         "openrouter_llama31_8b",
-        "bot_gemini25_lite",
-        "bot_deepseekv4_flash",
-        "bot_gptoss120b",
-        "bot_qwen36_flash",
-        "bot_gemini31_lite",
+        "llm_gemini25_lite",
+        "llm_deepseekv4_flash",
+        "llm_gptoss120b",
+        "llm_qwen36_flash",
+        "llm_gemini31_lite",
         "bot_deepseekv4_pro",
-        "bot_llama31_8b",
+        "llm_llama31_8b",
     }
 )
 
