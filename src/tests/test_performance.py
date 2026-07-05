@@ -14,6 +14,9 @@ from app.services.game_service import GAME_METADATA_PROJECTION, GameService
 from app.services.session_service import SessionService
 
 GAME_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+ACTIVE_GAME_STATE_CACHE_READS_THRESHOLD_SECONDS = 0.15
+MY_GAMES_QUERY_THRESHOLD_SECONDS = 0.05
+SESSION_CACHE_READS_THRESHOLD_SECONDS = 0.05
 
 
 class FrozenSessionService(SessionService):
@@ -172,7 +175,7 @@ def _metadata_doc(*, code: str, user_field: str, created_at: datetime, large_mov
 
 @pytest.mark.asyncio
 @pytest.mark.performance
-async def test_active_game_state_cached_reads_stay_under_half_second() -> None:
+async def test_active_game_state_cached_reads_stay_within_budget() -> None:
     now = datetime(2026, 5, 9, tzinfo=UTC)
     game_id = ObjectId()
     games = InstrumentedGamesCollection([_active_game_doc(now=now, game_id=game_id)])
@@ -188,7 +191,7 @@ async def test_active_game_state_cached_reads_stay_under_half_second() -> None:
         assert response.your_color == "white"
     elapsed = time.perf_counter() - start
 
-    assert elapsed < 0.5
+    assert elapsed < ACTIVE_GAME_STATE_CACHE_READS_THRESHOLD_SECONDS
     assert games.find_one_calls == [({"_id": game_id}, None)]
 
 
@@ -219,8 +222,11 @@ async def test_my_games_uses_projection_and_bounded_queries_for_large_game_docum
     archives = InstrumentedGamesCollection(archived_docs)
     service = GameService(games, archives_collection=archives)
 
+    start = time.perf_counter()
     mine = await service.get_my_games(user_id="u1", limit=20)
+    elapsed = time.perf_counter() - start
 
+    assert elapsed < MY_GAMES_QUERY_THRESHOLD_SECONDS
     assert len(mine) == 20
     assert [projection for _, projection in games.find_calls + archives.find_calls] == [GAME_METADATA_PROJECTION] * 4
     assert [query for query, _ in games.find_calls] == [{"white.user_id": "u1"}, {"black.user_id": "u1"}]
@@ -238,7 +244,7 @@ async def test_my_games_uses_projection_and_bounded_queries_for_large_game_docum
 
 @pytest.mark.asyncio
 @pytest.mark.performance
-async def test_repeated_session_cache_reads_avoid_mongo_and_stay_under_half_second() -> None:
+async def test_repeated_session_cache_reads_avoid_mongo_and_stay_within_budget() -> None:
     FrozenSessionService.now = datetime(2026, 5, 9, tzinfo=UTC)
     sessions = SimpleNamespace(
         insert_one=AsyncMock(),
@@ -258,7 +264,7 @@ async def test_repeated_session_cache_reads_avoid_mongo_and_stay_under_half_seco
         assert active["username"] == "playerone"
     elapsed = time.perf_counter() - start
 
-    assert elapsed < 0.5
+    assert elapsed < SESSION_CACHE_READS_THRESHOLD_SECONDS
     assert sessions.find_one.await_count == 0
     assert sessions.update_one.await_count == 0
     assert sessions.delete_one.await_count == 0
