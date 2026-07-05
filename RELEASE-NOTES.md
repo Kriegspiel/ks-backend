@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.58
+
+- **Bot Matrix Report API**: added a private live `/tech/bot-matrix-report`
+  aggregation over completed archived listed-bot games, with period filters,
+  outcome matrix rows, end conditions, and bot totals split by opponent type.
+
 ## ks-backend v. 1.3.57
 
 - **Game History API**: allow user game-history requests to page up to 10,000

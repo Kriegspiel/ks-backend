@@ -84,6 +84,18 @@ class StubService:
                 ],
             }
         )
+        self.get_bot_matrix_report = AsyncMock(
+            return_value={
+                "period": "lifetime",
+                "players": [{"username": "llm_gptnano", "name": "LLM GPT-Nano (bot)"}],
+                "matrix_rows": [],
+                "end_condition_rows": [],
+                "total_rows": {"all": [], "humans": [], "bots": []},
+                "unique_game_count": 27348,
+                "row_record_count": 54696,
+                "usage_available": False,
+            }
+        )
         self.get_guest_report = AsyncMock(
             return_value={
                 "guests": [
@@ -179,11 +191,15 @@ def test_tech_report_routes_require_operator_access() -> None:
 
     with TestClient(app, raise_server_exceptions=False) as client:
         bots_report = client.get("/api/tech/bots-report?days=10")
+        bot_matrix_report = client.get("/api/tech/bot-matrix-report?period=lifetime")
         guests_report = client.get("/api/tech/guests-report")
         users_report = client.get("/api/tech/users-report")
 
     assert bots_report.status_code == 200
     assert bots_report.json()["bots"][0]["username"] == "llm_gptnano"
+
+    assert bot_matrix_report.status_code == 200
+    assert bot_matrix_report.json()["unique_game_count"] == 27348
 
     assert guests_report.status_code == 200
     assert guests_report.json()["guests"][0]["username"] == "guest_mikhail_tal"
