@@ -1084,6 +1084,31 @@ async def test_resign_rejects_non_participant() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_game_state_auto_completes_llm_bot_at_ply_limit() -> None:
+    games = FakeGamesCollection()
+    game = active_game_doc(black_role="bot", turn="black")
+    game["_id"] = ObjectId()
+    game["game_code"] = "L4M7T2"
+    game["move_number"] = 129
+    game["moves"] = [{"ply": index + 1, "move_done": True} for index in range(128)]
+    game["llm_bot_tier"] = "tier1"
+    game["llm_bot_ply_limit"] = 128
+    game["llm_bot_user_id"] = "u2"
+    games.docs.append(game)
+    service = GameService(games)
+
+    state = await service.get_game_state(game_id=str(game["_id"]), user_id="u1")
+
+    assert state.state == "completed"
+    assert state.result == {"winner": "white", "reason": "resignation"}
+    assert state.ply_count == 128
+    assert state.llm_bot_tier == "tier1"
+    assert state.llm_bot_ply_limit == 128
+    assert games.docs[0]["state"] == "completed"
+    assert games.docs[0]["result"] == {"winner": "white", "reason": "resignation"}
+
+
+@pytest.mark.asyncio
 async def test_delete_waiting_game_requires_creator_waiting_and_handles_race() -> None:
     games = FakeGamesCollection()
     gid = ObjectId()
@@ -1659,9 +1684,7 @@ def test_result_scoresheet_and_bot_variant_helpers_cover_uncommon_branches() -> 
     ]
     assert GameService._bot_supported_rule_variants(
         {"username": "custombot", "bot_profile": {"supported_rule_variants": ["wild16"]}}
-    ) == [
-        "wild16"
-    ]
+    ) == ["wild16"]
 
 
 @pytest.mark.asyncio
@@ -2066,6 +2089,7 @@ async def test_flush_loop_and_assert_active_fallbacks_cover_nonstandard_collecti
     async def call_recorder(name: str):
         async def _inner() -> None:
             loop_calls.append(name)
+
         return _inner
 
     monkeypatch.setattr(service, "_flush_due_entries", await call_recorder("flush_due"))
@@ -2482,7 +2506,9 @@ async def test_runtime_branches_cover_bot_completion_timeout_and_stale_list_path
     )
     timeout_checks = iter([None, None])
     monkeypatch.setattr(bot_ask_service._clock, "check_timeout", lambda **kwargs: next(timeout_checks))
-    monkeypatch.setattr(bot_ask_service, "_schedule_flush", lambda entry, reason: completion_reasons.append(reason))  # noqa: ARG005
+    monkeypatch.setattr(
+        bot_ask_service, "_schedule_flush", lambda entry, reason: completion_reasons.append(reason)
+    )  # noqa: ARG005
     ask_response = await bot_ask_service.execute_ask_any(game_id=str(bot_ask_game["_id"]), user_id="u1")
     assert ask_response["game_over"] is True
     assert completion_reasons == ["completion"]
@@ -2690,21 +2716,24 @@ async def test_collection_fallback_and_small_game_helpers_cover_remaining_branch
     assert await service._estimated_document_count(CursorOnlyCollection()) == 2
 
     assert GameService._metadata_created_at({"created_at": "bad"}) == datetime.min.replace(tzinfo=UTC)
+    assert GameService._scoresheet_entry_to_history_move(entry={"question": {}, "answer": {}}, color="white") is None
     assert (
-        GameService._scoresheet_entry_to_history_move(entry={"question": {}, "answer": {}}, color="white")
+        GameService._merge_public_history_metadata(
+            detailed_moves=[{"move_done": True, "uci": "e2e4", "announcement": "REGULAR_MOVE", "question_type": "COMMON"}],
+            public_moves=[{"move_done": True, "uci": "d2d4", "announcement": "REGULAR_MOVE", "question_type": "COMMON"}],
+        )[0].get("timestamp")
         is None
     )
-    assert GameService._merge_public_history_metadata(
-        detailed_moves=[{"move_done": True, "uci": "e2e4", "announcement": "REGULAR_MOVE", "question_type": "COMMON"}],
-        public_moves=[{"move_done": True, "uci": "d2d4", "announcement": "REGULAR_MOVE", "question_type": "COMMON"}],
-    )[0].get("timestamp") is None
-    assert GameService._review_history_moves(
-        {
-            "state": "completed",
-            "rule_variant": "wild16",
-            "moves": [{"question_type": "COMMON", "move_done": True, "uci": "not-uci"}],
-        }
-    )[0]["uci"] == "not-uci"
+    assert (
+        GameService._review_history_moves(
+            {
+                "state": "completed",
+                "rule_variant": "wild16",
+                "moves": [{"question_type": "COMMON", "move_done": True, "uci": "not-uci"}],
+            }
+        )[0]["uci"]
+        == "not-uci"
+    )
     assert GameService._clock_active_color_for_game({"state": "active", "move_number": "bad", "turn": "white"}) is None
     assert GameService._is_pre_start_active_game_expired(game={"state": "waiting"}, now=now) is False
     assert (
@@ -2948,12 +2977,18 @@ async def test_additional_game_service_branch_edges(monkeypatch: pytest.MonkeyPa
     )
     assert archive_docs.docs[1]["state"] == "new"
 
-    assert await GameService(FakeGamesCollection(), archives_collection=SimpleNamespace(docs=()))._find_archived_game_by_id(
-        ObjectId()
-    ) is None
-    assert await GameService(FakeGamesCollection(), archives_collection=SimpleNamespace(docs=()))._find_archived_game_by_code(
-        "ABC123"
-    ) is None
+    assert (
+        await GameService(FakeGamesCollection(), archives_collection=SimpleNamespace(docs=()))._find_archived_game_by_id(
+            ObjectId()
+        )
+        is None
+    )
+    assert (
+        await GameService(FakeGamesCollection(), archives_collection=SimpleNamespace(docs=()))._find_archived_game_by_code(
+            "ABC123"
+        )
+        is None
+    )
     assert await GameService(SimpleNamespace(docs=()))._find_live_game_by_id(ObjectId()) is None
 
     delete_docs = DocsOnly(({"_id": ObjectId()},))
@@ -2995,8 +3030,7 @@ async def test_additional_game_service_branch_edges(monkeypatch: pytest.MonkeyPa
     )
     assert await fresh_claim_service._claim_completed_game_stats_recording(game_id=fresh_claim_id, now=now) is not None
     assert (
-        await GameService(SimpleNamespace(docs=()))._claim_completed_game_stats_recording(game_id=ObjectId(), now=now)
-        is None
+        await GameService(SimpleNamespace(docs=()))._claim_completed_game_stats_recording(game_id=ObjectId(), now=now) is None
     )
     assert await GameService(DocsOnly([]))._claim_completed_game_stats_recording(game_id=ObjectId(), now=now) is None
 
@@ -3035,14 +3069,20 @@ async def test_additional_game_service_branch_edges(monkeypatch: pytest.MonkeyPa
     await GameService(SimpleNamespace(docs=()))._delete_waiting_game_document(game_id=ObjectId())
     await GameService(DocsOnly([]))._delete_waiting_game_document(game_id=ObjectId())
     await GameService(DocsOnly([{"_id": ObjectId(), "state": "active"}]))._delete_waiting_game_document(game_id=ObjectId())
-    assert await GameService(SimpleNamespace(docs=()))._delete_pre_start_active_game_document(
-        game_id=ObjectId(),
-        cutoff=now,
-    ) is False
-    assert await GameService(DocsOnly([]))._delete_pre_start_active_game_document(
-        game_id=ObjectId(),
-        cutoff=now,
-    ) is False
+    assert (
+        await GameService(SimpleNamespace(docs=()))._delete_pre_start_active_game_document(
+            game_id=ObjectId(),
+            cutoff=now,
+        )
+        is False
+    )
+    assert (
+        await GameService(DocsOnly([]))._delete_pre_start_active_game_document(
+            game_id=ObjectId(),
+            cutoff=now,
+        )
+        is False
+    )
     pre_start_query_id = ObjectId()
     assert not GameService._matches_pre_start_delete_query(
         doc={"_id": pre_start_query_id, "state": "active", "move_number": 2},
@@ -3092,9 +3132,7 @@ async def test_additional_game_service_branch_edges(monkeypatch: pytest.MonkeyPa
         await join_service.join_game(user_id="u2", username="joiner", game_code="BADID1")
 
     missing_creator_games = FakeGamesCollection()
-    missing_creator_games.docs.append(
-        {"_id": ObjectId(), "game_code": "MISSCR", "state": "waiting", "creator_color": "white"}
-    )
+    missing_creator_games.docs.append({"_id": ObjectId(), "game_code": "MISSCR", "state": "waiting", "creator_color": "white"})
     with pytest.raises(GameConflictError):
         await GameService(missing_creator_games).join_game(user_id="u2", username="joiner", game_code="MISSCR")
 

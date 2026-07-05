@@ -43,6 +43,13 @@ from app.services.engine_adapter import (
     public_reserve_summary,
     serialize_game_state,
 )
+from app.llm_bot_policy import (
+    LlmBotTier,
+    is_llm_bot_document,
+    llm_bot_ply_limit_for_tier,
+    normalize_llm_bot_tier,
+    tier_allows_llm_bots,
+)
 from app.services.mongo_document_compare import mongo_documents_equal
 from app.services.state_projection import (
     allowed_moves_for_player,
@@ -78,6 +85,9 @@ GAME_METADATA_PROJECTION = {
     "black": 1,
     "turn": 1,
     "move_number": 1,
+    "llm_bot_tier": 1,
+    "llm_bot_ply_limit": 1,
+    "llm_bot_user_id": 1,
     "created_at": 1,
     "updated_at": 1,
     "result": 1,
@@ -203,7 +213,10 @@ class GameService:
 
     async def _maybe_expire_waiting_games(self) -> None:
         now = self.utcnow()
-        if self._last_waiting_game_sweep_at is not None and now - self._last_waiting_game_sweep_at < WAITING_GAME_SWEEP_INTERVAL:
+        if (
+            self._last_waiting_game_sweep_at is not None
+            and now - self._last_waiting_game_sweep_at < WAITING_GAME_SWEEP_INTERVAL
+        ):
             return
         self._last_waiting_game_sweep_at = now
         await self._expire_waiting_games(now=now)
@@ -291,9 +304,7 @@ class GameService:
         else:
             docs = getattr(self._games, "docs", None)
             if isinstance(docs, list):
-                expired_uncached_games = [
-                    doc for doc in docs if self._is_pre_start_active_game_expired(game=doc, now=now)
-                ]
+                expired_uncached_games = [doc for doc in docs if self._is_pre_start_active_game_expired(game=doc, now=now)]
 
         for game in expired_uncached_games:
             game_id = game.get("_id")
@@ -1057,40 +1068,76 @@ class GameService:
 
             white_stats["games_played"] = int(white_stats.get("games_played", 0)) + 1
             black_stats["games_played"] = int(black_stats.get("games_played", 0)) + 1
-            white_stats["results"]["overall"]["games_played"] = int(white_stats["results"]["overall"].get("games_played", 0)) + 1
-            black_stats["results"]["overall"]["games_played"] = int(black_stats["results"]["overall"].get("games_played", 0)) + 1
-            white_stats["results"][white_track]["games_played"] = int(white_stats["results"][white_track].get("games_played", 0)) + 1
-            black_stats["results"][black_track]["games_played"] = int(black_stats["results"][black_track].get("games_played", 0)) + 1
+            white_stats["results"]["overall"]["games_played"] = (
+                int(white_stats["results"]["overall"].get("games_played", 0)) + 1
+            )
+            black_stats["results"]["overall"]["games_played"] = (
+                int(black_stats["results"]["overall"].get("games_played", 0)) + 1
+            )
+            white_stats["results"][white_track]["games_played"] = (
+                int(white_stats["results"][white_track].get("games_played", 0)) + 1
+            )
+            black_stats["results"][black_track]["games_played"] = (
+                int(black_stats["results"][black_track].get("games_played", 0)) + 1
+            )
             if winner == "white":
                 white_stats["games_won"] = int(white_stats.get("games_won", 0)) + 1
                 black_stats["games_lost"] = int(black_stats.get("games_lost", 0)) + 1
                 white_stats["results"]["overall"]["games_won"] = int(white_stats["results"]["overall"].get("games_won", 0)) + 1
-                black_stats["results"]["overall"]["games_lost"] = int(black_stats["results"]["overall"].get("games_lost", 0)) + 1
-                white_stats["results"][white_track]["games_won"] = int(white_stats["results"][white_track].get("games_won", 0)) + 1
-                black_stats["results"][black_track]["games_lost"] = int(black_stats["results"][black_track].get("games_lost", 0)) + 1
+                black_stats["results"]["overall"]["games_lost"] = (
+                    int(black_stats["results"]["overall"].get("games_lost", 0)) + 1
+                )
+                white_stats["results"][white_track]["games_won"] = (
+                    int(white_stats["results"][white_track].get("games_won", 0)) + 1
+                )
+                black_stats["results"][black_track]["games_lost"] = (
+                    int(black_stats["results"][black_track].get("games_lost", 0)) + 1
+                )
             elif winner == "black":
                 black_stats["games_won"] = int(black_stats.get("games_won", 0)) + 1
                 white_stats["games_lost"] = int(white_stats.get("games_lost", 0)) + 1
                 black_stats["results"]["overall"]["games_won"] = int(black_stats["results"]["overall"].get("games_won", 0)) + 1
-                white_stats["results"]["overall"]["games_lost"] = int(white_stats["results"]["overall"].get("games_lost", 0)) + 1
-                black_stats["results"][black_track]["games_won"] = int(black_stats["results"][black_track].get("games_won", 0)) + 1
-                white_stats["results"][white_track]["games_lost"] = int(white_stats["results"][white_track].get("games_lost", 0)) + 1
+                white_stats["results"]["overall"]["games_lost"] = (
+                    int(white_stats["results"]["overall"].get("games_lost", 0)) + 1
+                )
+                black_stats["results"][black_track]["games_won"] = (
+                    int(black_stats["results"][black_track].get("games_won", 0)) + 1
+                )
+                white_stats["results"][white_track]["games_lost"] = (
+                    int(white_stats["results"][white_track].get("games_lost", 0)) + 1
+                )
             else:
                 white_stats["games_drawn"] = int(white_stats.get("games_drawn", 0)) + 1
                 black_stats["games_drawn"] = int(black_stats.get("games_drawn", 0)) + 1
-                white_stats["results"]["overall"]["games_drawn"] = int(white_stats["results"]["overall"].get("games_drawn", 0)) + 1
-                black_stats["results"]["overall"]["games_drawn"] = int(black_stats["results"]["overall"].get("games_drawn", 0)) + 1
-                white_stats["results"][white_track]["games_drawn"] = int(white_stats["results"][white_track].get("games_drawn", 0)) + 1
-                black_stats["results"][black_track]["games_drawn"] = int(black_stats["results"][black_track].get("games_drawn", 0)) + 1
+                white_stats["results"]["overall"]["games_drawn"] = (
+                    int(white_stats["results"]["overall"].get("games_drawn", 0)) + 1
+                )
+                black_stats["results"]["overall"]["games_drawn"] = (
+                    int(black_stats["results"]["overall"].get("games_drawn", 0)) + 1
+                )
+                white_stats["results"][white_track]["games_drawn"] = (
+                    int(white_stats["results"][white_track].get("games_drawn", 0)) + 1
+                )
+                black_stats["results"][black_track]["games_drawn"] = (
+                    int(black_stats["results"][black_track].get("games_drawn", 0)) + 1
+                )
 
             white_stats["ratings"]["overall"]["elo"] = overall_snapshot["white_after"]
             black_stats["ratings"]["overall"]["elo"] = overall_snapshot["black_after"]
-            white_stats["ratings"]["overall"]["peak"] = max(int(white_stats["ratings"]["overall"].get("peak", white_overall)), overall_snapshot["white_after"])
-            black_stats["ratings"]["overall"]["peak"] = max(int(black_stats["ratings"]["overall"].get("peak", black_overall)), overall_snapshot["black_after"])
+            white_stats["ratings"]["overall"]["peak"] = max(
+                int(white_stats["ratings"]["overall"].get("peak", white_overall)), overall_snapshot["white_after"]
+            )
+            black_stats["ratings"]["overall"]["peak"] = max(
+                int(black_stats["ratings"]["overall"].get("peak", black_overall)), overall_snapshot["black_after"]
+            )
             white_stats["ratings"][white_track]["elo"] = specific_snapshot["white_after"]
             black_stats["ratings"][black_track]["elo"] = specific_snapshot["black_after"]
-            white_stats["ratings"][white_track]["peak"] = max(int(white_stats["ratings"][white_track].get("peak", white_matchup)), specific_snapshot["white_after"])
-            black_stats["ratings"][black_track]["peak"] = max(int(black_stats["ratings"][black_track].get("peak", black_matchup)), specific_snapshot["black_after"])
+            white_stats["ratings"][white_track]["peak"] = max(
+                int(white_stats["ratings"][white_track].get("peak", white_matchup)), specific_snapshot["white_after"]
+            )
+            black_stats["ratings"][black_track]["peak"] = max(
+                int(black_stats["ratings"][black_track].get("peak", black_matchup)), specific_snapshot["black_after"]
+            )
             white_stats["elo"] = white_stats["ratings"]["overall"]["elo"]
             black_stats["elo"] = black_stats["ratings"]["overall"]["elo"]
             white_stats["elo_peak"] = white_stats["ratings"]["overall"]["peak"]
@@ -1471,7 +1518,9 @@ class GameService:
         return None
 
     @classmethod
-    def _normalized_result(cls, *, result: dict[str, Any] | None, moves: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    def _normalized_result(
+        cls, *, result: dict[str, Any] | None, moves: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any] | None:
         if isinstance(result, dict) and result.get("reason"):
             return result
 
@@ -1514,7 +1563,9 @@ class GameService:
         ):
             return
 
-        pawn_capture_factory = getattr(engine, "_generate_possible_pawn_captures", None) or getattr(engine, "_generate_posible_pawn_captures", None)
+        pawn_capture_factory = getattr(engine, "_generate_possible_pawn_captures", None) or getattr(
+            engine, "_generate_posible_pawn_captures", None
+        )
         if pawn_capture_factory is None:
             return
 
@@ -1614,6 +1665,74 @@ class GameService:
         profile = bot.get("bot_profile") or {}
         return supported_rule_variants_for_bot(str(bot.get("username") or ""), profile.get("supported_rule_variants"))
 
+    async def _bot_doc_for_player(self, player: dict[str, Any]) -> dict[str, Any]:
+        user_id = str(player.get("user_id") or "")
+        loaded = await self._find_user_doc(user_id)
+        if loaded is not None:
+            return loaded
+        return {"_id": user_id, "username": player.get("username"), "role": "bot", "bot_profile": {}}
+
+    @staticmethod
+    def _llm_bot_limit_payload(
+        *,
+        bot: dict[str, Any],
+        viewer_role: str,
+        viewer_llm_bot_tier: str | None,
+    ) -> dict[str, Any]:
+        if not is_llm_bot_document(bot):
+            return {}
+
+        tier = normalize_llm_bot_tier(viewer_llm_bot_tier, role=viewer_role)
+        if not tier_allows_llm_bots(tier):
+            raise GameForbiddenError(code="LLM_BOT_TIER_REQUIRED", message="Your current tier does not include LLM bots")
+
+        return {
+            "llm_bot_tier": tier,
+            "llm_bot_ply_limit": llm_bot_ply_limit_for_tier(tier),
+            "llm_bot_user_id": str(bot.get("_id") or ""),
+        }
+
+    @staticmethod
+    def _stored_llm_bot_ply_limit(game: dict[str, Any]) -> int | None:
+        raw = game.get("llm_bot_ply_limit")
+        if raw is None:
+            return None
+        try:
+            limit = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return limit if limit > 0 else None
+
+    def _apply_llm_bot_ply_limit_locked(self, *, game: dict[str, Any], now: datetime) -> bool:
+        if game.get("state") != "active":
+            return False
+
+        limit = self._stored_llm_bot_ply_limit(game)
+        if limit is None or self._ply_count(game) < limit:
+            return False
+
+        turn = game.get("turn")
+        if turn not in ("white", "black"):
+            return False
+
+        player = game.get(turn) if isinstance(game.get(turn), dict) else None
+        if not player or player.get("role") != "bot":
+            return False
+
+        llm_bot_user_id = str(game.get("llm_bot_user_id") or "")
+        if llm_bot_user_id and str(player.get("user_id") or "") != llm_bot_user_id:
+            return False
+
+        winner: PlayerColor = "black" if turn == "white" else "white"
+        time_control = self._active_time_control(game=game, now=now)
+        time_control["active_color"] = None
+        game["state"] = "completed"
+        game["turn"] = None
+        game["result"] = {"winner": winner, "reason": "resignation"}
+        game["time_control"] = time_control
+        game["updated_at"] = now
+        return True
+
     @staticmethod
     def _player_embed(*, user_id: str, username: str, role: str = "user") -> dict[str, Any]:
         return {"user_id": user_id, "username": username, "connected": True, "role": role}
@@ -1700,7 +1819,9 @@ class GameService:
         updated_at = cls._normalize_utc_datetime(doc.get("updated_at"))
         cutoff = cls._normalize_utc_datetime(query["updated_at"]["$lte"])
         time_control = doc.get("time_control") if isinstance(doc.get("time_control"), dict) else {}
-        return updated_at is not None and cutoff is not None and updated_at <= cutoff and time_control.get("active_color") is None
+        return (
+            updated_at is not None and cutoff is not None and updated_at <= cutoff and time_control.get("active_color") is None
+        )
 
     async def _find_waiting_game_for_creator(self, *, user_id: str) -> dict[str, Any] | None:
         waiting = await self._games.find_one({"state": "waiting", "white.user_id": user_id})
@@ -1767,6 +1888,7 @@ class GameService:
         username: str,
         request: CreateGameRequest,
         role: str = "user",
+        llm_bot_tier: LlmBotTier | None = None,
         attribution: dict[str, Any] | None = None,
     ) -> CreateGameResponse:
         color = self._creator_color(request.play_as, self._rng)
@@ -1775,10 +1897,14 @@ class GameService:
 
         if role == "bot":
             if request.opponent_type != "human":
-                raise GameValidationError(code="BOT_CREATE_REQUIRES_HUMAN_OPPONENT", message="Bots can only create open lobby games")
+                raise GameValidationError(
+                    code="BOT_CREATE_REQUIRES_HUMAN_OPPONENT", message="Bots can only create open lobby games"
+                )
             waiting = await self._find_waiting_game_for_creator(user_id=user_id)
             if waiting is not None:
-                raise GameConflictError(code="BOT_ALREADY_HAS_OPEN_GAME", message="A bot can only have one open lobby game at a time")
+                raise GameConflictError(
+                    code="BOT_ALREADY_HAS_OPEN_GAME", message="A bot can only have one open lobby game at a time"
+                )
 
         creator = self._player_embed(user_id=user_id, username=username, role=role)
         white_player = creator if color == "white" else None
@@ -1808,7 +1934,10 @@ class GameService:
         if request.opponent_type == "bot":
             bot = await self._load_bot(request.bot_id or "")
             if request.rule_variant not in self._bot_supported_rule_variants(bot):
-                raise GameValidationError(code="BOT_RULE_VARIANT_UNSUPPORTED", message="Selected bot does not support that ruleset")
+                raise GameValidationError(
+                    code="BOT_RULE_VARIANT_UNSUPPORTED", message="Selected bot does not support that ruleset"
+                )
+            document.update(self._llm_bot_limit_payload(bot=bot, viewer_role=role, viewer_llm_bot_tier=llm_bot_tier))
             bot_player = self._player_embed(user_id=str(bot["_id"]), username=bot["username"], role="bot")
             if color == "white":
                 document["white"] = creator
@@ -1856,7 +1985,15 @@ class GameService:
             bot=bot_payload,
         )
 
-    async def join_game(self, *, user_id: str, username: str, game_code: str, role: str = "user") -> JoinGameResponse:
+    async def join_game(
+        self,
+        *,
+        user_id: str,
+        username: str,
+        game_code: str,
+        role: str = "user",
+        llm_bot_tier: LlmBotTier | None = None,
+    ) -> JoinGameResponse:
         normalized = game_code.strip().upper()
         game = await self._games.find_one({"game_code": normalized})
         if game is None:
@@ -1885,6 +2022,14 @@ class GameService:
         if role == "bot":
             await self._enforce_bot_join_rules(user_id=user_id, game=game, now=now)
 
+        llm_bot_payload: dict[str, Any] = {}
+        if role != "bot" and creator.get("role") == "bot":
+            llm_bot_payload = self._llm_bot_limit_payload(
+                bot=await self._bot_doc_for_player(creator),
+                viewer_role=role,
+                viewer_llm_bot_tier=llm_bot_tier,
+            )
+
         creator_color: PlayerColor = game.get("creator_color", "white")
         joiner_color: PlayerColor = "black" if creator_color == "white" else "white"
 
@@ -1910,6 +2055,7 @@ class GameService:
                     "time_control": self._clock.default_time_control(now=now),
                     "updated_at": now,
                     "expires_at": None,
+                    **llm_bot_payload,
                 },
             },
             return_document=ReturnDocument.AFTER,
@@ -2038,22 +2184,34 @@ class GameService:
         game, entry, archived = await self._get_game_for_state(game_id=game_id)
         now = self.utcnow()
         timed_out = False
+        completed_by_llm_bot_limit = False
         if entry is not None:
             async with entry.lock:
                 time_control = self._active_time_control(game=game, now=now)
-                timeout = self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
+                timeout = (
+                    self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
+                )
                 if timeout is not None:
                     self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
                     self._mark_entry_dirty_locked(entry, now=now)
                     self._schedule_flush(entry, reason="timeout")
                     timed_out = True
+                elif self._apply_llm_bot_ply_limit_locked(game=game, now=now):
+                    self._mark_entry_dirty_locked(entry, now=now)
+                    completed_by_llm_bot_limit = True
         elif not archived:
             game = await self._adjudicate_timeout_if_needed(game=game, now=now)
             if game.get("state") == "completed":
                 game = await self._finalize_completed_game(game)
                 timed_out = True
 
-        if timed_out:
+        if completed_by_llm_bot_limit and entry is not None:
+            if self._is_human_involved_game(game):
+                game = await self._persist_terminal_entry(entry, expected_previous_state="active")
+            else:
+                self._schedule_flush(entry, reason="llm-bot-ply-limit")
+
+        if timed_out or completed_by_llm_bot_limit:
             await self._publish_game_event(game, event_type="game_changed")
 
         color = self._player_color_for_user(game, user_id)
@@ -2069,6 +2227,9 @@ class GameService:
             state=game["state"],
             turn=game.get("turn"),
             move_number=game.get("move_number", 1),
+            ply_count=self._ply_count(game),
+            llm_bot_tier=game.get("llm_bot_tier"),
+            llm_bot_ply_limit=game.get("llm_bot_ply_limit"),
             your_color=color,
             your_fen=project_player_fen(engine=engine, viewer_color=color, game_state=game["state"]),
             allowed_moves=allowed_moves_for_player(

@@ -16,7 +16,7 @@ from app.models.bot import (
 from app.models.user import UserModel
 from app.services.bot_service import BotService
 
-router = APIRouter(prefix='/bots', tags=['bots'])
+router = APIRouter(prefix="/bots", tags=["bots"])
 
 
 def get_bot_service() -> BotService:
@@ -24,9 +24,12 @@ def get_bot_service() -> BotService:
     return BotService(db.users)
 
 
-@router.get('', response_model=BotListResponse)
-async def list_bots(_: UserModel = Depends(get_current_user), bot_service: BotService = Depends(get_bot_service)) -> Any:
-    return await bot_service.list_bots()
+@router.get("", response_model=BotListResponse)
+async def list_bots(user: UserModel = Depends(get_current_user), bot_service: BotService = Depends(get_bot_service)) -> Any:
+    return await bot_service.list_bots(
+        viewer_role=getattr(user, "role", "user"),
+        viewer_llm_bot_tier=getattr(user, "llm_bot_tier", None),
+    )
 
 
 @router.post("/availability", response_model=BotAvailabilityReportResponse)
