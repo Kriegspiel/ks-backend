@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.56
+
+- **LLM Bot Identity Rename**: updated backend LLM bot policy, provider
+  availability checks, and API fixtures to use the `llm_*` production bot
+  usernames.
+
 ## ks-backend v. 1.3.55
 
 - **LLM Bot Entitlements**: added tier-aware LLM bot access, per-game ply

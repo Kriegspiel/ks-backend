@@ -128,12 +128,12 @@ async def test_create_llm_bot_game_stores_viewer_tier_limit() -> None:
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "gptnano",
-            "username_display": "GPT Nano",
+            "username": "llm_gptnano",
+            "username_display": "LLM GPT-Nano (bot)",
             "role": "bot",
             "status": "active",
             "bot_profile": {
-                "display_name": "GPT Nano",
+                "display_name": "LLM GPT-Nano (bot)",
                 "owner_email": "owner@example.com",
                 "description": "Model bot",
                 "supported_rule_variants": ["berkeley", "berkeley_any"],
@@ -166,12 +166,12 @@ async def test_guest_cannot_create_llm_bot_game() -> None:
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "gptnano",
-            "username_display": "GPT Nano",
+            "username": "llm_gptnano",
+            "username_display": "LLM GPT-Nano (bot)",
             "role": "bot",
             "status": "active",
             "bot_profile": {
-                "display_name": "GPT Nano",
+                "display_name": "LLM GPT-Nano (bot)",
                 "owner_email": "owner@example.com",
                 "description": "Model bot",
                 "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
@@ -200,12 +200,12 @@ async def test_guest_bot_list_filters_llm_bots_and_user_list_shows_limit() -> No
         [
             {
                 "_id": ObjectId(),
-                "username": "gptnano",
-                "username_display": "GPT Nano",
+                "username": "llm_gptnano",
+                "username_display": "LLM GPT-Nano (bot)",
                 "role": "bot",
                 "status": "active",
                 "bot_profile": {
-                    "display_name": "GPT Nano",
+                    "display_name": "LLM GPT-Nano (bot)",
                     "description": "Model bot",
                     "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
                 },
@@ -226,11 +226,11 @@ async def test_guest_bot_list_filters_llm_bots_and_user_list_shows_limit() -> No
     user_listing = await service.list_bots(viewer_role="user", viewer_llm_bot_tier="tier2")
 
     assert [bot.username for bot in guest_listing.bots] == ["randobot"]
-    gptnano = next(bot for bot in user_listing.bots if bot.username == "gptnano")
-    assert gptnano.llm_backed is True
-    assert gptnano.llm_bot_tier == "tier2"
-    assert gptnano.llm_bot_ply_limit == 256
-    assert gptnano.llm_bot_limit_label == "256 ply limit"
+    llm_gptnano = next(bot for bot in user_listing.bots if bot.username == "llm_gptnano")
+    assert llm_gptnano.llm_backed is True
+    assert llm_gptnano.llm_bot_tier == "tier2"
+    assert llm_gptnano.llm_bot_ply_limit == 256
+    assert llm_gptnano.llm_bot_limit_label == "256 ply limit"
 
 
 def test_bot_service_datetime_and_query_helpers_cover_invalid_inputs() -> None:
@@ -247,11 +247,11 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
     now = datetime(2026, 6, 1, tzinfo=UTC)
 
     assert BotService.bot_can_start_games({"username": "randobot"}, now=now) is True
-    assert BotService.bot_can_start_games({"username": "gptnano"}, now=now) is False
+    assert BotService.bot_can_start_games({"username": "llm_gptnano"}, now=now) is False
     assert (
         BotService.bot_can_start_games(
             {
-                "username": "gptnano",
+                "username": "llm_gptnano",
                 "bot_profile": {"model_availability": {"provider": "anthropic", "ready": True, "checked_at": now}},
             },
             now=now,
@@ -261,7 +261,7 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
     assert (
         BotService.bot_can_start_games(
             {
-                "username": "gptnano",
+                "username": "llm_gptnano",
                 "bot_profile": {"model_availability": {"provider": "openai", "ready": False, "checked_at": now}},
             },
             now=now,
@@ -270,7 +270,7 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
     )
     assert (
         BotService.bot_can_start_games(
-            {"username": "gptnano", "bot_profile": {"model_availability": {"provider": "openai", "ready": True}}},
+            {"username": "llm_gptnano", "bot_profile": {"model_availability": {"provider": "openai", "ready": True}}},
             now=now,
         )
         is False
@@ -278,7 +278,7 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
     assert (
         BotService.bot_can_start_games(
             {
-                "username": "gptnano",
+                "username": "llm_gptnano",
                 "bot_profile": {
                     "model_availability": {
                         "provider": "openai",
@@ -482,12 +482,12 @@ async def test_join_llm_bot_created_lobby_applies_joiner_tier_and_blocks_guests(
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "gptnano",
-            "username_display": "GPT Nano",
+            "username": "llm_gptnano",
+            "username_display": "LLM GPT-Nano (bot)",
             "role": "bot",
             "status": "active",
             "bot_profile": {
-                "display_name": "GPT Nano",
+                "display_name": "LLM GPT-Nano (bot)",
                 "description": "Model bot",
                 "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
             },
@@ -501,7 +501,7 @@ async def test_join_llm_bot_created_lobby_applies_joiner_tier_and_blocks_guests(
             "creator_color": "white",
             "opponent_type": "human",
             "selected_bot_id": None,
-            "white": {"user_id": str(bot_id), "username": "gptnano", "connected": True, "role": "bot"},
+            "white": {"user_id": str(bot_id), "username": "llm_gptnano", "connected": True, "role": "bot"},
             "black": None,
             "state": "waiting",
             "turn": None,
@@ -818,12 +818,12 @@ async def test_bot_service_hides_model_bots_without_fresh_ready_status() -> None
         [
             {
                 "_id": ObjectId(),
-                "username": "gptnano",
-                "username_display": "GPT Nano",
+                "username": "llm_gptnano",
+                "username_display": "LLM GPT-Nano (bot)",
                 "role": "bot",
                 "status": "active",
                 "bot_profile": {
-                    "display_name": "GPT Nano",
+                    "display_name": "LLM GPT-Nano (bot)",
                     "description": "OpenAI bot",
                     "listed": True,
                     "model_availability": {
@@ -836,12 +836,12 @@ async def test_bot_service_hides_model_bots_without_fresh_ready_status() -> None
             },
             {
                 "_id": ObjectId(),
-                "username": "haiku",
-                "username_display": "Haiku",
+                "username": "llm_haiku",
+                "username_display": "LLM Haiku (bot)",
                 "role": "bot",
                 "status": "active",
                 "bot_profile": {
-                    "display_name": "Haiku",
+                    "display_name": "LLM Haiku (bot)",
                     "description": "Anthropic bot",
                     "listed": True,
                     "model_availability": {
@@ -866,7 +866,7 @@ async def test_bot_service_hides_model_bots_without_fresh_ready_status() -> None
 
     listed = await service.list_bots()
 
-    assert [bot.username for bot in listed.bots] == ["gptnano", "randobot"]
+    assert [bot.username for bot in listed.bots] == ["llm_gptnano", "randobot"]
 
 
 @pytest.mark.asyncio
@@ -877,11 +877,11 @@ async def test_bot_service_records_model_availability_for_authenticated_bot() ->
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "gptnano",
-            "username_display": "GPT Nano",
+            "username": "llm_gptnano",
+            "username_display": "LLM GPT-Nano (bot)",
             "role": "bot",
             "status": "active",
-            "bot_profile": {"display_name": "GPT Nano", "description": "OpenAI bot", "listed": True},
+            "bot_profile": {"display_name": "LLM GPT-Nano (bot)", "description": "OpenAI bot", "listed": True},
         }
     )
     service = BotService(users, now_factory=lambda: now)
@@ -1150,12 +1150,12 @@ async def test_create_game_rejects_unavailable_model_bot() -> None:
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "haiku",
-            "username_display": "Haiku",
+            "username": "llm_haiku",
+            "username_display": "LLM Haiku (bot)",
             "role": "bot",
             "status": "active",
             "bot_profile": {
-                "display_name": "Haiku",
+                "display_name": "LLM Haiku (bot)",
                 "supported_rule_variants": ["berkeley_any"],
                 "model_availability": {
                     "provider": "anthropic",
@@ -1196,7 +1196,7 @@ def test_bot_service_supported_rule_variants_fallbacks_cover_randobotany() -> No
         "english",
         "crazykrieg",
     ]
-    assert BotService._supported_rule_variants({"username": "gptnano", "bot_profile": {}}) == [
+    assert BotService._supported_rule_variants({"username": "llm_gptnano", "bot_profile": {}}) == [
         "berkeley",
         "berkeley_any",
     ]
@@ -1265,11 +1265,11 @@ def test_bot_router_records_model_availability_for_authenticated_bot() -> None:
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "gptnano",
-            "username_display": "GPT Nano",
+            "username": "llm_gptnano",
+            "username_display": "LLM GPT-Nano (bot)",
             "role": "bot",
             "status": "active",
-            "bot_profile": {"display_name": "GPT Nano", "description": "OpenAI bot", "listed": True},
+            "bot_profile": {"display_name": "LLM GPT-Nano (bot)", "description": "OpenAI bot", "listed": True},
         }
     )
 

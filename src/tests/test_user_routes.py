@@ -69,7 +69,7 @@ class StubService:
                 "timezone": "America/New_York",
                 "bots": [
                     {
-                        "username": "gptnano",
+                        "username": "llm_gptnano",
                         "rows": [
                             {
                                 "date": "2026-04-08",
@@ -183,7 +183,7 @@ def test_tech_report_routes_require_operator_access() -> None:
         users_report = client.get("/api/tech/users-report")
 
     assert bots_report.status_code == 200
-    assert bots_report.json()["bots"][0]["username"] == "gptnano"
+    assert bots_report.json()["bots"][0]["username"] == "llm_gptnano"
 
     assert guests_report.status_code == 200
     assert guests_report.json()["guests"][0]["username"] == "guest_mikhail_tal"
