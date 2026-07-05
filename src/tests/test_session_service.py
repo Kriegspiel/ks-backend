@@ -280,7 +280,7 @@ async def test_update_session_for_guest_uses_long_server_lifetime_and_browser_sa
 
 @pytest.mark.asyncio
 async def test_get_active_session_supports_naive_datetime_from_mongo() -> None:
-    now_naive = datetime.utcnow()
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
     session = {"_id": "sid", "expires_at": now_naive + timedelta(minutes=5)}
     sessions = SimpleNamespace(find_one=AsyncMock(return_value=session), update_one=AsyncMock(), delete_one=AsyncMock())
     service = SessionService(sessions)
