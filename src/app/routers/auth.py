@@ -17,15 +17,16 @@ from app.models.auth import (
 from app.models.user import UserModel
 from app.routers.analytics import attribution_snapshot_from_request, maybe_get_analytics_service
 from app.services.analytics_service import AnalyticsService
+from app.llm_bot_policy import normalize_llm_bot_tier
 from app.services.session_service import SessionService
 from app.services.user_service import UserConflictError, UserService
 
-router = APIRouter(prefix='/auth', tags=['auth'])
-logger = structlog.get_logger('app.auth')
+router = APIRouter(prefix="/auth", tags=["auth"])
+logger = structlog.get_logger("app.auth")
 
 
 def _secure_cookie(request: Request) -> bool:
-    return request.app.state.settings.ENVIRONMENT == 'production'
+    return request.app.state.settings.ENVIRONMENT == "production"
 
 
 def _client_ip(request: Request) -> str | None:
@@ -34,18 +35,16 @@ def _client_ip(request: Request) -> str | None:
 
 def _set_session_cookie(request: Request, response: Response, session_id: str, user: UserModel | None = None) -> None:
     max_age_seconds = (
-        SessionService.cookie_max_age_seconds_for_user(user)
-        if user is not None
-        else SessionService.SESSION_MAX_AGE_SECONDS
+        SessionService.cookie_max_age_seconds_for_user(user) if user is not None else SessionService.SESSION_MAX_AGE_SECONDS
     )
     response.set_cookie(
         key=SessionService.COOKIE_NAME,
         value=session_id,
         httponly=True,
         secure=_secure_cookie(request),
-        samesite='lax',
+        samesite="lax",
         max_age=max_age_seconds,
-        path='/',
+        path="/",
     )
 
 
@@ -54,34 +53,35 @@ def _clear_session_cookie(request: Request, response: Response) -> None:
         key=SessionService.COOKIE_NAME,
         httponly=True,
         secure=_secure_cookie(request),
-        samesite='lax',
-        path='/',
+        samesite="lax",
+        path="/",
     )
 
 
 def _user_payload(user: UserModel, request: Request) -> dict[str, object]:
     settings = request.app.state.settings
     return {
-        'user_id': user.id,
-        'username': user.username,
-        'email': user.email,
-        'role': user.role,
-        'is_guest': user.role == 'guest',
-        'can_view_tech_reports': can_view_tech_reports(user, settings),
-        'bot_profile': user.bot_profile.model_dump() if user.bot_profile else None,
-        'stats': user.stats.model_dump(),
-        'settings': user.settings.model_dump(),
+        "user_id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "role": user.role,
+        "is_guest": user.role == "guest",
+        "llm_bot_tier": normalize_llm_bot_tier(user.llm_bot_tier, role=user.role),
+        "can_view_tech_reports": can_view_tech_reports(user, settings),
+        "bot_profile": user.bot_profile.model_dump() if user.bot_profile else None,
+        "stats": user.stats.model_dump(),
+        "settings": user.settings.model_dump(),
     }
 
 
 def _conflict_response(exc: UserConflictError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail={'field': exc.field, 'code': exc.code, 'message': str(exc)},
+        detail={"field": exc.field, "code": exc.code, "message": str(exc)},
     )
 
 
-@router.post('/register', response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     payload: RegisterRequest,
     request: Request,
@@ -99,14 +99,15 @@ async def register(
     session_id = await session_service.create_session(
         user=user,
         ip=_client_ip(request),
-        user_agent=request.headers.get('user-agent'),
+        user_agent=request.headers.get("user-agent"),
         attribution=attribution,
     )
     _set_session_cookie(request, response, session_id, user)
-    logger.info('auth_register_success', user_id=user.id, username=user.username, source_ip=_client_ip(request))
+    logger.info("auth_register_success", user_id=user.id, username=user.username, source_ip=_client_ip(request))
     return RegisterResponse(user_id=user.id, username=user.username)
 
-@router.post('/bots/register', response_model=BotRegisterResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post("/bots/register", response_model=BotRegisterResponse, status_code=status.HTTP_201_CREATED)
 async def register_bot(payload: BotRegisterRequest) -> BotRegisterResponse:
     db = require_db()
     user_service = UserService(db.users)
@@ -122,7 +123,8 @@ async def register_bot(payload: BotRegisterRequest) -> BotRegisterResponse:
         api_token=token,
     )
 
-@router.post('/login', response_model=LoginResponse)
+
+@router.post("/login", response_model=LoginResponse)
 async def login(
     payload: LoginRequest,
     request: Request,
@@ -134,19 +136,20 @@ async def login(
     user_service = UserService(db.users)
     user = await user_service.authenticate(payload.username, payload.password)
     if user is None:
-        logger.warning('auth_login_failed', username=payload.username.strip(), source_ip=_client_ip(request))
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid username or password')
+        logger.warning("auth_login_failed", username=payload.username.strip(), source_ip=_client_ip(request))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
     attribution = await attribution_snapshot_from_request(request, analytics_service)
     session_id = await session_service.create_session(
         user=user,
         ip=_client_ip(request),
-        user_agent=request.headers.get('user-agent'),
+        user_agent=request.headers.get("user-agent"),
         attribution=attribution,
     )
     _set_session_cookie(request, response, session_id, user)
     return LoginResponse(user_id=user.id, username=user.username)
 
-@router.post('/guest', response_model=GuestLoginResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post("/guest", response_model=GuestLoginResponse, status_code=status.HTTP_201_CREATED)
 async def login_as_guest(
     request: Request,
     response: Response,
@@ -161,19 +164,20 @@ async def login_as_guest(
     except UserConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={'field': exc.field, 'code': exc.code, 'message': str(exc)},
+            detail={"field": exc.field, "code": exc.code, "message": str(exc)},
         ) from exc
     session_id = await session_service.create_session(
         user=user,
         ip=_client_ip(request),
-        user_agent=request.headers.get('user-agent'),
+        user_agent=request.headers.get("user-agent"),
         attribution=attribution,
     )
     _set_session_cookie(request, response, session_id, user)
-    logger.info('auth_guest_success', user_id=user.id, username=user.username, source_ip=_client_ip(request))
+    logger.info("auth_guest_success", user_id=user.id, username=user.username, source_ip=_client_ip(request))
     return GuestLoginResponse(user_id=user.id, username=user.username)
 
-@router.post('/guest/convert', response_model=ConvertGuestResponse)
+
+@router.post("/guest/convert", response_model=ConvertGuestResponse)
 async def convert_guest(
     payload: ConvertGuestRequest,
     request: Request,
@@ -181,8 +185,8 @@ async def convert_guest(
     user: UserModel = Depends(get_current_user),
     session_service: SessionService = Depends(get_session_service),
 ) -> ConvertGuestResponse:
-    if user.role != 'guest':
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only guest accounts can be converted')
+    if user.role != "guest":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only guest accounts can be converted")
     db = require_db()
     user_service = UserService(db.users)
     try:
@@ -195,10 +199,11 @@ async def convert_guest(
     if session_id:
         await session_service.update_session_for_user(session_id, converted)
         _set_session_cookie(request, response, session_id, converted)
-    logger.info('auth_guest_convert_success', user_id=converted.id, username=converted.username, source_ip=_client_ip(request))
+    logger.info("auth_guest_convert_success", user_id=converted.id, username=converted.username, source_ip=_client_ip(request))
     return ConvertGuestResponse(user_id=converted.id, username=converted.username)
 
-@router.post('/logout')
+
+@router.post("/logout")
 async def logout(
     request: Request,
     response: Response,
@@ -208,9 +213,10 @@ async def logout(
     if session_id:
         await session_service.delete_session(session_id)
     _clear_session_cookie(request, response)
-    return {'message': 'Logged out'}
+    return {"message": "Logged out"}
 
-@router.get('/me')
+
+@router.get("/me")
 async def me(
     request: Request,
     response: Response,
@@ -223,7 +229,8 @@ async def me(
         _set_session_cookie(request, response, session_id, user)
     return _user_payload(user, request)
 
-@router.get('/session')
+
+@router.get("/session")
 async def session_status(
     request: Request,
     response: Response,
@@ -235,10 +242,11 @@ async def session_status(
         await session_service.update_session_for_user(session_id, user)
         _set_session_cookie(request, response, session_id, user)
     return {
-        'authenticated': True,
-        'user_id': user.id,
-        'username': user.username,
-        'role': user.role,
-        'is_guest': user.role == 'guest',
-        'can_view_tech_reports': can_view_tech_reports(user, request.app.state.settings),
+        "authenticated": True,
+        "user_id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "is_guest": user.role == "guest",
+        "llm_bot_tier": normalize_llm_bot_tier(user.llm_bot_tier, role=user.role),
+        "can_view_tech_reports": can_view_tech_reports(user, request.app.state.settings),
     }

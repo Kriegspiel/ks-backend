@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.llm_bot_policy import LlmBotTier
+
 SupportedRuleVariant = str
 ALL_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
 SUPPORTED_RULE_VARIANT_VALUES = frozenset(ALL_SUPPORTED_RULE_VARIANTS)
@@ -56,6 +58,7 @@ class BotProfile(BaseModel):
     display_name: str
     owner_email: str = "bots@kriegspiel.org"
     description: str = ""
+    llm_backed: bool = False
     listed: bool = True
     api_token_id: str | None = None
     api_token_hash: str | None = None
@@ -76,6 +79,10 @@ class BotListItem(BaseModel):
     elo: int = 1200
     ratings: dict[str, dict[str, int]] = Field(default_factory=dict)
     supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: DEFAULT_SUPPORTED_RULE_VARIANTS.copy())
+    llm_backed: bool = False
+    llm_bot_tier: LlmBotTier | None = None
+    llm_bot_ply_limit: int | None = None
+    llm_bot_limit_label: str | None = None
 
 
 class BotListResponse(BaseModel):

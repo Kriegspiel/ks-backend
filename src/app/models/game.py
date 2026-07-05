@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.llm_bot_policy import LlmBotTier
+
 GameState = Literal["waiting", "active", "completed"]
 RuleVariant = Literal["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
 PlayerColor = Literal["white", "black"]
@@ -36,6 +38,9 @@ class GameDocument(BaseModel):
     state: GameState = "waiting"
     turn: PlayerColor | None = None
     move_number: int = Field(default=1, ge=1)
+    llm_bot_tier: LlmBotTier | None = None
+    llm_bot_ply_limit: int | None = Field(default=None, ge=0)
+    llm_bot_user_id: str | None = None
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None = None
@@ -230,6 +235,9 @@ class GameStateResponse(BaseModel):
     state: GameState
     turn: PlayerColor | None = None
     move_number: int = Field(ge=1)
+    ply_count: int = Field(default=0, ge=0)
+    llm_bot_tier: LlmBotTier | None = None
+    llm_bot_ply_limit: int | None = Field(default=None, ge=0)
     your_color: PlayerColor
     your_fen: str
     allowed_moves: list[str] = Field(default_factory=list)

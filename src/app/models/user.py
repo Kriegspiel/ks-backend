@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.bot import BotProfile
+from app.llm_bot_policy import LlmBotTier
 
 
 class EloRatingTrack(BaseModel):
@@ -73,6 +74,7 @@ class UserModel(BaseModel):
     stats: UserStats = Field(default_factory=UserStats)
     settings: UserSettings = Field(default_factory=UserSettings)
     role: str = "user"
+    llm_bot_tier: LlmBotTier | None = None
     status: str = "active"
     last_active_at: datetime
     created_at: datetime

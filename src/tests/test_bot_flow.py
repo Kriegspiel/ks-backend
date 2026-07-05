@@ -119,6 +119,120 @@ async def test_create_game_with_bot_immediately_activates() -> None:
     assert games.docs[0]["state"] == "active"
 
 
+@pytest.mark.asyncio
+async def test_create_llm_bot_game_stores_viewer_tier_limit() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "gptnano",
+            "username_display": "GPT Nano",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "GPT Nano",
+                "owner_email": "owner@example.com",
+                "description": "Model bot",
+                "supported_rule_variants": ["berkeley", "berkeley_any"],
+                "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+            },
+        }
+    )
+    service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    response = await service.create_game(
+        user_id="u1",
+        username="creator",
+        request=CreateGameRequest(opponent_type="bot", bot_id=str(bot_id), play_as="white", time_control="rapid"),
+        llm_bot_tier="tier3",
+    )
+
+    assert response.state == "active"
+    assert games.docs[0]["llm_bot_tier"] == "tier3"
+    assert games.docs[0]["llm_bot_ply_limit"] == 1024
+    assert games.docs[0]["llm_bot_user_id"] == str(bot_id)
+
+
+@pytest.mark.asyncio
+async def test_guest_cannot_create_llm_bot_game() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "gptnano",
+            "username_display": "GPT Nano",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "GPT Nano",
+                "owner_email": "owner@example.com",
+                "description": "Model bot",
+                "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+            },
+        }
+    )
+    service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    with pytest.raises(GameForbiddenError) as exc:
+        await service.create_game(
+            user_id="guest1",
+            username="guest_player",
+            request=CreateGameRequest(opponent_type="bot", bot_id=str(bot_id), play_as="white", time_control="rapid"),
+            role="guest",
+        )
+
+    assert exc.value.code == "LLM_BOT_TIER_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_guest_bot_list_filters_llm_bots_and_user_list_shows_limit() -> None:
+    users = FakeUsersCollection()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    users.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "username": "gptnano",
+                "username_display": "GPT Nano",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {
+                    "display_name": "GPT Nano",
+                    "description": "Model bot",
+                    "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+                },
+            },
+            {
+                "_id": ObjectId(),
+                "username": "randobot",
+                "username_display": "Random Bot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Random Bot", "description": "Random bot"},
+            },
+        ]
+    )
+    service = BotService(users, now_factory=lambda: now)
+
+    guest_listing = await service.list_bots(viewer_role="guest")
+    user_listing = await service.list_bots(viewer_role="user", viewer_llm_bot_tier="tier2")
+
+    assert [bot.username for bot in guest_listing.bots] == ["randobot"]
+    gptnano = next(bot for bot in user_listing.bots if bot.username == "gptnano")
+    assert gptnano.llm_backed is True
+    assert gptnano.llm_bot_tier == "tier2"
+    assert gptnano.llm_bot_ply_limit == 256
+    assert gptnano.llm_bot_limit_label == "256 ply limit"
+
+
 def test_bot_service_datetime_and_query_helpers_cover_invalid_inputs() -> None:
     naive = datetime(2026, 6, 1, 12, 0, 0)
 
@@ -138,9 +252,7 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
         BotService.bot_can_start_games(
             {
                 "username": "gptnano",
-                "bot_profile": {
-                    "model_availability": {"provider": "anthropic", "ready": True, "checked_at": now}
-                },
+                "bot_profile": {"model_availability": {"provider": "anthropic", "ready": True, "checked_at": now}},
             },
             now=now,
         )
@@ -359,6 +471,64 @@ async def test_join_rejects_bot_reserved_game() -> None:
         await service.join_game(user_id="u2", username="joiner", game_code="A7K2M9")
 
     assert exc.value.code == "GAME_RESERVED_FOR_BOT"
+
+
+@pytest.mark.asyncio
+async def test_join_llm_bot_created_lobby_applies_joiner_tier_and_blocks_guests() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    now = datetime.now(UTC)
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "gptnano",
+            "username_display": "GPT Nano",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "GPT Nano",
+                "description": "Model bot",
+                "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+            },
+        }
+    )
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "G7K2M9",
+            "rule_variant": "berkeley_any",
+            "creator_color": "white",
+            "opponent_type": "human",
+            "selected_bot_id": None,
+            "white": {"user_id": str(bot_id), "username": "gptnano", "connected": True, "role": "bot"},
+            "black": None,
+            "state": "waiting",
+            "turn": None,
+            "move_number": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games, users_collection=users)
+
+    with pytest.raises(GameForbiddenError) as exc:
+        await service.join_game(user_id="guest1", username="guest_player", game_code="G7K2M9", role="guest")
+
+    assert exc.value.code == "LLM_BOT_TIER_REQUIRED"
+
+    joined = await service.join_game(
+        user_id="u1",
+        username="player",
+        game_code="G7K2M9",
+        role="user",
+        llm_bot_tier="tier2",
+    )
+
+    assert joined.state == "active"
+    assert games.docs[0]["llm_bot_tier"] == "tier2"
+    assert games.docs[0]["llm_bot_ply_limit"] == 256
+    assert games.docs[0]["llm_bot_user_id"] == str(bot_id)
 
 
 @pytest.mark.asyncio
@@ -1046,9 +1216,7 @@ def test_bot_service_supported_rule_variants_fallbacks_cover_randobotany() -> No
     ]
     assert BotService._supported_rule_variants(
         {"username": "custombot", "bot_profile": {"supported_rule_variants": ["crazykrieg"]}}
-    ) == [
-        "crazykrieg"
-    ]
+    ) == ["crazykrieg"]
     assert BotService._supported_rule_variants(
         {"username": "custombot", "bot_profile": {"supported_rule_variants": ["unknown"]}}
     ) == [
@@ -1169,9 +1337,7 @@ def test_bot_router_profile_sync_rejects_non_bot_user() -> None:
     from app.routers import bot as bot_router_module
 
     bot_router_module.get_db = lambda: type("Db", (), {"users": users})()
-    app.dependency_overrides[bot_router_module.get_current_user] = lambda: type(
-        "User", (), {"id": "user-1", "role": "user"}
-    )()
+    app.dependency_overrides[bot_router_module.get_current_user] = lambda: type("User", (), {"id": "user-1", "role": "user"})()
 
     with TestClient(app) as client:
         response = client.post("/api/bots/profile", json={"supported_rule_variants": ["wild16"]})

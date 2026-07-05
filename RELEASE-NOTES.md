@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.55
+
+- **LLM Bot Entitlements**: added tier-aware LLM bot access, per-game ply
+  limits, game-state limit metadata, and backend completion when a capped LLM
+  bot is next to move after its stored limit.
+
 ## ks-backend v. 1.3.54
 
 - **Private Tech Reports**: require authenticated operator access for all

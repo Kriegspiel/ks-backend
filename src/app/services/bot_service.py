@@ -9,6 +9,13 @@ from pymongo import ReturnDocument
 
 from app.models.bot import BotListItem, BotListResponse, supported_rule_variants_for_bot
 from app.models.user import normalize_user_stats_payload
+from app.llm_bot_policy import (
+    is_llm_bot_document,
+    llm_bot_limit_label_for_tier,
+    llm_bot_ply_limit_for_tier,
+    normalize_llm_bot_tier,
+    tier_allows_llm_bots,
+)
 
 
 MODEL_AVAILABILITY_REQUIRED_BOTS = {
@@ -72,15 +79,19 @@ class BotService:
         current = cls._normalize_utc_datetime(now) or datetime.now(UTC)
         return current - checked_at <= MODEL_AVAILABILITY_STALE_AFTER
 
-    async def list_bots(self) -> BotListResponse:
+    async def list_bots(self, *, viewer_role: str = "user", viewer_llm_bot_tier: str | None = None) -> BotListResponse:
         cursor = self._users.find({"role": "bot", "status": "active"}).sort("username", 1)
         bots: list[BotListItem] = []
         now = self._now_factory()
+        tier = normalize_llm_bot_tier(viewer_llm_bot_tier, role=viewer_role)
         async for doc in cursor:
             profile = doc.get("bot_profile") or {}
             if profile.get("listed", True) is False:
                 continue
             if not self.bot_can_start_games(doc, now=now):
+                continue
+            llm_backed = is_llm_bot_document(doc)
+            if llm_backed and not tier_allows_llm_bots(tier):
                 continue
             stats = normalize_user_stats_payload(doc.get("stats"))
             bots.append(
@@ -92,6 +103,10 @@ class BotService:
                     elo=int(stats.get("elo", 1200)),
                     ratings=stats.get("ratings", {}),
                     supported_rule_variants=self._supported_rule_variants(doc),
+                    llm_backed=llm_backed,
+                    llm_bot_tier=tier if llm_backed else None,
+                    llm_bot_ply_limit=llm_bot_ply_limit_for_tier(tier) if llm_backed else None,
+                    llm_bot_limit_label=llm_bot_limit_label_for_tier(tier) if llm_backed else None,
                 )
             )
         return BotListResponse(bots=bots)
