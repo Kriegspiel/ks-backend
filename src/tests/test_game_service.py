@@ -24,6 +24,7 @@ from app.services.game_service import (
     GameValidationError,
     PRE_START_ACTIVE_GAME_TTL,
 )
+from app.services.game_usage_stats import LlmUsageReport
 
 
 class FakeCursor:
@@ -817,6 +818,62 @@ async def test_get_my_archived_games_reads_only_archive_collection() -> None:
         ({"white.user_id": "u1"}, GAME_METADATA_PROJECTION),
         ({"black.user_id": "u1"}, GAME_METADATA_PROJECTION),
     ]
+
+
+@pytest.mark.asyncio
+async def test_record_llm_usage_preserves_cached_game_stats_on_flush() -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    game_id = ObjectId()
+    now = datetime(2026, 7, 6, 12, tzinfo=UTC)
+    game = {
+        "_id": game_id,
+        "game_code": "A7K2M9",
+        "rule_variant": "berkeley_any",
+        "white": {"user_id": "bot1", "username": "llm_gptnano", "connected": True, "role": "bot"},
+        "black": {"user_id": "u2", "username": "opponent", "connected": True, "role": "user"},
+        "state": "active",
+        "turn": "white",
+        "move_number": 4,
+        "created_at": now,
+        "updated_at": now,
+        "moves": [],
+    }
+    games.docs.append(deepcopy(game))
+    service = GameService(games, archives_collection=archives)
+    entry = await service._prime_cache(deepcopy(game), persisted=True)
+    report = LlmUsageReport(
+        game_id=str(game_id),
+        game_code="A7K2M9",
+        bot_user_id="bot1",
+        bot_username="llm_gptnano",
+        provider="openai",
+        model="gpt-5.4-nano",
+        response_id="resp1",
+        input_tokens=100,
+        cached_input_tokens=20,
+        output_tokens=30,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        total_tokens=130,
+        cost_usd=0.002,
+    )
+
+    assert await service.record_llm_usage(report, now=now) is True
+    assert entry.dirty is True
+
+    await service._flush_entry(entry, reason="usage-test")
+
+    stored = games.docs[0]["stats"]["llm_usage"]["white"]
+    assert entry.dirty is False
+    assert stored["username"] == "llm_gptnano"
+    assert stored["calls"] == 1
+    assert stored["input_tokens"] == 100
+    assert stored["cached_input_tokens"] == 20
+    assert stored["output_tokens"] == 30
+    assert stored["total_tokens"] == 130
+    assert stored["cost_usd"] == pytest.approx(0.002)
+    assert stored["response_ids"] == ["resp1"]
 
 
 @pytest.mark.asyncio

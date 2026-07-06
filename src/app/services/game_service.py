@@ -33,6 +33,11 @@ from app.services.archive_turn_counts import archive_count_fields
 from app.services.bot_service import BotService
 from app.services.clock_service import ClockService
 from app.services.code_generator import generate_game_code
+from app.services.game_usage_stats import (
+    LlmUsageReport,
+    apply_llm_usage_to_game_stats,
+    store_llm_usage_in_game_stats,
+)
 from app.services.engine_adapter import (
     ask_any,
     attempt_move,
@@ -791,6 +796,37 @@ class GameService:
     async def _get_cached_entry(self, oid: ObjectId) -> CachedGameEntry | None:
         async with self._cache_lock:
             return self._cache.get(oid)
+
+    async def record_llm_usage(self, report: LlmUsageReport, *, now: datetime | None = None) -> bool:
+        recorded_at = now or self.utcnow()
+        cache_updated = False
+        oid: ObjectId | None = None
+
+        try:
+            oid = ObjectId(report.game_id)
+        except Exception:
+            for game_ref in (report.game_id, report.game_code):
+                if not game_ref:
+                    continue
+                try:
+                    oid = await self._resolve_live_game_object_id(game_ref)
+                    break
+                except GameNotFoundError:
+                    continue
+
+        if oid is not None:
+            cached = await self._get_cached_entry(oid)
+            if cached is not None:
+                async with cached.lock:
+                    if apply_llm_usage_to_game_stats(cached.game, report, now=recorded_at):
+                        self._mark_entry_dirty_locked(cached, now=recorded_at)
+                        cache_updated = True
+
+        game_collections = tuple(
+            collection for collection in (self._games, self._archives) if collection is not None
+        )
+        stored = await store_llm_usage_in_game_stats(game_collections, report, now=recorded_at)
+        return stored or cache_updated
 
     async def _get_game_for_runtime(self, *, game_id: str) -> tuple[dict[str, Any], CachedGameEntry | None]:
         oid = await self._resolve_live_game_object_id(game_id)

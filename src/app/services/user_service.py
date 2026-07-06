@@ -20,6 +20,12 @@ from app.llm_bot_policy import normalize_llm_bot_tier
 from app.models.auth import BotRegisterRequest, ConvertGuestRequest, RegisterRequest
 from app.models.bot import supported_rule_variants_for_bot
 from app.models.user import UserModel, default_user_stats_payload, normalize_user_stats_payload, utcnow
+from app.services.game_usage_stats import (
+    BOT_USAGE_RECORD_START,
+    BOT_USAGE_RECORD_START_LABEL,
+    game_llm_usage_for_color,
+    game_usage_report_summary,
+)
 from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
 
 DEFAULT_BOT_OWNER_EMAIL = "bots@kriegspiel.org"
@@ -50,34 +56,8 @@ BOT_MATRIX_PERIOD_DAY_WINDOWS = {
     "year": 365,
 }
 BOT_MATRIX_PERIODS = frozenset({"today", "week", "month", "year", "lifetime"})
-BOT_MATRIX_USAGE_RECORD_START = datetime(2026, 7, 4, tzinfo=UTC)
-BOT_MATRIX_USAGE_RECORD_START_LABEL = "2026-07-04"
-BOT_MATRIX_USAGE_USERNAME_ALIASES = {
-    "haiku": "llm_haiku",
-    "gptnano": "llm_gptnano",
-    "llm_gpt45nano": "llm_gptnano",
-    "bot_gemini25_lite": "llm_gemini25_lite",
-    "bot_deepseekv4_flash": "llm_deepseekv4_flash",
-    "bot_gptoss120b": "llm_gptoss120b",
-    "bot_qwen36_flash": "llm_qwen36_flash",
-    "bot_gemini31_lite": "llm_gemini31_lite",
-    "bot_llama31_8b": "llm_llama31_8b",
-    "openrouter_deepseekv4_flash": "llm_deepseekv4_flash",
-    "openrouter_llama31_8b": "llm_llama31_8b",
-}
-BOT_MATRIX_USAGE_GENERIC_USERNAMES = frozenset({"openrouterbot"})
-BOT_MATRIX_USAGE_MODEL_ALIASES = {
-    "claude-haiku-4-5-20251001": "llm_haiku",
-    "gpt-5.4-nano": "llm_gptnano",
-    "google/gemini-2.5-flash-lite": "llm_gemini25_lite",
-    "gemini-2.5-flash-lite": "llm_gemini25_lite",
-    "deepseek-v4-flash": "llm_deepseekv4_flash",
-    "openai/gpt-oss-120b": "llm_gptoss120b",
-    "qwen-plus": "llm_qwen36_flash",
-    "qwen/qwen3-6b": "llm_qwen36_flash",
-    "meta-llama/llama-3.1-8b-instruct": "llm_llama31_8b",
-    "llama-3.1-8b-instant": "llm_llama31_8b",
-}
+BOT_MATRIX_USAGE_RECORD_START = BOT_USAGE_RECORD_START
+BOT_MATRIX_USAGE_RECORD_START_LABEL = BOT_USAGE_RECORD_START_LABEL
 BOT_MATRIX_PLAYER_ORDER = (
     "llm_haiku",
     "llm_gptnano",
@@ -953,161 +933,6 @@ class UserService:
         if cutoff is None or cutoff < BOT_MATRIX_USAGE_RECORD_START:
             return BOT_MATRIX_USAGE_RECORD_START
         return cutoff
-
-    @staticmethod
-    def _bot_matrix_usage_int(record: dict[str, Any], key: str) -> int:
-        value = record.get(key)
-        if isinstance(value, bool):
-            return 0
-        try:
-            return max(0, int(value or 0))
-        except (TypeError, ValueError):
-            return 0
-
-    @staticmethod
-    def _bot_matrix_usage_float(record: dict[str, Any], key: str) -> float:
-        value = record.get(key)
-        if isinstance(value, bool):
-            return 0.0
-        try:
-            number = float(value or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
-        return max(0.0, number) if math.isfinite(number) else 0.0
-
-    @classmethod
-    def _bot_matrix_usage_token_split(cls, record: dict[str, Any]) -> tuple[int, int, int, int]:
-        raw_input_tokens = cls._bot_matrix_usage_int(record, "input_tokens")
-        cached_input_tokens = cls._bot_matrix_usage_int(record, "cached_input_tokens")
-        cache_tokens = (
-            cached_input_tokens
-            + cls._bot_matrix_usage_int(record, "cache_read_input_tokens")
-            + cls._bot_matrix_usage_int(record, "cache_creation_input_tokens")
-        )
-        input_tokens = max(0, raw_input_tokens - cached_input_tokens)
-        output_tokens = cls._bot_matrix_usage_int(record, "output_tokens")
-        total_tokens = cls._bot_matrix_usage_int(record, "total_tokens")
-        if total_tokens <= 0:
-            total_tokens = input_tokens + cache_tokens + output_tokens
-        return input_tokens, cache_tokens, output_tokens, total_tokens
-
-    @staticmethod
-    def _bot_matrix_usage_username(
-        record: dict[str, Any],
-        *,
-        listed_usernames: set[str],
-        listed_username_by_id: dict[str, str],
-    ) -> str | None:
-        raw_username = str(record.get("bot_username") or "").strip().lower()
-        username = BOT_MATRIX_USAGE_USERNAME_ALIASES.get(raw_username, raw_username)
-        if username in listed_usernames:
-            return username
-
-        user_id = str(record.get("bot_user_id") or "").strip()
-        username = listed_username_by_id.get(user_id)
-        if username in listed_usernames:
-            return username
-
-        model = str(record.get("model") or "").strip().lower()
-        username = BOT_MATRIX_USAGE_MODEL_ALIASES.get(model)
-        if username in listed_usernames:
-            return username
-        if "llama" in model and "8b" in model and "llm_llama31_8b" in listed_usernames:
-            return "llm_llama31_8b"
-        return None
-
-    async def _bot_matrix_usage_records(
-        self,
-        db: Any,
-        *,
-        listed_usernames: set[str],
-        listed_username_by_id: dict[str, str],
-        cutoff: datetime | None,
-        generated_at: datetime,
-    ) -> dict[tuple[str, str], dict[str, int | float]]:
-        usage_collection = getattr(db, "bot_usage_records", None)
-        if usage_collection is None or not listed_usernames:
-            return {}
-
-        usage_cutoff = self._bot_matrix_usage_cutoff(cutoff)
-        usage_names = set(listed_usernames)
-        usage_names.update(
-            alias for alias, canonical in BOT_MATRIX_USAGE_USERNAME_ALIASES.items() if canonical in listed_usernames
-        )
-        usage_model_names = sorted(
-            model for model, canonical in BOT_MATRIX_USAGE_MODEL_ALIASES.items() if canonical in listed_usernames
-        )
-        if usage_model_names:
-            usage_names.update(BOT_MATRIX_USAGE_GENERIC_USERNAMES)
-        usage_user_ids = sorted(listed_username_by_id)
-        usage_name_filter = {"bot_username": {"$in": sorted(usage_names)}}
-        usage_id_filter = {"bot_user_id": {"$in": usage_user_ids}}
-        usage_model_filter = {"model": {"$in": usage_model_names}}
-        date_filters = [
-            {"recorded_at": {"$gte": usage_cutoff, "$lte": generated_at}},
-            {"created_at": {"$gte": usage_cutoff, "$lte": generated_at}},
-        ]
-        identity_filters = [usage_name_filter]
-        if usage_user_ids:
-            identity_filters.append(usage_id_filter)
-        if usage_model_names:
-            identity_filters.append(usage_model_filter)
-        query = {
-            "$or": [
-                {**identity_filter, **date_filter}
-                for identity_filter in identity_filters
-                for date_filter in date_filters
-            ]
-        }
-        projection = {
-            "game_id": 1,
-            "game_code": 1,
-            "bot_username": 1,
-            "bot_user_id": 1,
-            "model": 1,
-            "input_tokens": 1,
-            "cached_input_tokens": 1,
-            "output_tokens": 1,
-            "cache_read_input_tokens": 1,
-            "cache_creation_input_tokens": 1,
-            "total_tokens": 1,
-            "cost_usd": 1,
-        }
-        usage_by_game: dict[tuple[str, str], dict[str, int | float]] = {}
-        async for record in self._find(usage_collection, query, projection):
-            username = self._bot_matrix_usage_username(
-                record,
-                listed_usernames=listed_usernames,
-                listed_username_by_id=listed_username_by_id,
-            )
-            if username is None:
-                continue
-
-            raw_game_id = str(record.get("game_id") or "").strip()
-            raw_game_code = str(record.get("game_code") or "").strip()
-            game_keys = [raw_game_id, raw_game_id.upper(), raw_game_code, raw_game_code.upper()]
-            input_tokens, cache_tokens, output_tokens, total_tokens = self._bot_matrix_usage_token_split(record)
-            cost = self._bot_matrix_usage_float(record, "cost_usd")
-
-            for game_key in {key for key in game_keys if key}:
-                aggregate = usage_by_game.setdefault(
-                    (game_key, username),
-                    {
-                        "calls": 0,
-                        "tokens": 0,
-                        "input_tokens": 0,
-                        "cache_tokens": 0,
-                        "output_tokens": 0,
-                        "cost": 0.0,
-                    },
-                )
-                aggregate["calls"] = int(aggregate["calls"]) + 1
-                aggregate["tokens"] = int(aggregate["tokens"]) + total_tokens
-                aggregate["input_tokens"] = int(aggregate["input_tokens"]) + input_tokens
-                aggregate["cache_tokens"] = int(aggregate["cache_tokens"]) + cache_tokens
-                aggregate["output_tokens"] = int(aggregate["output_tokens"]) + output_tokens
-                aggregate["cost"] = float(aggregate["cost"]) + cost
-        return usage_by_game
 
     @staticmethod
     def _completed_turn_count(game: dict[str, Any]) -> int:
@@ -2494,6 +2319,7 @@ class UserService:
         end_conditions: dict[str, int] = {}
         matrix_game_count = 0
         matrix_row_record_count = 0
+        usage_available = False
 
         if not listed_usernames:
             return {
@@ -2530,6 +2356,7 @@ class UserService:
             "move_count": 1,
             "ply_count": 1,
             "turn_count": 1,
+            "stats.llm_usage": 1,
         }
 
         def listed_username_for(player: dict[str, Any]) -> str | None:
@@ -2543,27 +2370,11 @@ class UserService:
         if hasattr(cursor, "batch_size"):
             cursor = cursor.batch_size(1000)
 
-        usage_records = await self._bot_matrix_usage_records(
-            db,
-            listed_usernames=listed_username_set,
-            listed_username_by_id=listed_username_by_id,
-            cutoff=cutoff,
-            generated_at=generated_at,
-        )
-
-        def usage_for(game: dict[str, Any], username: str | None) -> dict[str, int | float] | None:
+        def usage_for_color(game: dict[str, Any], username: str | None, color: str) -> dict[str, int | float] | None:
             if username not in listed_username_set:
                 return None
-            for key in (
-                str(game.get("_id") or "").strip(),
-                str(game.get("game_code") or "").strip().upper(),
-            ):
-                if not key:
-                    continue
-                usage = usage_records.get((key, username))
-                if usage is not None:
-                    return usage
-            return None
+            usage = game_llm_usage_for_color(game, color)
+            return game_usage_report_summary(usage) if usage is not None else None
 
         usage_game_cutoff = self._bot_matrix_usage_cutoff(cutoff)
         async for game in cursor:
@@ -2597,8 +2408,10 @@ class UserService:
                     or opponent_name in all_bot_usernames
                 )
                 outcome = self._winner_result(winner, color)
-                player_usage = usage_for(game, username)
-                opponent_usage = usage_for(game, opponent_username)
+                opponent_color = "black" if color == "white" else "white"
+                player_usage = usage_for_color(game, username, color)
+                opponent_usage = usage_for_color(game, opponent_username, opponent_color)
+                usage_available = usage_available or player_usage is not None or opponent_usage is not None
                 self._bot_matrix_record_result(
                     total_buckets["all"][username],
                     outcome=outcome,
@@ -2699,7 +2512,7 @@ class UserService:
             "total_rows": total_rows,
             "unique_game_count": matrix_game_count,
             "row_record_count": matrix_row_record_count,
-            "usage_available": bool(usage_records),
+            "usage_available": usage_available,
             "usage_start_date": BOT_MATRIX_USAGE_RECORD_START_LABEL,
         }
 

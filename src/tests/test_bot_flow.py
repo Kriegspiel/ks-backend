@@ -92,18 +92,42 @@ class FakeReferenceCollection:
     def __init__(self, docs: list[dict] | None = None) -> None:
         self.docs = docs or []
 
+    async def find_one(self, query: dict, projection: dict | None = None):
+        for doc in self.docs:
+            if self._matches(doc, query):
+                return doc
+        return None
+
+    async def update_one(self, query: dict, update: dict):
+        for doc in self.docs:
+            if self._matches(doc, query):
+                self._apply_update(doc, update)
+                return type("UpdateResult", (), {"matched_count": 1, "modified_count": 1})()
+        return type("UpdateResult", (), {"matched_count": 0, "modified_count": 0})()
+
     async def update_many(self, query: dict, update: dict):
         matched_count = 0
         for doc in self.docs:
             if self._matches(doc, query):
                 matched_count += 1
-                for key, value in update.get("$set", {}).items():
-                    self._set_nested(doc, key, value)
+                self._apply_update(doc, update)
         return type("UpdateResult", (), {"matched_count": matched_count, "modified_count": matched_count})()
 
     @classmethod
     def _matches(cls, doc: dict, query: dict) -> bool:
-        return all(cls._resolve(doc, key) == expected for key, expected in query.items())
+        for key, expected in query.items():
+            current = cls._resolve(doc, key)
+            if isinstance(expected, dict) and "$ne" in expected:
+                disallowed = expected["$ne"]
+                if isinstance(current, list):
+                    if disallowed in current:
+                        return False
+                elif current == disallowed:
+                    return False
+                continue
+            if current != expected:
+                return False
+        return True
 
     @staticmethod
     def _resolve(doc: dict, key: str):
@@ -122,34 +146,36 @@ class FakeReferenceCollection:
             current = current.setdefault(part, {})
         current[parts[-1]] = value
 
+    @classmethod
+    def _inc_nested(cls, doc: dict, key: str, value) -> None:  # noqa: ANN001
+        current = cls._resolve(doc, key) or 0
+        cls._set_nested(doc, key, current + value)
 
-class FakeUsageCollection:
-    def __init__(self) -> None:
-        self.docs: list[dict] = []
+    @classmethod
+    def _add_to_set_nested(cls, doc: dict, key: str, value) -> None:  # noqa: ANN001
+        current = cls._resolve(doc, key)
+        if not isinstance(current, list):
+            current = []
+            cls._set_nested(doc, key, current)
+        if value not in current:
+            current.append(value)
 
-    async def update_one(self, query: dict, update: dict, upsert: bool = False):  # noqa: ANN001
-        for doc in self.docs:
-            if all(doc.get(key) == value for key, value in query.items()):
-                doc.update(update.get("$set", {}))
-                return type("UpdateResult", (), {"matched_count": 1, "upserted_id": None})()
-        if upsert:
-            document = dict(update.get("$setOnInsert", {}))
-            document.update(update.get("$set", {}))
-            self.docs.append(document)
-            return type("UpdateResult", (), {"matched_count": 0, "upserted_id": ObjectId()})()
-        return type("UpdateResult", (), {"matched_count": 0, "upserted_id": None})()
+    @classmethod
+    def _min_nested(cls, doc: dict, key: str, value) -> None:  # noqa: ANN001
+        current = cls._resolve(doc, key)
+        if current is None or value < current:
+            cls._set_nested(doc, key, value)
 
-    async def insert_one(self, document: dict):
-        self.docs.append(dict(document))
-        return type("InsertResult", (), {"inserted_id": ObjectId()})()
-
-    async def update_many(self, query: dict, update: dict):
-        matched_count = 0
-        for doc in self.docs:
-            if all(doc.get(key) == value for key, value in query.items()):
-                matched_count += 1
-                doc.update(update.get("$set", {}))
-        return type("UpdateResult", (), {"matched_count": matched_count, "modified_count": matched_count})()
+    @classmethod
+    def _apply_update(cls, doc: dict, update: dict) -> None:
+        for key, value in update.get("$set", {}).items():
+            cls._set_nested(doc, key, value)
+        for key, value in update.get("$inc", {}).items():
+            cls._inc_nested(doc, key, value)
+        for key, value in update.get("$addToSet", {}).items():
+            cls._add_to_set_nested(doc, key, value)
+        for key, value in update.get("$min", {}).items():
+            cls._min_nested(doc, key, value)
 
 
 @pytest.mark.asyncio
@@ -417,11 +443,21 @@ async def test_bot_routes_reject_non_bot_users_and_missing_bot_updates() -> None
 
 
 @pytest.mark.asyncio
-async def test_bot_usage_report_stores_idempotent_usage_record() -> None:
-    usage_collection = FakeUsageCollection()
+async def test_bot_usage_report_stores_idempotent_game_stats() -> None:
+    game_id = ObjectId("507f1f77bcf86cd799439011")
+    games = FakeReferenceCollection(
+        [
+            {
+                "_id": game_id,
+                "game_code": "ABC123",
+                "white": {"user_id": "bot1", "username": "llm_gptnano", "role": "bot"},
+                "black": {"user_id": "human1", "username": "playerone", "role": "user"},
+            }
+        ]
+    )
     service = BotService(
         FakeUsersCollection(),
-        usage_collection=usage_collection,
+        game_collections=(games,),
         now_factory=lambda: datetime(2026, 7, 5, tzinfo=UTC),
     )
     payload = BotUsageReportRequest(
@@ -440,14 +476,19 @@ async def test_bot_usage_report_stores_idempotent_usage_record() -> None:
     assert await service.record_usage(user_id="bot1", username="llm_gptnano", payload=payload) is True
     assert await service.record_usage(user_id="bot1", username="llm_gptnano", payload=payload) is True
 
-    assert len(usage_collection.docs) == 1
-    stored = usage_collection.docs[0]
-    assert stored["game_id"] == "507f1f77bcf86cd799439011"
-    assert stored["game_code"] == "ABC123"
-    assert stored["bot_username"] == "llm_gptnano"
+    stored = games.docs[0]["stats"]["llm_usage"]["white"]
+    assert stored["username"] == "llm_gptnano"
+    assert stored["calls"] == 1
+    assert stored["input_tokens"] == 100
+    assert stored["cached_input_tokens"] == 20
+    assert stored["output_tokens"] == 30
     assert stored["total_tokens"] == 130
     assert stored["cost_usd"] == 0.002
-    assert stored["recorded_at"] == datetime(2026, 7, 5, tzinfo=UTC)
+    assert stored["providers"] == ["openai"]
+    assert stored["models"] == ["gpt-nano"]
+    assert stored["response_ids"] == ["resp1"]
+    assert stored["first_recorded_at"] == datetime(2026, 7, 5, tzinfo=UTC)
+    assert games.docs[0]["stats"]["llm_usage"]["updated_at"] == datetime(2026, 7, 5, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
@@ -1056,7 +1097,6 @@ async def test_bot_service_syncs_supported_rule_variants_for_authenticated_bot()
 async def test_bot_service_syncs_username_display_and_references_for_authenticated_bot() -> None:
     now = datetime(2026, 7, 6, 2, tzinfo=UTC)
     users = FakeUsersCollection()
-    usage = FakeUsageCollection()
     bot_id = ObjectId()
     users.docs.append(
         {
@@ -1079,6 +1119,15 @@ async def test_bot_service_syncs_username_display_and_references_for_authenticat
                 "white": {"user_id": str(bot_id), "username": "llm_gpt45nano", "role": "bot"},
                 "black": {"username": "randobot", "role": "bot"},
                 "created_by": "llm_gpt45nano",
+                "stats": {
+                    "llm_usage": {
+                        "white": {
+                            "user_id": str(bot_id),
+                            "username": "llm_gpt45nano",
+                            "calls": 1,
+                        }
+                    }
+                },
             }
         ]
     )
@@ -1088,13 +1137,20 @@ async def test_bot_service_syncs_username_display_and_references_for_authenticat
                 "white": {"username": "randobot", "role": "bot"},
                 "black": {"user_id": str(bot_id), "username": "llm_gpt45nano", "role": "bot"},
                 "created_by": "randobot",
+                "stats": {
+                    "llm_usage": {
+                        "black": {
+                            "user_id": str(bot_id),
+                            "username": "llm_gpt45nano",
+                            "calls": 1,
+                        }
+                    }
+                },
             }
         ]
     )
-    usage.docs.append({"bot_username": "llm_gpt45nano", "model": "gpt-5.4-nano"})
     service = BotService(
         users,
-        usage_collection=usage,
         game_collections=(games, archives),
         now_factory=lambda: now,
     )
@@ -1116,8 +1172,9 @@ async def test_bot_service_syncs_username_display_and_references_for_authenticat
     assert users.docs[0]["bot_profile"]["supported_rule_variants"] == ["berkeley", "berkeley_any", "wild16"]
     assert games.docs[0]["white"]["username"] == "llm_gptnano"
     assert games.docs[0]["created_by"] == "llm_gptnano"
+    assert games.docs[0]["stats"]["llm_usage"]["white"]["username"] == "llm_gptnano"
     assert archives.docs[0]["black"]["username"] == "llm_gptnano"
-    assert usage.docs[0]["bot_username"] == "llm_gptnano"
+    assert archives.docs[0]["stats"]["llm_usage"]["black"]["username"] == "llm_gptnano"
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.db import get_db
 from app.dependencies import get_current_user
@@ -22,11 +22,12 @@ from app.services.user_service import UserService
 router = APIRouter(prefix="/bots", tags=["bots"])
 
 
-def get_bot_service() -> BotService:
+def get_bot_service(request: Request = None) -> BotService:
     db = get_db()
+    game_service = getattr(request.app.state, "game_service", None) if request is not None else None
     return BotService(
         db.users,
-        usage_collection=getattr(db, "bot_usage_records", None),
+        game_usage_recorder=getattr(game_service, "record_llm_usage", None),
         game_collections=(getattr(db, "games", None), getattr(db, "game_archives", None)),
     )
 
@@ -103,7 +104,12 @@ async def sync_bot_profile(
     profile = updated.get("bot_profile") if isinstance(updated.get("bot_profile"), dict) else {}
     return BotProfileSyncResponse(
         username=str(updated.get("username") or user.username),
-        display_name=str(profile.get("display_name") or updated.get("username_display") or updated.get("username") or user.username),
+        display_name=str(
+            profile.get("display_name")
+            or updated.get("username_display")
+            or updated.get("username")
+            or user.username
+        ),
         description=str(profile.get("description") or ""),
         supported_rule_variants=payload.supported_rule_variants,
     )
