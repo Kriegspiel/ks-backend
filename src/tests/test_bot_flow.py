@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
-from app.models.bot import BotAvailabilityReportRequest, BotProfileSyncRequest
+from app.models.bot import BotAvailabilityReportRequest, BotProfileSyncRequest, BotUsageReportRequest
 from app.models.game import CreateGameRequest
-from app.routers.bot import report_bot_availability, sync_bot_profile
+from app.routers.bot import report_bot_availability, report_bot_usage, sync_bot_profile
 from app.services.bot_service import BotService
 from app.services.game_service import GameConflictError, GameForbiddenError, GameService, GameValidationError
 from app.services.user_service import UserService
@@ -82,6 +82,27 @@ class FakeUsersCollection:
             if current != expected:
                 return False
         return True
+
+
+class FakeUsageCollection:
+    def __init__(self) -> None:
+        self.docs: list[dict] = []
+
+    async def update_one(self, query: dict, update: dict, upsert: bool = False):  # noqa: ANN001
+        for doc in self.docs:
+            if all(doc.get(key) == value for key, value in query.items()):
+                doc.update(update.get("$set", {}))
+                return type("UpdateResult", (), {"matched_count": 1, "upserted_id": None})()
+        if upsert:
+            document = dict(update.get("$setOnInsert", {}))
+            document.update(update.get("$set", {}))
+            self.docs.append(document)
+            return type("UpdateResult", (), {"matched_count": 0, "upserted_id": ObjectId()})()
+        return type("UpdateResult", (), {"matched_count": 0, "upserted_id": None})()
+
+    async def insert_one(self, document: dict):
+        self.docs.append(dict(document))
+        return type("InsertResult", (), {"inserted_id": ObjectId()})()
 
 
 @pytest.mark.asyncio
@@ -304,31 +325,82 @@ async def test_bot_profile_updates_return_none_when_no_active_bot_matches() -> N
 @pytest.mark.asyncio
 async def test_bot_routes_reject_non_bot_users_and_missing_bot_updates() -> None:
     user = type("User", (), {"id": "u1", "role": "user"})()
-    bot_user = type("User", (), {"id": "bot1", "role": "bot"})()
+    bot_user = type("User", (), {"id": "bot1", "username": "llm_gptnano", "role": "bot"})()
     availability = BotAvailabilityReportRequest(provider="openai", ready=True, reason="ok")
     profile = BotProfileSyncRequest(supported_rule_variants=["berkeley"])
+    usage = BotUsageReportRequest(
+        game_id="game1",
+        provider="openai",
+        model="gpt-nano",
+        response_id="resp1",
+        input_tokens=100,
+        output_tokens=20,
+        total_tokens=120,
+        cost_usd=0.001,
+    )
     bot_service = type(
         "BotServiceStub",
         (),
         {
             "report_model_availability": AsyncMock(return_value=None),
             "sync_supported_rule_variants": AsyncMock(return_value=None),
+            "record_usage": AsyncMock(return_value=False),
         },
     )()
 
     with pytest.raises(HTTPException) as availability_forbidden:
         await report_bot_availability(availability, user=user, bot_service=bot_service)
+    with pytest.raises(HTTPException) as usage_forbidden:
+        await report_bot_usage(usage, user=user, bot_service=bot_service)
     with pytest.raises(HTTPException) as profile_forbidden:
         await sync_bot_profile(profile, user=user, bot_service=bot_service)
     with pytest.raises(HTTPException) as availability_missing:
         await report_bot_availability(availability, user=bot_user, bot_service=bot_service)
+    with pytest.raises(HTTPException) as usage_unavailable:
+        await report_bot_usage(usage, user=bot_user, bot_service=bot_service)
     with pytest.raises(HTTPException) as profile_missing:
         await sync_bot_profile(profile, user=bot_user, bot_service=bot_service)
 
     assert availability_forbidden.value.status_code == 403
+    assert usage_forbidden.value.status_code == 403
     assert profile_forbidden.value.status_code == 403
     assert availability_missing.value.status_code == 404
+    assert usage_unavailable.value.status_code == 503
     assert profile_missing.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_bot_usage_report_stores_idempotent_usage_record() -> None:
+    usage_collection = FakeUsageCollection()
+    service = BotService(
+        FakeUsersCollection(),
+        usage_collection=usage_collection,
+        now_factory=lambda: datetime(2026, 7, 5, tzinfo=UTC),
+    )
+    payload = BotUsageReportRequest(
+        game_id="507f1f77bcf86cd799439011",
+        game_code="abc123",
+        provider="openai",
+        model="gpt-nano",
+        response_id="resp1",
+        input_tokens=100,
+        cached_input_tokens=20,
+        output_tokens=30,
+        total_tokens=130,
+        cost_usd=0.002,
+    )
+
+    assert await service.record_usage(user_id="bot1", username="llm_gptnano", payload=payload) is True
+    assert await service.record_usage(user_id="bot1", username="llm_gptnano", payload=payload) is True
+
+    assert len(usage_collection.docs) == 1
+    stored = usage_collection.docs[0]
+    assert stored["game_id"] == "507f1f77bcf86cd799439011"
+    assert stored["game_code"] == "ABC123"
+    assert stored["bot_username"] == "llm_gptnano"
+    assert stored["total_tokens"] == 130
+    assert stored["cost_usd"] == 0.002
+    assert stored["recorded_at"] == datetime(2026, 7, 5, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

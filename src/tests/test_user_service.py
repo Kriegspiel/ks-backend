@@ -187,10 +187,12 @@ class FakeDB:
         users: FakeUsersCollection,
         game_archives: FakeUsersCollection,
         games: FakeUsersCollection | None = None,
+        bot_usage_records: FakeUsersCollection | None = None,
     ):
         self.users = users
         self.game_archives = game_archives
         self.games = games
+        self.bot_usage_records = bot_usage_records
 
 
 def test_find_uses_single_argument_call_when_projection_is_omitted() -> None:
@@ -2335,9 +2337,48 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
             },
         ]
     )
+    usage_records = FakeUsersCollection()
+    usage_records.docs.extend(
+        [
+            {
+                "game_id": "TODAY1",
+                "bot_username": "llm_haiku",
+                "input_tokens": 100,
+                "output_tokens": 25,
+                "total_tokens": 125,
+                "cost_usd": 0.01,
+                "recorded_at": datetime(2026, 7, 5, 9, 1, tzinfo=UTC),
+            },
+            {
+                "game_id": "TODAY1",
+                "bot_username": "llm_haiku",
+                "input_tokens": 50,
+                "output_tokens": 5,
+                "total_tokens": 55,
+                "cost_usd": 0.005,
+                "recorded_at": datetime(2026, 7, 5, 9, 2, tzinfo=UTC),
+            },
+            {
+                "game_id": "TODAY1",
+                "bot_username": "llm_gptnano",
+                "input_tokens": 70,
+                "output_tokens": 5,
+                "total_tokens": 75,
+                "cost_usd": 0.02,
+                "recorded_at": datetime(2026, 7, 5, 9, 3, tzinfo=UTC),
+            },
+            {
+                "game_id": "OLD001",
+                "bot_username": "llm_haiku",
+                "total_tokens": 999999,
+                "cost_usd": 9.99,
+                "recorded_at": datetime(2026, 7, 4, 12, tzinfo=UTC),
+            },
+        ]
+    )
 
     report = await UserService(users).get_bot_matrix_report(
-        FakeDB(users=users, game_archives=archives),
+        FakeDB(users=users, game_archives=archives, bot_usage_records=usage_records),
         period="today",
         now=now,
     )
@@ -2353,14 +2394,25 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
     assert nano_cell["games"] == 1
     assert nano_cell["record"] == "0-1-0"
     assert nano_cell["average_plies"] == 10
+    assert nano_cell["usage_recorded_games"] == 1
+    assert nano_cell["avg_calls"] == 2
+    assert nano_cell["player_tokens"] == 180
+    assert nano_cell["player_cost"] == pytest.approx(0.015)
+    assert nano_cell["opponent_tokens"] == 75
+    assert nano_cell["opponent_cost"] == pytest.approx(0.02)
 
     haiku_all = report["total_rows"]["all"][0]
     assert haiku_all["games"] == 3
     assert haiku_all["record"] == "1-1-1"
     assert haiku_all["avg_plies"] == 8
-    assert haiku_all["avg_calls"] is None
+    assert haiku_all["avg_calls"] == 2
+    assert haiku_all["avg_tokens"] == 180
+    assert haiku_all["avg_cost"] == pytest.approx(0.015)
+    assert haiku_all["usage_recorded_games"] == 1
     assert report["total_rows"]["bots"][0]["games"] == 2
     assert report["total_rows"]["humans"][0]["record"] == "0-0-1"
+    assert report["usage_available"] is True
+    assert report["usage_start_date"] == "2026-07-04"
 
 
 @pytest.mark.asyncio
