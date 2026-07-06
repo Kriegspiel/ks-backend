@@ -65,6 +65,19 @@ BOT_MATRIX_USAGE_USERNAME_ALIASES = {
     "openrouter_deepseekv4_flash": "llm_deepseekv4_flash",
     "openrouter_llama31_8b": "llm_llama31_8b",
 }
+BOT_MATRIX_USAGE_GENERIC_USERNAMES = frozenset({"openrouterbot"})
+BOT_MATRIX_USAGE_MODEL_ALIASES = {
+    "claude-haiku-4-5-20251001": "llm_haiku",
+    "gpt-5.4-nano": "llm_gpt45nano",
+    "google/gemini-2.5-flash-lite": "llm_gemini25_lite",
+    "gemini-2.5-flash-lite": "llm_gemini25_lite",
+    "deepseek-v4-flash": "llm_deepseekv4_flash",
+    "openai/gpt-oss-120b": "llm_gptoss120b",
+    "qwen-plus": "llm_qwen36_flash",
+    "qwen/qwen3-6b": "llm_qwen36_flash",
+    "meta-llama/llama-3.1-8b-instruct": "llm_llama31_8b",
+    "llama-3.1-8b-instant": "llm_llama31_8b",
+}
 BOT_MATRIX_PLAYER_ORDER = (
     "llm_haiku",
     "llm_gpt45nano",
@@ -842,6 +855,31 @@ class UserService:
             return 0.0
         return max(0.0, number) if math.isfinite(number) else 0.0
 
+    @staticmethod
+    def _bot_matrix_usage_username(
+        record: dict[str, Any],
+        *,
+        listed_usernames: set[str],
+        listed_username_by_id: dict[str, str],
+    ) -> str | None:
+        raw_username = str(record.get("bot_username") or "").strip().lower()
+        username = BOT_MATRIX_USAGE_USERNAME_ALIASES.get(raw_username, raw_username)
+        if username in listed_usernames:
+            return username
+
+        user_id = str(record.get("bot_user_id") or "").strip()
+        username = listed_username_by_id.get(user_id)
+        if username in listed_usernames:
+            return username
+
+        model = str(record.get("model") or "").strip().lower()
+        username = BOT_MATRIX_USAGE_MODEL_ALIASES.get(model)
+        if username in listed_usernames:
+            return username
+        if "llama" in model and "8b" in model and "llm_llama31_8b" in listed_usernames:
+            return "llm_llama31_8b"
+        return None
+
     async def _bot_matrix_usage_records(
         self,
         db: Any,
@@ -860,9 +898,15 @@ class UserService:
         usage_names.update(
             alias for alias, canonical in BOT_MATRIX_USAGE_USERNAME_ALIASES.items() if canonical in listed_usernames
         )
+        usage_model_names = sorted(
+            model for model, canonical in BOT_MATRIX_USAGE_MODEL_ALIASES.items() if canonical in listed_usernames
+        )
+        if usage_model_names:
+            usage_names.update(BOT_MATRIX_USAGE_GENERIC_USERNAMES)
         usage_user_ids = sorted(listed_username_by_id)
         usage_name_filter = {"bot_username": {"$in": sorted(usage_names)}}
         usage_id_filter = {"bot_user_id": {"$in": usage_user_ids}}
+        usage_model_filter = {"model": {"$in": usage_model_names}}
         date_filters = [
             {"recorded_at": {"$gte": usage_cutoff, "$lte": generated_at}},
             {"created_at": {"$gte": usage_cutoff, "$lte": generated_at}},
@@ -870,6 +914,8 @@ class UserService:
         identity_filters = [usage_name_filter]
         if usage_user_ids:
             identity_filters.append(usage_id_filter)
+        if usage_model_names:
+            identity_filters.append(usage_model_filter)
         query = {
             "$or": [
                 {**identity_filter, **date_filter}
@@ -882,6 +928,7 @@ class UserService:
             "game_code": 1,
             "bot_username": 1,
             "bot_user_id": 1,
+            "model": 1,
             "input_tokens": 1,
             "output_tokens": 1,
             "cache_read_input_tokens": 1,
@@ -891,12 +938,12 @@ class UserService:
         }
         usage_by_game: dict[tuple[str, str], dict[str, int | float]] = {}
         async for record in self._find(usage_collection, query, projection):
-            raw_username = str(record.get("bot_username") or "").strip()
-            username = BOT_MATRIX_USAGE_USERNAME_ALIASES.get(raw_username, raw_username)
-            if username not in listed_usernames:
-                user_id = str(record.get("bot_user_id") or "").strip()
-                username = listed_username_by_id.get(user_id, username)
-            if username not in listed_usernames:
+            username = self._bot_matrix_usage_username(
+                record,
+                listed_usernames=listed_usernames,
+                listed_username_by_id=listed_username_by_id,
+            )
+            if username is None:
                 continue
 
             raw_game_id = str(record.get("game_id") or "").strip()

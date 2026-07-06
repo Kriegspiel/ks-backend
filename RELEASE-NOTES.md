@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.67
+
+- **Bot Matrix Usage Averages**: map generic OpenRouter usage rows by model slug
+  so recorded Llama token and cost samples appear in matchup cells.
+
 ## ks-backend v. 1.3.66
 
 - **Profile Metrics API**: include archive-derived `user_metrics` on every

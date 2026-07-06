@@ -2773,6 +2773,95 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
 
 
 @pytest.mark.asyncio
+async def test_get_bot_matrix_report_maps_generic_openrouter_usage_by_model() -> None:
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {
+                "_id": "haiku-id",
+                "username": "llm_haiku",
+                "username_display": "LLM Haiku (bot)",
+                "role": "bot",
+                "bot_profile": {"listed": True, "display_name": "LLM Haiku (bot)"},
+            },
+            {
+                "_id": "llama-id",
+                "username": "llm_llama31_8b",
+                "username_display": "LLM Llama 3.5 8B (bot)",
+                "role": "bot",
+                "bot_profile": {"listed": True, "display_name": "LLM Llama 3.5 8B (bot)"},
+            },
+        ]
+    )
+    archives = FakeUsersCollection()
+    archives.docs.append(
+        {
+            "_id": "llama-game-id",
+            "state": "completed",
+            "game_code": "LLAMA1",
+            "updated_at": datetime(2026, 7, 5, 11, tzinfo=UTC),
+            "white": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
+            "black": {"user_id": "llama-id", "username": "llm_llama31_8b", "role": "bot"},
+            "result": {"winner": "white", "reason": "timeout"},
+            "move_count": 355,
+        }
+    )
+    usage_records = FakeUsersCollection()
+    usage_records.docs.extend(
+        [
+            {
+                "game_id": "llama-game-id",
+                "bot_username": "openrouterbot",
+                "model": "meta-llama/llama-3.1-8b-instruct",
+                "input_tokens": 1000,
+                "output_tokens": 50,
+                "total_tokens": 1050,
+                "cost_usd": 0.00123,
+                "recorded_at": datetime(2026, 7, 5, 11, 1, tzinfo=UTC),
+            },
+            {
+                "game_id": "llama-game-id",
+                "bot_username": "openrouterbot",
+                "model": "unknown-model",
+                "input_tokens": 999,
+                "output_tokens": 999,
+                "total_tokens": 1998,
+                "cost_usd": 9.99,
+                "recorded_at": datetime(2026, 7, 5, 11, 2, tzinfo=UTC),
+            },
+        ]
+    )
+
+    report = await UserService(users).get_bot_matrix_report(
+        FakeDB(users=users, game_archives=archives, bot_usage_records=usage_records),
+        period="lifetime",
+        now=datetime(2026, 7, 5, 12, tzinfo=UTC),
+    )
+
+    assert report["unique_game_count"] == 1
+    assert report["row_record_count"] == 2
+    assert [player["username"] for player in report["players"]] == ["llm_haiku", "llm_llama31_8b"]
+
+    haiku_vs_llama = report["matrix_rows"][0]["cells"][1]["summary"]
+    assert haiku_vs_llama["games"] == 1
+    assert haiku_vs_llama["record"] == "1-0-0"
+    assert haiku_vs_llama["average_plies"] == 355
+    assert haiku_vs_llama["player_tokens"] is None
+    assert haiku_vs_llama["player_cost"] is None
+    assert haiku_vs_llama["opponent_usage_recorded_games"] == 1
+    assert haiku_vs_llama["opponent_tokens"] == 1050
+    assert haiku_vs_llama["opponent_cost"] == pytest.approx(0.00123)
+
+    llama_vs_haiku = report["matrix_rows"][1]["cells"][0]["summary"]
+    assert llama_vs_haiku["record"] == "0-0-1"
+    assert llama_vs_haiku["usage_recorded_games"] == 1
+    assert llama_vs_haiku["player_tokens"] == 1050
+    assert llama_vs_haiku["player_cost"] == pytest.approx(0.00123)
+    assert llama_vs_haiku["opponent_tokens"] is None
+    assert report["usage_available"] is True
+
+
+@pytest.mark.asyncio
 async def test_get_listed_bot_daily_report_aggregates_daily_win_rates(monkeypatch: pytest.MonkeyPatch) -> None:
     users = object()
     archives = object()
