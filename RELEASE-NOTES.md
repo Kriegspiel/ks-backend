@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.63
+
+- **Game History API**: add indexed default-date pagination, a facet-free row
+  load mode, lazy filter-option endpoint, and aggregation-backed filtered row
+  paging for faster large histories.
+
 ## ks-backend v. 1.3.62
 
 - **Lobby Stats API**: allow public aggregate reads from `/game/stats` so the

@@ -66,6 +66,7 @@ async def get_user_games(
     opponent: list[str] = Query(default=[]),
     result: list[str] = Query(default=[]),
     reason: list[str] = Query(default=[]),
+    include_filter_options: bool = Query(default=True),
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
@@ -88,12 +89,27 @@ async def get_user_games(
         filters=filters,
         sort_key=sort,
         sort_direction=dir,
+        include_filter_options=include_filter_options,
     )
     return {
         "games": games,
         "pagination": _pagination(page=page, per_page=per_page, total=total),
         "filter_options": filter_options,
     }
+
+
+@router.get("/user/{username}/games/filter-options")
+async def get_user_game_filter_options(
+    username: str,
+    user_service: UserService = Depends(get_user_service),
+) -> dict[str, Any]:
+    db = require_db()
+    user_doc = await db.users.find_one({"username": user_service.canonical_username(username)})
+    if user_doc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    filter_options = await user_service.get_game_history_filter_options(db, str(user_doc["_id"]))
+    return {"filter_options": filter_options}
 
 
 @router.get("/user/{username}/rating-history")
