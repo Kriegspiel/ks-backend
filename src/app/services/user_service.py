@@ -275,6 +275,28 @@ class UserService:
         return f"{cls._history_opponent_group(opponent)}:{cls._history_filter_value(username)}"
 
     @staticmethod
+    def _history_opponent_exact_name(value: str) -> str:
+        group, separator, name = value.partition(":")
+        if separator and group in {"human", "bot"} and name != "*":
+            return name
+        return value
+
+    @classmethod
+    def _history_public_filter_option_value(cls, filter_key: str, value: str) -> str:
+        if filter_key == "opponent":
+            return cls._history_opponent_exact_name(value)
+        return value
+
+    @classmethod
+    def _history_opponent_exact_match_values(cls, value: str) -> list[str]:
+        if value in USER_GAME_HISTORY_OPPONENT_GROUP_FILTERS:
+            return []
+        name = cls._history_opponent_exact_name(value)
+        if name != value:
+            return [value]
+        return [name, f"human:{name}", f"bot:{name}"]
+
+    @staticmethod
     def _normalized_result_reason(game: dict[str, Any]) -> str | None:
         result = game.get("result") if isinstance(game.get("result"), dict) else {}
         reason = result.get("reason")
@@ -384,7 +406,11 @@ class UserService:
                 value = record["filters"][key]
                 bucket = options[key].setdefault(
                     value,
-                    {"value": value, "group": cls._history_group_label(key, value), "count": 0},
+                    {
+                        "value": cls._history_public_filter_option_value(key, value),
+                        "group": cls._history_group_label(key, value),
+                        "count": 0,
+                    },
                 )
                 bucket["count"] += 1
 
@@ -415,6 +441,8 @@ class UserService:
     @staticmethod
     def _history_opponent_filter_matches(value: str, selected: list[str]) -> bool:
         if value in selected:
+            return True
+        if UserService._history_opponent_exact_name(value) in selected:
             return True
         group = value.split(":", 1)[0]
         return any(USER_GAME_HISTORY_OPPONENT_GROUP_FILTERS.get(candidate) == group for candidate in selected)
@@ -568,7 +596,11 @@ class UserService:
             if not values:
                 continue
             if key == "opponent":
-                exact_values = [value for value in values if value not in USER_GAME_HISTORY_OPPONENT_GROUP_FILTERS]
+                exact_values = [
+                    match_value
+                    for value in values
+                    for match_value in cls._history_opponent_exact_match_values(value)
+                ]
                 groups = sorted(
                     {
                         group

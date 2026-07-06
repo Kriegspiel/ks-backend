@@ -1298,8 +1298,8 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
 
     assert total == 2
     assert total_2 == 2
-    assert {"value": "bot:rival-a", "group": "Bots", "count": 1} in filter_options["opponent"]
-    assert {"value": "human:rival-b", "group": "Humans", "count": 1} in filter_options["opponent"]
+    assert {"value": "rival-a", "group": "Bots", "count": 1} in filter_options["opponent"]
+    assert {"value": "rival-b", "group": "Humans", "count": 1} in filter_options["opponent"]
     assert page_1[0]["game_code"] == "A7K2M9"
     assert page_1[0]["rule_variant"] is None
     assert page_1[0]["opponent"] == "rival-a"
@@ -1444,7 +1444,7 @@ async def test_get_game_history_filters_and_sorts_before_paginating() -> None:
         str(user_id),
         page=1,
         per_page=100,
-        filters={"opponent": ["bot:bot_gemini31_lite"]},
+        filters={"opponent": ["bot_gemini31_lite"]},
         sort_key="turns",
         sort_direction="desc",
     )
@@ -1452,8 +1452,8 @@ async def test_get_game_history_filters_and_sorts_before_paginating() -> None:
     assert total == 1
     assert [game["game_code"] for game in page] == ["BOT001"]
     assert {option["value"] for option in filter_options["opponent"]} == {
-        "bot:bot_gemini31_lite",
-        "bot:randobot",
+        "bot_gemini31_lite",
+        "randobot",
     }
 
     no_sort_page, _, _ = await service.get_game_history(
@@ -1548,7 +1548,7 @@ async def test_get_game_history_uses_aggregation_for_filtered_rows_without_facet
         str(user_id),
         page=1,
         per_page=100,
-        filters={"opponent": ["bot:randobot"]},
+        filters={"opponent": ["randobot"]},
         sort_key="turns",
         sort_direction="desc",
         include_filter_options=False,
@@ -1561,7 +1561,9 @@ async def test_get_game_history_uses_aggregation_for_filtered_rows_without_facet
     assert archives.find_calls == []
     assert len(archives.aggregate_calls) == 1
     pipeline = archives.aggregate_calls[0]
-    assert {"$match": {"history_filter_opponent": {"$in": ["bot:randobot"]}}} in pipeline
+    assert {
+        "$match": {"history_filter_opponent": {"$in": ["randobot", "human:randobot", "bot:randobot"]}}
+    } in pipeline
     assert pipeline[-1]["$facet"]["rows"][0]["$sort"]["history_turns"] == -1
 
 
@@ -1625,7 +1627,7 @@ async def test_get_game_history_aggregation_filters_by_result_after_materializin
         str(user_id),
         page=1,
         per_page=100,
-        filters={"opponent": ["human:notifil"], "result": ["win"]},
+        filters={"opponent": ["notifil"], "result": ["win"]},
         include_filter_options=False,
     )
 
@@ -1644,7 +1646,7 @@ async def test_get_game_history_aggregation_filters_by_result_after_materializin
         "$match": {
             "$and": [
                 {"history_filter_result": {"$in": ["win"]}},
-                {"history_filter_opponent": {"$in": ["human:notifil"]}},
+                {"history_filter_opponent": {"$in": ["notifil", "human:notifil", "bot:notifil"]}},
             ]
         }
     } in pipeline
@@ -1820,6 +1822,8 @@ def test_helper_edges_cover_password_parsing_datetime_and_result_reasoning() -> 
     )
     assert UserService._normalized_result_reason({"moves": [{"special_announcement": "STALEMATE_BLACK_WINS"}]}) == "stalemate"
     assert UserService._normalized_result_reason({"moves": [{"special_announcement": "CHECKMATE_BLACK_WINS"}]}) == "checkmate"
+    assert UserService._history_opponent_filter_matches("human:notifil", ["notifil"]) is True
+    assert UserService._history_opponent_filter_matches("human:notifil", ["bot:*"]) is False
 
 
 def test_remaining_user_service_helper_edges(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -44,7 +44,7 @@ class StubService:
                 ],
                 1,
                 {
-                    "opponent": [{"value": "bot:rival", "group": "Bots", "count": 1}],
+                    "opponent": [{"value": "rival", "group": "Bots", "count": 1}],
                     "rule_set": [{"value": "berkeley_any", "group": "", "count": 1}],
                     "color": [{"value": "white", "group": "", "count": 1}],
                     "result": [{"value": "win", "group": "", "count": 1}],
@@ -54,7 +54,7 @@ class StubService:
         )
         self.get_game_history_filter_options = AsyncMock(
             return_value={
-                "opponent": [{"value": "bot:rival", "group": "Bots", "count": 1}],
+                "opponent": [{"value": "rival", "group": "Bots", "count": 1}],
                 "rule_set": [{"value": "berkeley_any", "group": "", "count": 1}],
                 "color": [{"value": "white", "group": "", "count": 1}],
                 "result": [{"value": "win", "group": "", "count": 1}],
@@ -188,7 +188,7 @@ def test_user_routes_profile_games_leaderboard_and_settings_auth_gate() -> None:
 
     assert history.status_code == 200
     assert history.json()["pagination"]["total"] == 1
-    assert history.json()["filter_options"]["opponent"][0]["value"] == "bot:rival"
+    assert history.json()["filter_options"]["opponent"][0]["value"] == "rival"
 
     assert leaderboard.status_code == 200
     assert leaderboard.json()["players"][0]["rank"] == 1
@@ -215,13 +215,13 @@ def test_user_games_route_passes_sort_filters_and_facets() -> None:
         history = client.get(
             "/api/user/playerone/games"
             "?page=2&per_page=500&sort=turns&dir=asc"
-            "&opponent=bot%3Arandobot,bot%3Abot_gemini31_lite"
+            "&opponent=randobot,bot%3Abot_gemini31_lite"
             "&result=win&rule_set=berkeley_any&color=white&reason=timeout"
             "&include_filter_options=false"
         )
 
     assert history.status_code == 200
-    assert history.json()["filter_options"]["opponent"][0]["value"] == "bot:rival"
+    assert history.json()["filter_options"]["opponent"][0]["value"] == "rival"
     service.get_game_history.assert_awaited_once_with(
         ANY,
         "507f1f77bcf86cd799439011",
@@ -230,7 +230,7 @@ def test_user_games_route_passes_sort_filters_and_facets() -> None:
         filters={
             "rule_set": ["berkeley_any"],
             "color": ["white"],
-            "opponent": ["bot:randobot", "bot:bot_gemini31_lite"],
+            "opponent": ["randobot", "bot:bot_gemini31_lite"],
             "result": ["win"],
             "reason": ["timeout"],
         },
@@ -260,7 +260,7 @@ def test_user_game_filter_options_route_returns_facets() -> None:
         response = client.get("/api/user/playerone/games/filter-options")
 
     assert response.status_code == 200
-    assert response.json()["filter_options"]["opponent"][0]["value"] == "bot:rival"
+    assert response.json()["filter_options"]["opponent"][0]["value"] == "rival"
     service.get_game_history_filter_options.assert_awaited_once_with(db, "507f1f77bcf86cd799439011")
 
 
