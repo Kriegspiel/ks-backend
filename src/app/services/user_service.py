@@ -26,6 +26,7 @@ DEFAULT_BOT_OWNER_EMAIL = "bots@kriegspiel.org"
 USER_GAME_HISTORY_MAX_PER_PAGE = 10000
 USER_GAME_HISTORY_EMPTY_FILTER = "__empty__"
 USER_GAME_HISTORY_FILTER_KEYS = ("rule_set", "color", "opponent", "result", "reason")
+USER_GAME_HISTORY_OPPONENT_GROUP_FILTERS = {"human:*": "human", "bot:*": "bot"}
 USER_GAME_HISTORY_SORT_KEYS = frozenset(
     ("rule_set", "color", "opponent", "result", "reason", "turns", "played_at", "review", "none")
 )
@@ -388,9 +389,22 @@ class UserService:
     @staticmethod
     def _history_record_matches_filters(record: dict[str, Any], filters: dict[str, list[str]]) -> bool:
         for key, selected in filters.items():
-            if selected and record["filters"].get(key) not in selected:
+            if not selected:
+                continue
+            if key == "opponent":
+                if not UserService._history_opponent_filter_matches(record["filters"].get(key, ""), selected):
+                    return False
+                continue
+            if record["filters"].get(key) not in selected:
                 return False
         return True
+
+    @staticmethod
+    def _history_opponent_filter_matches(value: str, selected: list[str]) -> bool:
+        if value in selected:
+            return True
+        group = value.split(":", 1)[0]
+        return any(USER_GAME_HISTORY_OPPONENT_GROUP_FILTERS.get(candidate) == group for candidate in selected)
 
     @staticmethod
     def _history_has_filters(filters: dict[str, list[str]]) -> bool:
@@ -531,14 +545,34 @@ class UserService:
             return None
 
         match_filters: dict[str, Any] = {}
+        match_conditions: list[dict[str, Any]] = []
         field_by_filter = {
             "rule_set": "history_filter_rule_set",
             "color": "history_filter_color",
-            "opponent": "history_filter_opponent",
             "result": "history_filter_result",
         }
         for key, values in filters.items():
-            if values and key in field_by_filter:
+            if not values:
+                continue
+            if key == "opponent":
+                exact_values = [value for value in values if value not in USER_GAME_HISTORY_OPPONENT_GROUP_FILTERS]
+                groups = sorted(
+                    {
+                        group
+                        for value in values
+                        if (group := USER_GAME_HISTORY_OPPONENT_GROUP_FILTERS.get(value)) is not None
+                    }
+                )
+                opponent_conditions = []
+                if exact_values:
+                    opponent_conditions.append({"history_filter_opponent": {"$in": exact_values}})
+                if groups:
+                    opponent_conditions.append({"history_opponent_group": {"$in": groups}})
+                if len(opponent_conditions) == 1:
+                    match_conditions.append(opponent_conditions[0])
+                elif opponent_conditions:
+                    match_conditions.append({"$or": opponent_conditions})
+            elif key in field_by_filter:
                 match_filters[field_by_filter[key]] = {"$in": values}
 
         sort_field_by_key = {
@@ -617,7 +651,11 @@ class UserService:
             },
         ]
         if match_filters:
-            pipeline.append({"$match": match_filters})
+            match_conditions.insert(0, match_filters)
+        if len(match_conditions) == 1:
+            pipeline.append({"$match": match_conditions[0]})
+        elif match_conditions:
+            pipeline.append({"$match": {"$and": match_conditions}})
         pipeline.append(
             {
                 "$facet": {
