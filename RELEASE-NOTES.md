@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.61
+
+- **Bot Matrix Usage Averages**: include known usage rows stored under legacy
+  bot usernames and game-code identifiers when computing matchup token and cost
+  averages.
+
 ## ks-backend v. 1.3.60
 
 - **Game History API**: apply user-history sort and categorical filters before

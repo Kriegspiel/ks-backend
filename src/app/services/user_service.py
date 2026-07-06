@@ -50,6 +50,18 @@ BOT_MATRIX_PERIOD_DAY_WINDOWS = {
 BOT_MATRIX_PERIODS = frozenset({"today", "week", "month", "year", "lifetime"})
 BOT_MATRIX_USAGE_RECORD_START = datetime(2026, 7, 4, tzinfo=UTC)
 BOT_MATRIX_USAGE_RECORD_START_LABEL = "2026-07-04"
+BOT_MATRIX_USAGE_USERNAME_ALIASES = {
+    "haiku": "llm_haiku",
+    "gptnano": "llm_gptnano",
+    "bot_gemini25_lite": "llm_gemini25_lite",
+    "bot_deepseekv4_flash": "llm_deepseekv4_flash",
+    "bot_gptoss120b": "llm_gptoss120b",
+    "bot_qwen36_flash": "llm_qwen36_flash",
+    "bot_gemini31_lite": "llm_gemini31_lite",
+    "bot_llama31_8b": "llm_llama31_8b",
+    "openrouter_deepseekv4_flash": "llm_deepseekv4_flash",
+    "openrouter_llama31_8b": "llm_llama31_8b",
+}
 BOT_MATRIX_PLAYER_ORDER = (
     "llm_haiku",
     "llm_gptnano",
@@ -584,6 +596,7 @@ class UserService:
         db: Any,
         *,
         listed_usernames: set[str],
+        listed_username_by_id: dict[str, str],
         cutoff: datetime | None,
         generated_at: datetime,
     ) -> dict[tuple[str, str], dict[str, int | float]]:
@@ -592,14 +605,32 @@ class UserService:
             return {}
 
         usage_cutoff = self._bot_matrix_usage_cutoff(cutoff)
+        usage_names = set(listed_usernames)
+        usage_names.update(
+            alias for alias, canonical in BOT_MATRIX_USAGE_USERNAME_ALIASES.items() if canonical in listed_usernames
+        )
+        usage_user_ids = sorted(listed_username_by_id)
+        usage_name_filter = {"bot_username": {"$in": sorted(usage_names)}}
+        usage_id_filter = {"bot_user_id": {"$in": usage_user_ids}}
+        date_filters = [
+            {"recorded_at": {"$gte": usage_cutoff, "$lte": generated_at}},
+            {"created_at": {"$gte": usage_cutoff, "$lte": generated_at}},
+        ]
+        identity_filters = [usage_name_filter]
+        if usage_user_ids:
+            identity_filters.append(usage_id_filter)
         query = {
-            "bot_username": {"$in": sorted(listed_usernames)},
-            "recorded_at": {"$gte": usage_cutoff, "$lte": generated_at},
+            "$or": [
+                {**identity_filter, **date_filter}
+                for identity_filter in identity_filters
+                for date_filter in date_filters
+            ]
         }
         projection = {
             "game_id": 1,
             "game_code": 1,
             "bot_username": 1,
+            "bot_user_id": 1,
             "input_tokens": 1,
             "output_tokens": 1,
             "cache_read_input_tokens": 1,
@@ -609,14 +640,17 @@ class UserService:
         }
         usage_by_game: dict[tuple[str, str], dict[str, int | float]] = {}
         async for record in self._find(usage_collection, query, projection):
-            username = str(record.get("bot_username") or "").strip()
+            raw_username = str(record.get("bot_username") or "").strip()
+            username = BOT_MATRIX_USAGE_USERNAME_ALIASES.get(raw_username, raw_username)
+            if username not in listed_usernames:
+                user_id = str(record.get("bot_user_id") or "").strip()
+                username = listed_username_by_id.get(user_id, username)
             if username not in listed_usernames:
                 continue
 
-            game_keys = [
-                str(record.get("game_id") or "").strip(),
-                str(record.get("game_code") or "").strip().upper(),
-            ]
+            raw_game_id = str(record.get("game_id") or "").strip()
+            raw_game_code = str(record.get("game_code") or "").strip()
+            game_keys = [raw_game_id, raw_game_id.upper(), raw_game_code, raw_game_code.upper()]
             total_tokens = self._bot_matrix_usage_int(record, "total_tokens")
             if total_tokens <= 0:
                 total_tokens = (
@@ -2016,6 +2050,7 @@ class UserService:
         usage_records = await self._bot_matrix_usage_records(
             db,
             listed_usernames=listed_username_set,
+            listed_username_by_id=listed_username_by_id,
             cutoff=cutoff,
             generated_at=generated_at,
         )
