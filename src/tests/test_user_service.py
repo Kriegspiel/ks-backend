@@ -2726,6 +2726,30 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
                 "black": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
                 "result": {"winner": None, "reason": "insufficient"},
                 "move_count": 10,
+                "stats": {
+                    "llm_usage": {
+                        "white": {
+                            "user_id": "nano-id",
+                            "username": "llm_gptnano",
+                            "calls": 2,
+                            "input_tokens": 100,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 15,
+                            "total_tokens": 115,
+                            "cost_usd": 0.024,
+                        },
+                        "black": {
+                            "user_id": "haiku-id",
+                            "username": "llm_haiku",
+                            "calls": 2,
+                            "input_tokens": 150,
+                            "cached_input_tokens": 20,
+                            "output_tokens": 30,
+                            "total_tokens": 180,
+                            "cost_usd": 0.015,
+                        },
+                    }
+                },
             },
             {
                 "state": "completed",
@@ -2747,59 +2771,9 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
             },
         ]
     )
-    usage_records = FakeUsersCollection()
-    usage_records.docs.extend(
-        [
-            {
-                "game_id": "today1",
-                "bot_username": "haiku",
-                "input_tokens": 100,
-                "output_tokens": 25,
-                "total_tokens": 125,
-                "cost_usd": 0.01,
-                "created_at": datetime(2026, 7, 5, 9, 1, tzinfo=UTC),
-            },
-            {
-                "game_id": "TODAY1",
-                "bot_user_id": "haiku-id",
-                "input_tokens": 50,
-                "cached_input_tokens": 20,
-                "output_tokens": 5,
-                "total_tokens": 55,
-                "cost_usd": 0.005,
-                "recorded_at": datetime(2026, 7, 5, 9, 2, tzinfo=UTC),
-            },
-            {
-                "game_id": "TODAY1",
-                "bot_username": "gptnano",
-                "input_tokens": 70,
-                "output_tokens": 5,
-                "total_tokens": 75,
-                "cost_usd": 0.02,
-                "created_at": datetime(2026, 7, 5, 9, 3, tzinfo=UTC),
-            },
-            {
-                "game_id": "TODAY1",
-                "bot_username": "openrouterbot",
-                "model": "gpt-5.4-nano",
-                "input_tokens": 30,
-                "output_tokens": 10,
-                "total_tokens": 40,
-                "cost_usd": 0.004,
-                "recorded_at": datetime(2026, 7, 5, 9, 4, tzinfo=UTC),
-            },
-            {
-                "game_id": "OLD001",
-                "bot_username": "haiku",
-                "total_tokens": 999999,
-                "cost_usd": 9.99,
-                "recorded_at": datetime(2026, 7, 4, 12, tzinfo=UTC),
-            },
-        ]
-    )
 
     report = await UserService(users).get_bot_matrix_report(
-        FakeDB(users=users, game_archives=archives, bot_usage_records=usage_records),
+        FakeDB(users=users, game_archives=archives),
         period="today",
         now=now,
     )
@@ -2879,37 +2853,25 @@ async def test_get_bot_matrix_report_maps_generic_openrouter_usage_by_model() ->
             "black": {"user_id": "llama-id", "username": "llm_llama31_8b", "role": "bot"},
             "result": {"winner": "white", "reason": "timeout"},
             "move_count": 355,
+            "stats": {
+                "llm_usage": {
+                    "black": {
+                        "user_id": "llama-id",
+                        "username": "llm_llama31_8b",
+                        "calls": 1,
+                        "input_tokens": 1000,
+                        "cached_input_tokens": 200,
+                        "output_tokens": 50,
+                        "total_tokens": 1050,
+                        "cost_usd": 0.00123,
+                    }
+                }
+            },
         }
-    )
-    usage_records = FakeUsersCollection()
-    usage_records.docs.extend(
-        [
-            {
-                "game_id": "llama-game-id",
-                "bot_username": "openrouterbot",
-                "model": "meta-llama/llama-3.1-8b-instruct",
-                "input_tokens": 1000,
-                "cached_input_tokens": 200,
-                "output_tokens": 50,
-                "total_tokens": 1050,
-                "cost_usd": 0.00123,
-                "recorded_at": datetime(2026, 7, 5, 11, 1, tzinfo=UTC),
-            },
-            {
-                "game_id": "llama-game-id",
-                "bot_username": "openrouterbot",
-                "model": "unknown-model",
-                "input_tokens": 999,
-                "output_tokens": 999,
-                "total_tokens": 1998,
-                "cost_usd": 9.99,
-                "recorded_at": datetime(2026, 7, 5, 11, 2, tzinfo=UTC),
-            },
-        ]
     )
 
     report = await UserService(users).get_bot_matrix_report(
-        FakeDB(users=users, game_archives=archives, bot_usage_records=usage_records),
+        FakeDB(users=users, game_archives=archives),
         period="lifetime",
         now=datetime(2026, 7, 5, 12, tzinfo=UTC),
     )

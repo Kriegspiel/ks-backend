@@ -88,6 +88,33 @@ def test_game_document_from_mongo_allows_documents_without_id() -> None:
     assert doc.id is None
 
 
+def test_game_document_accepts_llm_usage_stats() -> None:
+    now = datetime.now(UTC)
+
+    doc = GameDocument.from_mongo(
+        {
+            "game_code": "A7K2M9",
+            "white": {"user_id": "bot1", "username": "llm_gptnano", "connected": True, "role": "bot"},
+            "state": "completed",
+            "created_at": now,
+            "updated_at": now,
+            "stats": {
+                "llm_usage": {
+                    "white": {
+                        "username": "llm_gptnano",
+                        "calls": 1,
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cost_usd": 0.001,
+                    }
+                }
+            },
+        }
+    )
+
+    assert doc.stats["llm_usage"]["white"]["calls"] == 1
+
+
 def test_create_game_request_defaults() -> None:
     req = CreateGameRequest.model_validate({})
 

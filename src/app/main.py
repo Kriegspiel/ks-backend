@@ -16,6 +16,7 @@ from app.dependencies import get_current_user
 from app.logging_config import configure_logging
 from app.monitoring import capture_backend_restart, configure_sentry
 from app.services.archive_turn_counts import run_archive_turn_count_migration_once
+from app.services.bot_usage_game_stats import run_bot_usage_game_stats_migration_once
 from app.routers.analytics import router as analytics_router
 from app.routers.auth import router as auth_router
 from app.routers.bot import router as bot_router
@@ -37,6 +38,16 @@ async def _run_archive_turn_count_migration(app: FastAPI) -> None:
         raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("archive_turn_count_migration_failed", error_type=type(exc).__name__)
+
+
+async def _run_bot_usage_game_stats_migration(app: FastAPI) -> None:
+    try:
+        summary = await run_bot_usage_game_stats_migration_once(app.state.db)
+        logger.info("bot_usage_game_stats_migration_complete", **summary)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("bot_usage_game_stats_migration_failed", error_type=type(exc).__name__)
 
 
 def build_cors_origins(settings: Settings) -> list[str]:
@@ -121,6 +132,7 @@ async def lifespan(app: FastAPI):
     app.state.session_service = None
     app.state.analytics_service = None
     app.state.archive_turn_count_migration_task = None
+    app.state.bot_usage_game_stats_migration_task = None
 
     try:
         db = await init_db(app.state.settings)
@@ -138,6 +150,10 @@ async def lifespan(app: FastAPI):
         app.state.archive_turn_count_migration_task = asyncio.create_task(
             _run_archive_turn_count_migration(app),
             name="archive-turn-count-migration",
+        )
+        app.state.bot_usage_game_stats_migration_task = asyncio.create_task(
+            _run_bot_usage_game_stats_migration(app),
+            name="bot-usage-game-stats-migration",
         )
         restart_event_id = capture_backend_restart(app.state.settings)
         logger.info("db_init_success", sentry_restart_event_id=restart_event_id)
@@ -163,6 +179,13 @@ async def lifespan(app: FastAPI):
             migration_task.cancel()
             try:
                 await migration_task
+            except asyncio.CancelledError:
+                pass
+        usage_migration_task = getattr(app.state, "bot_usage_game_stats_migration_task", None)
+        if usage_migration_task is not None and not usage_migration_task.done():
+            usage_migration_task.cancel()
+            try:
+                await usage_migration_task
             except asyncio.CancelledError:
                 pass
         await close_db()

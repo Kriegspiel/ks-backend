@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -17,6 +17,7 @@ from app.llm_bot_policy import (
     normalize_llm_bot_tier,
     tier_allows_llm_bots,
 )
+from app.services.game_usage_stats import LlmUsageReport, store_llm_usage_in_game_stats
 
 
 MODEL_AVAILABILITY_REQUIRED_BOTS = {
@@ -36,13 +37,13 @@ class BotService:
         self,
         users_collection: Any,
         *,
-        usage_collection: Any | None = None,
         game_collections: tuple[Any, ...] = (),
+        game_usage_recorder: Callable[[LlmUsageReport], Awaitable[bool]] | None = None,
         now_factory: Callable[[], datetime] | None = None,
     ):
         self._users = users_collection
-        self._usage = usage_collection
         self._game_collections = tuple(collection for collection in game_collections if collection is not None)
+        self._game_usage_recorder = game_usage_recorder
         self._now_factory = now_factory or (lambda: datetime.now(UTC))
 
     @staticmethod
@@ -159,59 +160,10 @@ class BotService:
         return None
 
     async def record_usage(self, *, user_id: str, username: str, payload: BotUsageReportRequest) -> bool:
-        if self._usage is None:
-            return False
-
-        now = self._now_factory()
-        response_id = payload.response_id.strip() if isinstance(payload.response_id, str) else None
-        total_tokens = int(payload.total_tokens or 0)
-        if total_tokens <= 0:
-            total_tokens = (
-                int(payload.input_tokens)
-                + int(payload.output_tokens)
-                + int(payload.cache_read_input_tokens)
-                + int(payload.cache_creation_input_tokens)
-            )
-
-        game_code = (
-            payload.game_code.strip().upper()
-            if isinstance(payload.game_code, str) and payload.game_code.strip()
-            else None
-        )
-
-        record = {
-            "game_id": payload.game_id.strip(),
-            "game_code": game_code,
-            "bot_user_id": str(user_id),
-            "bot_username": username.strip(),
-            "provider": payload.provider.strip().lower(),
-            "model": payload.model.strip(),
-            "input_tokens": int(payload.input_tokens),
-            "cached_input_tokens": int(payload.cached_input_tokens),
-            "output_tokens": int(payload.output_tokens),
-            "cache_read_input_tokens": int(payload.cache_read_input_tokens),
-            "cache_creation_input_tokens": int(payload.cache_creation_input_tokens),
-            "total_tokens": total_tokens,
-            "cost_usd": float(payload.cost_usd),
-            "recorded_at": now,
-            "updated_at": now,
-        }
-        if response_id:
-            record["response_id"] = response_id
-
-        if response_id:
-            await self._usage.update_one(
-                {"bot_user_id": str(user_id), "response_id": response_id},
-                {
-                    "$set": record,
-                    "$setOnInsert": {"created_at": now},
-                },
-                upsert=True,
-            )
-        else:
-            record["created_at"] = now
-            await self._usage.insert_one(record)
-        return True
+        report = LlmUsageReport.from_payload(user_id=user_id, username=username, payload=payload)
+        if self._game_usage_recorder is not None:
+            return await self._game_usage_recorder(report)
+        return await store_llm_usage_in_game_stats(self._game_collections, report, now=self._now_factory())
 
     async def sync_supported_rule_variants(
         self,
@@ -282,6 +234,12 @@ class BotService:
                     {f"{side}.username": old_username},
                     {"$set": {f"{side}.username": new_username}},
                 )
+                await collection.update_many(
+                    {f"stats.llm_usage.{side}.user_id": user_id},
+                    {"$set": {f"stats.llm_usage.{side}.username": new_username}},
+                )
+                await collection.update_many(
+                    {f"stats.llm_usage.{side}.username": old_username},
+                    {"$set": {f"stats.llm_usage.{side}.username": new_username}},
+                )
             await collection.update_many({"created_by": old_username}, {"$set": {"created_by": new_username}})
-        if self._usage is not None:
-            await self._usage.update_many({"bot_username": old_username}, {"$set": {"bot_username": new_username}})

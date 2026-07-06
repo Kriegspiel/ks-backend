@@ -50,6 +50,7 @@ class GameDocument(BaseModel):
     moves: list[dict[str, Any]] = Field(default_factory=list)
     result: dict[str, Any] | None = None
     time_control: dict[str, Any] | None = None
+    stats: dict[str, Any] | None = None
     rating_snapshot: dict[str, Any] | None = None
     stats_recorded_at: datetime | None = None
 
