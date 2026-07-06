@@ -385,6 +385,46 @@ class UserService:
         return True
 
     @staticmethod
+    def _history_has_filters(filters: dict[str, list[str]]) -> bool:
+        return any(values for values in filters.values())
+
+    @staticmethod
+    def _history_uses_default_date_sort(*, sort_key: str | None, sort_direction: str) -> bool:
+        if sort_key == "none":
+            return True
+        key = sort_key or "played_at"
+        return key == "played_at" and sort_direction != "asc"
+
+    @staticmethod
+    def _history_empty_filter_expression(value_expression: Any) -> dict[str, Any]:
+        return {
+            "$cond": [
+                {
+                    "$or": [
+                        {"$eq": [value_expression, None]},
+                        {"$eq": [value_expression, ""]},
+                    ]
+                },
+                USER_GAME_HISTORY_EMPTY_FILTER,
+                value_expression,
+            ]
+        }
+
+    @classmethod
+    def _history_aggregation_supported(
+        cls,
+        *,
+        filters: dict[str, list[str]],
+        sort_key: str | None,
+        include_filter_options: bool,
+    ) -> bool:
+        if include_filter_options:
+            return False
+        if filters.get("reason"):
+            return False
+        return sort_key != "reason"
+
+    @staticmethod
     def _history_compare_values(left: Any, right: Any, *, direction: str) -> int:
         left_missing = left in {None, "", USER_GAME_HISTORY_EMPTY_FILTER}
         right_missing = right in {None, "", USER_GAME_HISTORY_EMPTY_FILTER}
@@ -427,6 +467,171 @@ class UserService:
             )
 
         return sorted(records, key=cmp_to_key(compare))
+
+    @classmethod
+    async def _history_records_for_side(
+        cls,
+        db: Any,
+        *,
+        user_id: str,
+        side: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        cursor = cls._find(
+            db.game_archives,
+            {f"{side}.user_id": user_id},
+            USER_GAME_HISTORY_PROJECTION,
+        ).sort([("updated_at", -1), ("created_at", -1)]).limit(limit)
+        records: list[dict[str, Any]] = []
+        async for game in cursor:
+            records.append(cls._history_record_for_player(game, user_id=user_id))
+        return records
+
+    @classmethod
+    async def _history_default_date_page(
+        cls,
+        db: Any,
+        *,
+        user_id: str,
+        offset: int,
+        per_page: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        scan_limit = offset + per_page
+        white_total = await db.game_archives.count_documents({"white.user_id": user_id})
+        black_total = await db.game_archives.count_documents({"black.user_id": user_id})
+        records = []
+        records.extend(await cls._history_records_for_side(db, user_id=user_id, side="white", limit=scan_limit))
+        records.extend(await cls._history_records_for_side(db, user_id=user_id, side="black", limit=scan_limit))
+        sorted_records = cls._sort_history_records(records, sort_key="played_at", sort_direction="desc")
+        page_records = sorted_records[offset:offset + per_page]
+        return [record["payload"] for record in page_records], white_total + black_total
+
+    @classmethod
+    async def _history_aggregate_page(
+        cls,
+        db: Any,
+        *,
+        user_id: str,
+        offset: int,
+        per_page: int,
+        filters: dict[str, list[str]],
+        sort_key: str | None,
+        sort_direction: str,
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        aggregate = getattr(db.game_archives, "aggregate", None)
+        if not callable(aggregate):
+            return None
+
+        match_filters: dict[str, Any] = {}
+        field_by_filter = {
+            "rule_set": "history_filter_rule_set",
+            "color": "history_filter_color",
+            "opponent": "history_filter_opponent",
+            "result": "history_filter_result",
+        }
+        for key, values in filters.items():
+            if values and key in field_by_filter:
+                match_filters[field_by_filter[key]] = {"$in": values}
+
+        sort_field_by_key = {
+            "rule_set": "history_filter_rule_set",
+            "color": "history_filter_color",
+            "opponent": "history_sort_opponent",
+            "result": "history_filter_result",
+            "turns": "history_turns",
+            "played_at": "history_played_at",
+            "review": "history_review",
+        }
+        key = sort_key if sort_key in USER_GAME_HISTORY_SORT_KEYS else "played_at"
+        if key == "none":
+            key = "played_at"
+            direction = -1
+        else:
+            direction = 1 if sort_direction == "asc" else -1
+        sort_field = sort_field_by_key.get(key, "history_played_at")
+        sort_spec = {sort_field: direction}
+        if sort_field != "history_played_at":
+            sort_spec["history_played_at"] = -1
+        sort_spec["_id"] = -1
+
+        opponent_name = cls._history_empty_filter_expression("$history_opponent.username")
+        pipeline = [
+            {
+                "$match": {
+                    "$or": [
+                        {"white.user_id": user_id},
+                        {"black.user_id": user_id},
+                    ]
+                }
+            },
+            {
+                "$addFields": {
+                    "history_play_as": {"$cond": [{"$eq": ["$white.user_id", user_id]}, "white", "black"]},
+                    "history_opponent": {"$cond": [{"$eq": ["$white.user_id", user_id]}, "$black", "$white"]},
+                    "history_played_at": {"$ifNull": ["$updated_at", "$created_at"]},
+                    "history_review": {"$ifNull": ["$game_code", {"$toString": "$_id"}]},
+                    "history_turn_count_number": {
+                        "$convert": {"input": "$turn_count", "to": "int", "onError": None, "onNull": None}
+                    },
+                    "history_move_count_number": {
+                        "$convert": {"input": "$move_count", "to": "int", "onError": 0, "onNull": 0}
+                    },
+                }
+            },
+            {
+                "$addFields": {
+                    "history_turns": {
+                        "$ifNull": [
+                            "$history_turn_count_number",
+                            {"$ceil": {"$divide": ["$history_move_count_number", 2]}},
+                        ]
+                    },
+                    "history_result": {
+                        "$cond": [
+                            {"$eq": ["$result.winner", None]},
+                            "draw",
+                            {"$cond": [{"$eq": ["$result.winner", "$history_play_as"]}, "win", "loss"]},
+                        ]
+                    },
+                    "history_opponent_group": {
+                        "$cond": [{"$eq": [{"$toLower": {"$ifNull": ["$history_opponent.role", ""]}}, "bot"]}, "bot", "human"]
+                    },
+                    "history_filter_rule_set": cls._history_empty_filter_expression("$rule_variant"),
+                    "history_filter_color": "$history_play_as",
+                    "history_filter_result": cls._history_empty_filter_expression("$history_result"),
+                    "history_sort_opponent": opponent_name,
+                }
+            },
+            {
+                "$addFields": {
+                    "history_filter_opponent": {"$concat": ["$history_opponent_group", ":", opponent_name]},
+                }
+            },
+        ]
+        if match_filters:
+            pipeline.append({"$match": match_filters})
+        pipeline.append(
+            {
+                "$facet": {
+                    "rows": [
+                        {"$sort": sort_spec},
+                        {"$skip": offset},
+                        {"$limit": per_page},
+                        {"$project": USER_GAME_HISTORY_PROJECTION},
+                    ],
+                    "total": [{"$count": "count"}],
+                }
+            }
+        )
+
+        cursor = aggregate(pipeline)
+        async for result in cursor:
+            rows = result.get("rows") if isinstance(result, dict) else []
+            total_rows = result.get("total") if isinstance(result, dict) else []
+            total = total_rows[0].get("count", 0) if total_rows else 0
+            page = [cls._history_record_for_player(game, user_id=user_id)["payload"] for game in rows]
+            return page, total
+        return [], 0
 
     @staticmethod
     def _bot_matrix_period_cutoff(*, period: str, now: datetime) -> datetime | None:
@@ -1413,6 +1618,7 @@ class UserService:
         filters: dict[str, list[str]] | None = None,
         sort_key: str | None = None,
         sort_direction: str = "desc",
+        include_filter_options: bool = True,
     ) -> tuple[list[dict[str, Any]], int, dict[str, list[dict[str, Any]]]]:
         bounded_page = max(page, 1)
         bounded_per_page = min(max(per_page, 1), USER_GAME_HISTORY_MAX_PER_PAGE)
@@ -1430,12 +1636,44 @@ class UserService:
             for key, values in (filters or {}).items()
             if key in USER_GAME_HISTORY_FILTER_KEYS
         }
+
+        if (
+            not include_filter_options
+            and not self._history_has_filters(normalized_filters)
+            and self._history_uses_default_date_sort(sort_key=sort_key, sort_direction=sort_direction)
+        ):
+            games, total = await self._history_default_date_page(
+                db,
+                user_id=user_id,
+                offset=offset,
+                per_page=bounded_per_page,
+            )
+            return games, total, {}
+
+        if self._history_aggregation_supported(
+            filters=normalized_filters,
+            sort_key=sort_key,
+            include_filter_options=include_filter_options,
+        ):
+            aggregate_page = await self._history_aggregate_page(
+                db,
+                user_id=user_id,
+                offset=offset,
+                per_page=bounded_per_page,
+                filters=normalized_filters,
+                sort_key=sort_key,
+                sort_direction=sort_direction,
+            )
+            if aggregate_page is not None:
+                games, total = aggregate_page
+                return games, total, {}
+
         records: list[dict[str, Any]] = []
         cursor = self._find(db.game_archives, query, USER_GAME_HISTORY_PROJECTION)
         async for game in cursor:
             records.append(self._history_record_for_player(game, user_id=user_id))
 
-        filter_options = self._history_filter_options(records)
+        filter_options = self._history_filter_options(records) if include_filter_options else {}
         filtered_records = [
             record for record in records if self._history_record_matches_filters(record, normalized_filters)
         ]
@@ -1447,6 +1685,23 @@ class UserService:
         page_records = sorted_records[offset:offset + bounded_per_page]
 
         return [record["payload"] for record in page_records], len(filtered_records), filter_options
+
+    async def get_game_history_filter_options(
+        self,
+        db: Any,
+        user_id: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        query = {
+            "$or": [
+                {"white.user_id": user_id},
+                {"black.user_id": user_id},
+            ]
+        }
+        records: list[dict[str, Any]] = []
+        cursor = self._find(db.game_archives, query, USER_GAME_HISTORY_PROJECTION)
+        async for game in cursor:
+            records.append(self._history_record_for_player(game, user_id=user_id))
+        return self._history_filter_options(records)
 
     async def update_settings(self, db: Any, user_id: str, settings: dict[str, Any]) -> dict[str, Any]:
         update_fields = {f"settings.{key}": value for key, value in settings.items()}

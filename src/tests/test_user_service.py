@@ -181,6 +181,17 @@ class FakeUsersCollection:
         return result
 
 
+class FakeAggregateCollection(FakeUsersCollection):
+    def __init__(self, aggregate_result: dict) -> None:
+        super().__init__()
+        self.aggregate_calls: list[list[dict]] = []
+        self.aggregate_result = aggregate_result
+
+    def aggregate(self, pipeline: list[dict]):
+        self.aggregate_calls.append(pipeline)
+        return FakeCursor([self.aggregate_result])
+
+
 class FakeDB:
     def __init__(
         self,
@@ -1228,6 +1239,70 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
 
 
 @pytest.mark.asyncio
+async def test_get_game_history_uses_indexed_side_queries_without_filter_options() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "OLD001",
+                "white": {"user_id": str(user_id), "username": "playerone"},
+                "black": {"user_id": "opponent-a", "username": "opponent-a"},
+                "result": {"winner": "white", "reason": "checkmate"},
+                "move_count": 4,
+                "turn_count": 2,
+                "created_at": datetime(2026, 7, 1, tzinfo=UTC),
+                "updated_at": datetime(2026, 7, 1, tzinfo=UTC),
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "NEW001",
+                "white": {"user_id": "opponent-b", "username": "opponent-b"},
+                "black": {"user_id": str(user_id), "username": "playerone"},
+                "result": {"winner": "black", "reason": "timeout"},
+                "move_count": 8,
+                "turn_count": 4,
+                "created_at": datetime(2026, 7, 3, tzinfo=UTC),
+                "updated_at": datetime(2026, 7, 3, tzinfo=UTC),
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "MID001",
+                "white": {"user_id": str(user_id), "username": "playerone"},
+                "black": {"user_id": "opponent-c", "username": "opponent-c"},
+                "result": {"winner": None, "reason": "stalemate"},
+                "move_count": 6,
+                "turn_count": 3,
+                "created_at": datetime(2026, 7, 2, tzinfo=UTC),
+                "updated_at": datetime(2026, 7, 2, tzinfo=UTC),
+            },
+        ]
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    page, total, filter_options = await service.get_game_history(
+        db,
+        str(user_id),
+        page=1,
+        per_page=2,
+        sort_key="played_at",
+        sort_direction="desc",
+        include_filter_options=False,
+    )
+
+    assert total == 3
+    assert filter_options == {}
+    assert [game["game_code"] for game in page] == ["NEW001", "MID001"]
+    assert archives.find_calls == [
+        ({"white.user_id": str(user_id)}, user_service_module.USER_GAME_HISTORY_PROJECTION),
+        ({"black.user_id": str(user_id)}, user_service_module.USER_GAME_HISTORY_PROJECTION),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_game_history_clamps_direct_service_calls_to_10000_per_page() -> None:
     user_id = ObjectId()
     users = FakeUsersCollection()
@@ -1318,6 +1393,48 @@ async def test_get_game_history_filters_and_sorts_before_paginating() -> None:
     )
 
     assert [game["game_code"] for game in no_sort_page] == ["BOT002", "BOT001"]
+
+
+@pytest.mark.asyncio
+async def test_get_game_history_uses_aggregation_for_filtered_rows_without_facets() -> None:
+    users = FakeUsersCollection()
+    user_id = ObjectId()
+    row = {
+        "_id": ObjectId(),
+        "game_code": "BOT001",
+        "white": {"user_id": str(user_id), "username": "randobotany", "role": "bot"},
+        "black": {"user_id": "bot-random", "username": "randobot", "role": "bot"},
+        "rule_variant": "berkeley_any",
+        "result": {"winner": "white", "reason": "resignation"},
+        "move_count": 8,
+        "turn_count": 4,
+        "created_at": datetime(2026, 7, 1, tzinfo=UTC),
+        "updated_at": datetime(2026, 7, 1, tzinfo=UTC),
+    }
+    archives = FakeAggregateCollection({"rows": [row], "total": [{"count": 1}]})
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    page, total, filter_options = await service.get_game_history(
+        db,
+        str(user_id),
+        page=1,
+        per_page=100,
+        filters={"opponent": ["bot:randobot"]},
+        sort_key="turns",
+        sort_direction="desc",
+        include_filter_options=False,
+    )
+
+    assert total == 1
+    assert filter_options == {}
+    assert [game["game_code"] for game in page] == ["BOT001"]
+    assert page[0]["opponent"] == "randobot"
+    assert archives.find_calls == []
+    assert len(archives.aggregate_calls) == 1
+    pipeline = archives.aggregate_calls[0]
+    assert {"$match": {"history_filter_opponent": {"$in": ["bot:randobot"]}}} in pipeline
+    assert pipeline[-1]["$facet"]["rows"][0]["$sort"]["history_turns"] == -1
 
 
 @pytest.mark.asyncio

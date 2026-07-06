@@ -41,6 +41,12 @@ async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.game_archives.create_index([("game_code", ASCENDING)], unique=True)
     await db.game_archives.create_index([("white.user_id", ASCENDING), ("created_at", ASCENDING)])
     await db.game_archives.create_index([("black.user_id", ASCENDING), ("created_at", ASCENDING)])
+    await db.game_archives.create_index(
+        [("white.user_id", ASCENDING), ("updated_at", DESCENDING), ("created_at", DESCENDING)]
+    )
+    await db.game_archives.create_index(
+        [("black.user_id", ASCENDING), ("updated_at", DESCENDING), ("created_at", DESCENDING)]
+    )
     await db.game_archives.create_index([("result.winner", ASCENDING), ("created_at", ASCENDING)])
     await db.game_archives.create_index([("created_at", DESCENDING)])
     await db.game_archives.create_index([("updated_at", DESCENDING)])

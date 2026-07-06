@@ -52,6 +52,15 @@ class StubService:
                 },
             )
         )
+        self.get_game_history_filter_options = AsyncMock(
+            return_value={
+                "opponent": [{"value": "bot:rival", "group": "Bots", "count": 1}],
+                "rule_set": [{"value": "berkeley_any", "group": "", "count": 1}],
+                "color": [{"value": "white", "group": "", "count": 1}],
+                "result": [{"value": "win", "group": "", "count": 1}],
+                "reason": [{"value": "checkmate", "group": "", "count": 1}],
+            }
+        )
         self.get_rating_history = AsyncMock(return_value={"track": "overall", "points": []})
         self.get_leaderboard = AsyncMock(
             return_value=(
@@ -208,6 +217,7 @@ def test_user_games_route_passes_sort_filters_and_facets() -> None:
             "?page=2&per_page=500&sort=turns&dir=asc"
             "&opponent=bot%3Arandobot,bot%3Abot_gemini31_lite"
             "&result=win&rule_set=berkeley_any&color=white&reason=timeout"
+            "&include_filter_options=false"
         )
 
     assert history.status_code == 200
@@ -226,7 +236,32 @@ def test_user_games_route_passes_sort_filters_and_facets() -> None:
         },
         sort_key="turns",
         sort_direction="asc",
+        include_filter_options=False,
     )
+
+
+def test_user_game_filter_options_route_returns_facets() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    service = StubService()
+    app.dependency_overrides[get_user_service] = lambda: service
+
+    class FakeUsers:
+        async def find_one(self, query):
+            return {"_id": "507f1f77bcf86cd799439011", "username": "playerone"}
+
+    class FakeDB:
+        users = FakeUsers()
+        sessions = object()
+
+    db = FakeDB()
+    dependencies.get_db = lambda: db
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/user/playerone/games/filter-options")
+
+    assert response.status_code == 200
+    assert response.json()["filter_options"]["opponent"][0]["value"] == "bot:rival"
+    service.get_game_history_filter_options.assert_awaited_once_with(db, "507f1f77bcf86cd799439011")
 
 
 def test_tech_report_routes_require_operator_access() -> None:
@@ -305,6 +340,7 @@ def test_user_games_defaults_to_100_per_page() -> None:
         filters={"rule_set": [], "color": [], "opponent": [], "result": [], "reason": []},
         sort_key=None,
         sort_direction="desc",
+        include_filter_options=True,
     )
 
 
@@ -336,6 +372,7 @@ def test_user_games_accepts_10000_per_page() -> None:
         filters={"rule_set": [], "color": [], "opponent": [], "result": [], "reason": []},
         sort_key=None,
         sort_direction="desc",
+        include_filter_options=True,
     )
 
 
