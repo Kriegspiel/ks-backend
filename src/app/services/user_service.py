@@ -653,12 +653,12 @@ class UserService:
                     },
                     "history_filter_rule_set": cls._history_empty_filter_expression("$rule_variant"),
                     "history_filter_color": "$history_play_as",
-                    "history_filter_result": cls._history_empty_filter_expression("$history_result"),
                     "history_sort_opponent": opponent_name,
                 }
             },
             {
                 "$addFields": {
+                    "history_filter_result": cls._history_empty_filter_expression("$history_result"),
                     "history_filter_opponent": {"$concat": ["$history_opponent_group", ":", opponent_name]},
                 }
             },

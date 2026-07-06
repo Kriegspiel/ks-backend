@@ -1602,6 +1602,55 @@ async def test_get_game_history_aggregation_filters_by_opponent_group_tokens() -
 
 
 @pytest.mark.asyncio
+async def test_get_game_history_aggregation_filters_by_result_after_materializing_result() -> None:
+    users = FakeUsersCollection()
+    user_id = ObjectId()
+    row = {
+        "_id": ObjectId(),
+        "game_code": "WIN001",
+        "white": {"user_id": str(user_id), "username": "randobotany", "role": "bot"},
+        "black": {"user_id": "human-rival", "username": "notifil", "role": "user"},
+        "result": {"winner": "white", "reason": "checkmate"},
+        "move_count": 8,
+        "turn_count": 4,
+        "created_at": datetime(2026, 7, 1, tzinfo=UTC),
+        "updated_at": datetime(2026, 7, 1, tzinfo=UTC),
+    }
+    archives = FakeAggregateCollection({"rows": [row], "total": [{"count": 1}]})
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    page, total, filter_options = await service.get_game_history(
+        db,
+        str(user_id),
+        page=1,
+        per_page=100,
+        filters={"opponent": ["human:notifil"], "result": ["win"]},
+        include_filter_options=False,
+    )
+
+    assert total == 1
+    assert filter_options == {}
+    assert [game["game_code"] for game in page] == ["WIN001"]
+    pipeline = archives.aggregate_calls[0]
+    history_result_stage = next(
+        idx for idx, stage in enumerate(pipeline) if "history_result" in stage.get("$addFields", {})
+    )
+    history_filter_result_stage = next(
+        idx for idx, stage in enumerate(pipeline) if "history_filter_result" in stage.get("$addFields", {})
+    )
+    assert history_filter_result_stage > history_result_stage
+    assert {
+        "$match": {
+            "$and": [
+                {"history_filter_result": {"$in": ["win"]}},
+                {"history_filter_opponent": {"$in": ["human:notifil"]}},
+            ]
+        }
+    } in pipeline
+
+
+@pytest.mark.asyncio
 async def test_get_game_history_handles_null_result_documents() -> None:
     users = FakeUsersCollection()
     archives = FakeUsersCollection()
