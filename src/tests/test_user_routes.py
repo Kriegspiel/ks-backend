@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 from fastapi.testclient import TestClient
 
@@ -43,6 +43,13 @@ class StubService:
                     }
                 ],
                 1,
+                {
+                    "opponent": [{"value": "bot:rival", "group": "Bots", "count": 1}],
+                    "rule_set": [{"value": "berkeley_any", "group": "", "count": 1}],
+                    "color": [{"value": "white", "group": "", "count": 1}],
+                    "result": [{"value": "win", "group": "", "count": 1}],
+                    "reason": [{"value": "checkmate", "group": "", "count": 1}],
+                },
             )
         )
         self.get_rating_history = AsyncMock(return_value={"track": "overall", "points": []})
@@ -172,11 +179,54 @@ def test_user_routes_profile_games_leaderboard_and_settings_auth_gate() -> None:
 
     assert history.status_code == 200
     assert history.json()["pagination"]["total"] == 1
+    assert history.json()["filter_options"]["opponent"][0]["value"] == "bot:rival"
 
     assert leaderboard.status_code == 200
     assert leaderboard.json()["players"][0]["rank"] == 1
 
     assert unauth.status_code == 401
+
+
+def test_user_games_route_passes_sort_filters_and_facets() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    service = StubService()
+    app.dependency_overrides[get_user_service] = lambda: service
+
+    class FakeUsers:
+        async def find_one(self, query):
+            return {"_id": "507f1f77bcf86cd799439011", "username": "playerone"}
+
+    class FakeDB:
+        users = FakeUsers()
+        sessions = object()
+
+    dependencies.get_db = lambda: FakeDB()
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        history = client.get(
+            "/api/user/playerone/games"
+            "?page=2&per_page=500&sort=turns&dir=asc"
+            "&opponent=bot%3Arandobot,bot%3Abot_gemini31_lite"
+            "&result=win&rule_set=berkeley_any&color=white&reason=timeout"
+        )
+
+    assert history.status_code == 200
+    assert history.json()["filter_options"]["opponent"][0]["value"] == "bot:rival"
+    service.get_game_history.assert_awaited_once_with(
+        ANY,
+        "507f1f77bcf86cd799439011",
+        2,
+        500,
+        filters={
+            "rule_set": ["berkeley_any"],
+            "color": ["white"],
+            "opponent": ["bot:randobot", "bot:bot_gemini31_lite"],
+            "result": ["win"],
+            "reason": ["timeout"],
+        },
+        sort_key="turns",
+        sort_direction="asc",
+    )
 
 
 def test_tech_report_routes_require_operator_access() -> None:
@@ -247,7 +297,15 @@ def test_user_games_defaults_to_100_per_page() -> None:
         history = client.get("/api/user/playerone/games")
 
     assert history.status_code == 200
-    service.get_game_history.assert_awaited_once_with(db, "507f1f77bcf86cd799439011", 1, 100)
+    service.get_game_history.assert_awaited_once_with(
+        db,
+        "507f1f77bcf86cd799439011",
+        1,
+        100,
+        filters={"rule_set": [], "color": [], "opponent": [], "result": [], "reason": []},
+        sort_key=None,
+        sort_direction="desc",
+    )
 
 
 def test_user_games_accepts_10000_per_page() -> None:
@@ -270,7 +328,15 @@ def test_user_games_accepts_10000_per_page() -> None:
         history = client.get("/api/user/playerone/games?page=2&per_page=10000")
 
     assert history.status_code == 200
-    service.get_game_history.assert_awaited_once_with(db, "507f1f77bcf86cd799439011", 2, 10000)
+    service.get_game_history.assert_awaited_once_with(
+        db,
+        "507f1f77bcf86cd799439011",
+        2,
+        10000,
+        filters={"rule_set": [], "color": [], "opponent": [], "result": [], "reason": []},
+        sort_key=None,
+        sort_direction="desc",
+    )
 
 
 def test_user_routes_return_404_for_missing_profile_and_history_targets(monkeypatch) -> None:

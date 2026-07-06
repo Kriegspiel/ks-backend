@@ -14,6 +14,13 @@ router = APIRouter(tags=["user"])
 USER_GAMES_MAX_PER_PAGE = 10000
 
 
+def _query_values(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        normalized.extend(part.strip() for part in value.split(",") if part.strip())
+    return normalized
+
+
 class SettingsPatch(dict):
     allowed_keys = {"board_theme", "piece_set", "sound_enabled", "auto_ask_any"}
 
@@ -49,6 +56,16 @@ async def get_user_games(
     username: str,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=100, ge=1, le=USER_GAMES_MAX_PER_PAGE),
+    sort: str | None = Query(
+        default=None,
+        pattern="^(rule_set|color|opponent|result|reason|turns|played_at|review|none)$",
+    ),
+    dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    rule_set: list[str] = Query(default=[]),
+    color: list[str] = Query(default=[]),
+    opponent: list[str] = Query(default=[]),
+    result: list[str] = Query(default=[]),
+    reason: list[str] = Query(default=[]),
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
@@ -56,10 +73,26 @@ async def get_user_games(
     if user_doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    games, total = await user_service.get_game_history(db, str(user_doc["_id"]), page, per_page)
+    filters = {
+        "rule_set": _query_values(rule_set),
+        "color": _query_values(color),
+        "opponent": _query_values(opponent),
+        "result": _query_values(result),
+        "reason": _query_values(reason),
+    }
+    games, total, filter_options = await user_service.get_game_history(
+        db,
+        str(user_doc["_id"]),
+        page,
+        per_page,
+        filters=filters,
+        sort_key=sort,
+        sort_direction=dir,
+    )
     return {
         "games": games,
         "pagination": _pagination(page=page, per_page=per_page, total=total),
+        "filter_options": filter_options,
     }
 
 

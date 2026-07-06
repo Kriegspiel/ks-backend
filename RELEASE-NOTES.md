@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.59
+
+- **Game History API**: apply user-history sort and categorical filters before
+  pagination, return filtered totals, and include full filter-option facets for
+  rule set, color, opponent, result, and reason.
+
 ## ks-backend v. 1.3.58
 
 - **Bot Matrix Report API**: added a private live `/tech/bot-matrix-report`

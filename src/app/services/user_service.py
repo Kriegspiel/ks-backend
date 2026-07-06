@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from functools import cmp_to_key
 import hashlib
 import hmac
 import math
@@ -22,6 +23,24 @@ from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
 
 DEFAULT_BOT_OWNER_EMAIL = "bots@kriegspiel.org"
 USER_GAME_HISTORY_MAX_PER_PAGE = 10000
+USER_GAME_HISTORY_EMPTY_FILTER = "__empty__"
+USER_GAME_HISTORY_FILTER_KEYS = ("rule_set", "color", "opponent", "result", "reason")
+USER_GAME_HISTORY_SORT_KEYS = frozenset(
+    ("rule_set", "color", "opponent", "result", "reason", "turns", "played_at", "review", "none")
+)
+USER_GAME_HISTORY_PROJECTION = {
+    "_id": 1,
+    "game_code": 1,
+    "white": 1,
+    "black": 1,
+    "rule_variant": 1,
+    "result": 1,
+    "move_count": 1,
+    "turn_count": 1,
+    "updated_at": 1,
+    "created_at": 1,
+    "rating_snapshot": 1,
+}
 PASSWORD_HASH_SCHEME_BCRYPT_SHA256 = "bcrypt_sha256$"
 BOT_MATRIX_PERIOD_DAY_WINDOWS = {
     "week": 7,
@@ -201,6 +220,25 @@ class UserService:
         return "win" if winner == play_as else "loss"
 
     @staticmethod
+    def _history_text_value(value: Any) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    @classmethod
+    def _history_filter_value(cls, value: Any) -> str:
+        text = cls._history_text_value(value)
+        return text if text else USER_GAME_HISTORY_EMPTY_FILTER
+
+    @staticmethod
+    def _history_opponent_group(opponent: dict[str, Any] | None) -> str:
+        role = opponent.get("role") if isinstance(opponent, dict) else None
+        return "bot" if str(role or "").lower() == "bot" else "human"
+
+    @classmethod
+    def _history_opponent_filter_value(cls, opponent: dict[str, Any] | None) -> str:
+        username = opponent.get("username") if isinstance(opponent, dict) else None
+        return f"{cls._history_opponent_group(opponent)}:{cls._history_filter_value(username)}"
+
+    @staticmethod
     def _normalized_result_reason(game: dict[str, Any]) -> str | None:
         result = game.get("result") if isinstance(game.get("result"), dict) else {}
         reason = result.get("reason")
@@ -220,6 +258,161 @@ class UserService:
             if special in {"CHECKMATE_WHITE_WINS", "CHECKMATE_BLACK_WINS"}:
                 return "checkmate"
         return None
+
+    @staticmethod
+    def _history_count_field(game: dict[str, Any], key: str) -> int | None:
+        value = game.get(key)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return max(parsed, 0)
+
+    @classmethod
+    def _history_move_count(cls, game: dict[str, Any]) -> int:
+        stored = cls._history_count_field(game, "move_count")
+        if stored is not None:
+            return stored
+        moves = game.get("moves")
+        return len(moves) if isinstance(moves, list) else 0
+
+    @classmethod
+    def _history_turn_count(cls, game: dict[str, Any]) -> int:
+        stored = cls._history_count_field(game, "turn_count")
+        if stored is not None:
+            return stored
+        return cls._completed_turn_count(game)
+
+    @classmethod
+    def _history_record_for_player(cls, game: dict[str, Any], *, user_id: str) -> dict[str, Any]:
+        play_as = "white" if game.get("white", {}).get("user_id") == user_id else "black"
+        opponent = game.get("black") if play_as == "white" else game.get("white")
+        result = game.get("result") if isinstance(game.get("result"), dict) else {}
+        winner = result.get("winner")
+        reason = cls._normalized_result_reason(game)
+        rating_snapshot, overall_snapshot = cls._history_rating_snapshot_for_player(game, play_as=play_as)
+        prefix = "white" if play_as == "white" else "black"
+        played_at = cls._safe_datetime(game.get("updated_at") or game.get("created_at"))
+        opponent_name = opponent.get("username") if isinstance(opponent, dict) else None
+        opponent_role = opponent.get("role") if isinstance(opponent, dict) else None
+        payload = {
+            "game_id": str(game.get("_id")),
+            "game_code": game.get("game_code"),
+            "rule_variant": game.get("rule_variant"),
+            "opponent": opponent_name,
+            "opponent_role": opponent_role,
+            "play_as": play_as,
+            "result": cls._winner_result(winner, play_as),
+            "reason": reason,
+            "move_count": cls._history_move_count(game),
+            "turn_count": cls._history_turn_count(game),
+            "played_at": played_at,
+            "elo_before": overall_snapshot.get(f"{prefix}_before"),
+            "elo_after": overall_snapshot.get(f"{prefix}_after"),
+            "elo_delta": overall_snapshot.get(f"{prefix}_delta"),
+            "rating_snapshot": rating_snapshot,
+        }
+        filters = {
+            "rule_set": cls._history_filter_value(payload["rule_variant"]),
+            "color": cls._history_filter_value(play_as),
+            "opponent": cls._history_opponent_filter_value(opponent if isinstance(opponent, dict) else None),
+            "result": cls._history_filter_value(payload["result"]),
+            "reason": cls._history_filter_value(reason),
+        }
+        return {
+            "payload": payload,
+            "filters": filters,
+            "sorts": {
+                "rule_set": filters["rule_set"],
+                "color": filters["color"],
+                "opponent": cls._history_filter_value(opponent_name),
+                "result": filters["result"],
+                "reason": filters["reason"],
+                "turns": payload["turn_count"],
+                "played_at": played_at,
+                "review": payload["game_code"] or payload["game_id"],
+            },
+        }
+
+    @staticmethod
+    def _history_group_label(filter_key: str, value: str) -> str:
+        if filter_key != "opponent":
+            return ""
+        return "Bots" if value.split(":", 1)[0] == "bot" else "Humans"
+
+    @classmethod
+    def _history_filter_options(cls, records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        options: dict[str, dict[str, dict[str, Any]]] = {key: {} for key in USER_GAME_HISTORY_FILTER_KEYS}
+        for record in records:
+            for key in USER_GAME_HISTORY_FILTER_KEYS:
+                value = record["filters"][key]
+                bucket = options[key].setdefault(
+                    value,
+                    {"value": value, "group": cls._history_group_label(key, value), "count": 0},
+                )
+                bucket["count"] += 1
+
+        return {
+            key: sorted(
+                values.values(),
+                key=lambda row: (
+                    0 if row.get("group") == "Humans" else 1 if row.get("group") == "Bots" else 2,
+                    str(row["value"]).lower(),
+                ),
+            )
+            for key, values in options.items()
+        }
+
+    @staticmethod
+    def _history_record_matches_filters(record: dict[str, Any], filters: dict[str, list[str]]) -> bool:
+        for key, selected in filters.items():
+            if selected and record["filters"].get(key) not in selected:
+                return False
+        return True
+
+    @staticmethod
+    def _history_compare_values(left: Any, right: Any, *, direction: str) -> int:
+        left_missing = left in {None, "", USER_GAME_HISTORY_EMPTY_FILTER}
+        right_missing = right in {None, "", USER_GAME_HISTORY_EMPTY_FILTER}
+        if left_missing or right_missing:
+            return 0 if left_missing == right_missing else 1 if left_missing else -1
+
+        if isinstance(left, datetime) and isinstance(right, datetime):
+            comparison = (left > right) - (left < right)
+        elif isinstance(left, (int, float)) and isinstance(right, (int, float)):
+            comparison = (left > right) - (left < right)
+        else:
+            left_text = str(left).lower()
+            right_text = str(right).lower()
+            comparison = (left_text > right_text) - (left_text < right_text)
+        return comparison if direction == "asc" else -comparison
+
+    @classmethod
+    def _sort_history_records(
+        cls,
+        records: list[dict[str, Any]],
+        *,
+        sort_key: str | None,
+        sort_direction: str,
+    ) -> list[dict[str, Any]]:
+        key = sort_key if sort_key in USER_GAME_HISTORY_SORT_KEYS else "played_at"
+        if key == "none":
+            key = "played_at"
+            direction = "desc"
+        else:
+            direction = "asc" if sort_direction == "asc" else "desc"
+
+        def compare(left: dict[str, Any], right: dict[str, Any]) -> int:
+            comparison = cls._history_compare_values(left["sorts"].get(key), right["sorts"].get(key), direction=direction)
+            if comparison != 0:
+                return comparison
+            return cls._history_compare_values(
+                left["sorts"].get("played_at"),
+                right["sorts"].get("played_at"),
+                direction="desc",
+            )
+
+        return sorted(records, key=cmp_to_key(compare))
 
     @staticmethod
     def _bot_matrix_period_cutoff(*, period: str, now: datetime) -> datetime | None:
@@ -1044,7 +1237,17 @@ class UserService:
             profile["bot_metrics"] = await self._bot_profile_metrics(db, user)
         return profile
 
-    async def get_game_history(self, db: Any, user_id: str, page: int, per_page: int) -> tuple[list[dict[str, Any]], int]:
+    async def get_game_history(
+        self,
+        db: Any,
+        user_id: str,
+        page: int,
+        per_page: int,
+        *,
+        filters: dict[str, list[str]] | None = None,
+        sort_key: str | None = None,
+        sort_direction: str = "desc",
+    ) -> tuple[list[dict[str, Any]], int, dict[str, list[dict[str, Any]]]]:
         bounded_page = max(page, 1)
         bounded_per_page = min(max(per_page, 1), USER_GAME_HISTORY_MAX_PER_PAGE)
         offset = (bounded_page - 1) * bounded_per_page
@@ -1056,37 +1259,28 @@ class UserService:
             ]
         }
 
-        total = await db.game_archives.count_documents(query)
-        cursor = db.game_archives.find(query).sort("created_at", -1).skip(offset).limit(bounded_per_page)
-        games: list[dict[str, Any]] = []
+        normalized_filters = {
+            key: [value for value in values if isinstance(value, str) and value]
+            for key, values in (filters or {}).items()
+            if key in USER_GAME_HISTORY_FILTER_KEYS
+        }
+        records: list[dict[str, Any]] = []
+        cursor = self._find(db.game_archives, query, USER_GAME_HISTORY_PROJECTION)
         async for game in cursor:
-            play_as = "white" if game.get("white", {}).get("user_id") == user_id else "black"
-            opponent = game.get("black") if play_as == "white" else game.get("white")
-            result = game.get("result") if isinstance(game.get("result"), dict) else {}
-            winner = result.get("winner")
-            rating_snapshot, overall_snapshot = self._history_rating_snapshot_for_player(game, play_as=play_as)
-            prefix = "white" if play_as == "white" else "black"
-            games.append(
-                {
-                    "game_id": str(game.get("_id")),
-                    "game_code": game.get("game_code"),
-                    "rule_variant": game.get("rule_variant"),
-                    "opponent": opponent.get("username") if isinstance(opponent, dict) else None,
-                    "opponent_role": opponent.get("role") if isinstance(opponent, dict) else None,
-                    "play_as": play_as,
-                    "result": self._winner_result(winner, play_as),
-                    "reason": self._normalized_result_reason(game),
-                    "move_count": len(game.get("moves", [])),
-                    "turn_count": self._completed_turn_count(game),
-                    "played_at": self._safe_datetime(game.get("updated_at") or game.get("created_at")),
-                    "elo_before": overall_snapshot.get(f"{prefix}_before"),
-                    "elo_after": overall_snapshot.get(f"{prefix}_after"),
-                    "elo_delta": overall_snapshot.get(f"{prefix}_delta"),
-                    "rating_snapshot": rating_snapshot,
-                }
-            )
+            records.append(self._history_record_for_player(game, user_id=user_id))
 
-        return games, total
+        filter_options = self._history_filter_options(records)
+        filtered_records = [
+            record for record in records if self._history_record_matches_filters(record, normalized_filters)
+        ]
+        sorted_records = self._sort_history_records(
+            filtered_records,
+            sort_key=sort_key,
+            sort_direction=sort_direction,
+        )
+        page_records = sorted_records[offset:offset + bounded_per_page]
+
+        return [record["payload"] for record in page_records], len(filtered_records), filter_options
 
     async def update_settings(self, db: Any, user_id: str, settings: dict[str, Any]) -> dict[str, Any]:
         update_fields = {f"settings.{key}": value for key, value in settings.items()}
