@@ -79,9 +79,48 @@ class FakeUsersCollection:
                 if not isinstance(current, dict):
                     return False
                 current = current.get(part)
+            if isinstance(expected, dict):
+                if "$ne" in expected and current == expected["$ne"]:
+                    return False
+                continue
             if current != expected:
                 return False
         return True
+
+
+class FakeReferenceCollection:
+    def __init__(self, docs: list[dict] | None = None) -> None:
+        self.docs = docs or []
+
+    async def update_many(self, query: dict, update: dict):
+        matched_count = 0
+        for doc in self.docs:
+            if self._matches(doc, query):
+                matched_count += 1
+                for key, value in update.get("$set", {}).items():
+                    self._set_nested(doc, key, value)
+        return type("UpdateResult", (), {"matched_count": matched_count, "modified_count": matched_count})()
+
+    @classmethod
+    def _matches(cls, doc: dict, query: dict) -> bool:
+        return all(cls._resolve(doc, key) == expected for key, expected in query.items())
+
+    @staticmethod
+    def _resolve(doc: dict, key: str):
+        current = doc
+        for part in key.split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+        return current
+
+    @staticmethod
+    def _set_nested(doc: dict, key: str, value) -> None:  # noqa: ANN001
+        current = doc
+        parts = key.split(".")
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
 
 
 class FakeUsageCollection:
@@ -103,6 +142,14 @@ class FakeUsageCollection:
     async def insert_one(self, document: dict):
         self.docs.append(dict(document))
         return type("InsertResult", (), {"inserted_id": ObjectId()})()
+
+    async def update_many(self, query: dict, update: dict):
+        matched_count = 0
+        for doc in self.docs:
+            if all(doc.get(key) == value for key, value in query.items()):
+                matched_count += 1
+                doc.update(update.get("$set", {}))
+        return type("UpdateResult", (), {"matched_count": matched_count, "modified_count": matched_count})()
 
 
 @pytest.mark.asyncio
@@ -149,12 +196,12 @@ async def test_create_llm_bot_game_stores_viewer_tier_limit() -> None:
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "llm_gptnano",
-            "username_display": "LLM GPT-Nano (bot)",
+            "username": "llm_gpt45nano",
+            "username_display": "LLM GPT-4.5 Nano (bot)",
             "role": "bot",
             "status": "active",
             "bot_profile": {
-                "display_name": "LLM GPT-Nano (bot)",
+                "display_name": "LLM GPT-4.5 Nano (bot)",
                 "owner_email": "owner@example.com",
                 "description": "Model bot",
                 "supported_rule_variants": ["berkeley", "berkeley_any"],
@@ -187,12 +234,12 @@ async def test_guest_cannot_create_llm_bot_game() -> None:
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "llm_gptnano",
-            "username_display": "LLM GPT-Nano (bot)",
+            "username": "llm_gpt45nano",
+            "username_display": "LLM GPT-4.5 Nano (bot)",
             "role": "bot",
             "status": "active",
             "bot_profile": {
-                "display_name": "LLM GPT-Nano (bot)",
+                "display_name": "LLM GPT-4.5 Nano (bot)",
                 "owner_email": "owner@example.com",
                 "description": "Model bot",
                 "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
@@ -221,12 +268,12 @@ async def test_guest_bot_list_filters_llm_bots_and_user_list_shows_limit() -> No
         [
             {
                 "_id": ObjectId(),
-                "username": "llm_gptnano",
-                "username_display": "LLM GPT-Nano (bot)",
+                "username": "llm_gpt45nano",
+                "username_display": "LLM GPT-4.5 Nano (bot)",
                 "role": "bot",
                 "status": "active",
                 "bot_profile": {
-                    "display_name": "LLM GPT-Nano (bot)",
+                    "display_name": "LLM GPT-4.5 Nano (bot)",
                     "description": "Model bot",
                     "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
                 },
@@ -247,11 +294,11 @@ async def test_guest_bot_list_filters_llm_bots_and_user_list_shows_limit() -> No
     user_listing = await service.list_bots(viewer_role="user", viewer_llm_bot_tier="tier2")
 
     assert [bot.username for bot in guest_listing.bots] == ["randobot"]
-    llm_gptnano = next(bot for bot in user_listing.bots if bot.username == "llm_gptnano")
-    assert llm_gptnano.llm_backed is True
-    assert llm_gptnano.llm_bot_tier == "tier2"
-    assert llm_gptnano.llm_bot_ply_limit == 256
-    assert llm_gptnano.llm_bot_limit_label == "256 ply limit"
+    llm_gpt45nano = next(bot for bot in user_listing.bots if bot.username == "llm_gpt45nano")
+    assert llm_gpt45nano.llm_backed is True
+    assert llm_gpt45nano.llm_bot_tier == "tier2"
+    assert llm_gpt45nano.llm_bot_ply_limit == 256
+    assert llm_gpt45nano.llm_bot_limit_label == "256 ply limit"
 
 
 def test_bot_service_datetime_and_query_helpers_cover_invalid_inputs() -> None:
@@ -268,11 +315,11 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
     now = datetime(2026, 6, 1, tzinfo=UTC)
 
     assert BotService.bot_can_start_games({"username": "randobot"}, now=now) is True
-    assert BotService.bot_can_start_games({"username": "llm_gptnano"}, now=now) is False
+    assert BotService.bot_can_start_games({"username": "llm_gpt45nano"}, now=now) is False
     assert (
         BotService.bot_can_start_games(
             {
-                "username": "llm_gptnano",
+                "username": "llm_gpt45nano",
                 "bot_profile": {"model_availability": {"provider": "anthropic", "ready": True, "checked_at": now}},
             },
             now=now,
@@ -282,7 +329,7 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
     assert (
         BotService.bot_can_start_games(
             {
-                "username": "llm_gptnano",
+                "username": "llm_gpt45nano",
                 "bot_profile": {"model_availability": {"provider": "openai", "ready": False, "checked_at": now}},
             },
             now=now,
@@ -291,7 +338,7 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
     )
     assert (
         BotService.bot_can_start_games(
-            {"username": "llm_gptnano", "bot_profile": {"model_availability": {"provider": "openai", "ready": True}}},
+            {"username": "llm_gpt45nano", "bot_profile": {"model_availability": {"provider": "openai", "ready": True}}},
             now=now,
         )
         is False
@@ -299,7 +346,7 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
     assert (
         BotService.bot_can_start_games(
             {
-                "username": "llm_gptnano",
+                "username": "llm_gpt45nano",
                 "bot_profile": {
                     "model_availability": {
                         "provider": "openai",
@@ -325,7 +372,7 @@ async def test_bot_profile_updates_return_none_when_no_active_bot_matches() -> N
 @pytest.mark.asyncio
 async def test_bot_routes_reject_non_bot_users_and_missing_bot_updates() -> None:
     user = type("User", (), {"id": "u1", "role": "user"})()
-    bot_user = type("User", (), {"id": "bot1", "username": "llm_gptnano", "role": "bot"})()
+    bot_user = type("User", (), {"id": "bot1", "username": "llm_gpt45nano", "role": "bot"})()
     availability = BotAvailabilityReportRequest(provider="openai", ready=True, reason="ok")
     profile = BotProfileSyncRequest(supported_rule_variants=["berkeley"])
     usage = BotUsageReportRequest(
@@ -390,14 +437,14 @@ async def test_bot_usage_report_stores_idempotent_usage_record() -> None:
         cost_usd=0.002,
     )
 
-    assert await service.record_usage(user_id="bot1", username="llm_gptnano", payload=payload) is True
-    assert await service.record_usage(user_id="bot1", username="llm_gptnano", payload=payload) is True
+    assert await service.record_usage(user_id="bot1", username="llm_gpt45nano", payload=payload) is True
+    assert await service.record_usage(user_id="bot1", username="llm_gpt45nano", payload=payload) is True
 
     assert len(usage_collection.docs) == 1
     stored = usage_collection.docs[0]
     assert stored["game_id"] == "507f1f77bcf86cd799439011"
     assert stored["game_code"] == "ABC123"
-    assert stored["bot_username"] == "llm_gptnano"
+    assert stored["bot_username"] == "llm_gpt45nano"
     assert stored["total_tokens"] == 130
     assert stored["cost_usd"] == 0.002
     assert stored["recorded_at"] == datetime(2026, 7, 5, tzinfo=UTC)
@@ -554,12 +601,12 @@ async def test_join_llm_bot_created_lobby_applies_joiner_tier_and_blocks_guests(
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "llm_gptnano",
-            "username_display": "LLM GPT-Nano (bot)",
+            "username": "llm_gpt45nano",
+            "username_display": "LLM GPT-4.5 Nano (bot)",
             "role": "bot",
             "status": "active",
             "bot_profile": {
-                "display_name": "LLM GPT-Nano (bot)",
+                "display_name": "LLM GPT-4.5 Nano (bot)",
                 "description": "Model bot",
                 "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
             },
@@ -573,7 +620,7 @@ async def test_join_llm_bot_created_lobby_applies_joiner_tier_and_blocks_guests(
             "creator_color": "white",
             "opponent_type": "human",
             "selected_bot_id": None,
-            "white": {"user_id": str(bot_id), "username": "llm_gptnano", "connected": True, "role": "bot"},
+            "white": {"user_id": str(bot_id), "username": "llm_gpt45nano", "connected": True, "role": "bot"},
             "black": None,
             "state": "waiting",
             "turn": None,
@@ -890,12 +937,12 @@ async def test_bot_service_hides_model_bots_without_fresh_ready_status() -> None
         [
             {
                 "_id": ObjectId(),
-                "username": "llm_gptnano",
-                "username_display": "LLM GPT-Nano (bot)",
+                "username": "llm_gpt45nano",
+                "username_display": "LLM GPT-4.5 Nano (bot)",
                 "role": "bot",
                 "status": "active",
                 "bot_profile": {
-                    "display_name": "LLM GPT-Nano (bot)",
+                    "display_name": "LLM GPT-4.5 Nano (bot)",
                     "description": "OpenAI bot",
                     "listed": True,
                     "model_availability": {
@@ -938,7 +985,7 @@ async def test_bot_service_hides_model_bots_without_fresh_ready_status() -> None
 
     listed = await service.list_bots()
 
-    assert [bot.username for bot in listed.bots] == ["llm_gptnano", "randobot"]
+    assert [bot.username for bot in listed.bots] == ["llm_gpt45nano", "randobot"]
 
 
 @pytest.mark.asyncio
@@ -949,11 +996,11 @@ async def test_bot_service_records_model_availability_for_authenticated_bot() ->
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "llm_gptnano",
-            "username_display": "LLM GPT-Nano (bot)",
+            "username": "llm_gpt45nano",
+            "username_display": "LLM GPT-4.5 Nano (bot)",
             "role": "bot",
             "status": "active",
-            "bot_profile": {"display_name": "LLM GPT-Nano (bot)", "description": "OpenAI bot", "listed": True},
+            "bot_profile": {"display_name": "LLM GPT-4.5 Nano (bot)", "description": "OpenAI bot", "listed": True},
         }
     )
     service = BotService(users, now_factory=lambda: now)
@@ -1003,6 +1050,74 @@ async def test_bot_service_syncs_supported_rule_variants_for_authenticated_bot()
     assert updated is users.docs[0]
     assert users.docs[0]["bot_profile"]["supported_rule_variants"] == ["berkeley", "berkeley_any", "wild16"]
     assert users.docs[0]["updated_at"] == now
+
+
+@pytest.mark.asyncio
+async def test_bot_service_syncs_username_display_and_references_for_authenticated_bot() -> None:
+    now = datetime(2026, 7, 6, 2, tzinfo=UTC)
+    users = FakeUsersCollection()
+    usage = FakeUsageCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "llm_gptnano",
+            "username_display": "LLM GPT-Nano (bot)",
+            "role": "bot",
+            "status": "active",
+            "profile": {"bio": "Old profile"},
+            "bot_profile": {
+                "display_name": "LLM GPT-Nano (bot)",
+                "description": "Old profile",
+                "supported_rule_variants": ["berkeley", "berkeley_any"],
+            },
+        }
+    )
+    games = FakeReferenceCollection(
+        [
+            {
+                "white": {"user_id": str(bot_id), "username": "llm_gptnano", "role": "bot"},
+                "black": {"username": "randobot", "role": "bot"},
+                "created_by": "llm_gptnano",
+            }
+        ]
+    )
+    archives = FakeReferenceCollection(
+        [
+            {
+                "white": {"username": "randobot", "role": "bot"},
+                "black": {"user_id": str(bot_id), "username": "llm_gptnano", "role": "bot"},
+                "created_by": "randobot",
+            }
+        ]
+    )
+    usage.docs.append({"bot_username": "llm_gptnano", "model": "gpt-5.4-nano"})
+    service = BotService(
+        users,
+        usage_collection=usage,
+        game_collections=(games, archives),
+        now_factory=lambda: now,
+    )
+
+    updated = await service.sync_supported_rule_variants(
+        user_id=str(bot_id),
+        username="llm_gpt45nano",
+        display_name="LLM GPT-4.5 Nano (bot)",
+        description="LLM GPT-4.5 Nano (bot) Kriegspiel model bot.",
+        supported_rule_variants=["berkeley", "berkeley_any", "wild16"],
+    )
+
+    assert updated is users.docs[0]
+    assert users.docs[0]["username"] == "llm_gpt45nano"
+    assert users.docs[0]["username_display"] == "LLM GPT-4.5 Nano (bot)"
+    assert users.docs[0]["bot_profile"]["display_name"] == "LLM GPT-4.5 Nano (bot)"
+    assert users.docs[0]["bot_profile"]["description"] == "LLM GPT-4.5 Nano (bot) Kriegspiel model bot."
+    assert users.docs[0]["profile"]["bio"] == "LLM GPT-4.5 Nano (bot) Kriegspiel model bot."
+    assert users.docs[0]["bot_profile"]["supported_rule_variants"] == ["berkeley", "berkeley_any", "wild16"]
+    assert games.docs[0]["white"]["username"] == "llm_gpt45nano"
+    assert games.docs[0]["created_by"] == "llm_gpt45nano"
+    assert archives.docs[0]["black"]["username"] == "llm_gpt45nano"
+    assert usage.docs[0]["bot_username"] == "llm_gpt45nano"
 
 
 @pytest.mark.asyncio
@@ -1268,7 +1383,7 @@ def test_bot_service_supported_rule_variants_fallbacks_cover_randobotany() -> No
         "english",
         "crazykrieg",
     ]
-    assert BotService._supported_rule_variants({"username": "llm_gptnano", "bot_profile": {}}) == [
+    assert BotService._supported_rule_variants({"username": "llm_gpt45nano", "bot_profile": {}}) == [
         "berkeley",
         "berkeley_any",
     ]
@@ -1337,11 +1452,11 @@ def test_bot_router_records_model_availability_for_authenticated_bot() -> None:
     users.docs.append(
         {
             "_id": bot_id,
-            "username": "llm_gptnano",
-            "username_display": "LLM GPT-Nano (bot)",
+            "username": "llm_gpt45nano",
+            "username_display": "LLM GPT-4.5 Nano (bot)",
             "role": "bot",
             "status": "active",
-            "bot_profile": {"display_name": "LLM GPT-Nano (bot)", "description": "OpenAI bot", "listed": True},
+            "bot_profile": {"display_name": "LLM GPT-4.5 Nano (bot)", "description": "OpenAI bot", "listed": True},
         }
     )
 
@@ -1398,7 +1513,13 @@ def test_bot_router_syncs_supported_rule_variants_for_authenticated_bot() -> Non
         )
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "supported_rule_variants": ["berkeley", "berkeley_any", "wild16"]}
+    assert response.json() == {
+        "ok": True,
+        "username": "simpleheuristics",
+        "display_name": "Simple Heuristics",
+        "description": "Heuristic bot",
+        "supported_rule_variants": ["berkeley", "berkeley_any", "wild16"],
+    }
     assert users.docs[0]["bot_profile"]["supported_rule_variants"] == ["berkeley", "berkeley_any", "wild16"]
 
 

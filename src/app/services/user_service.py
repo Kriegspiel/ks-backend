@@ -53,7 +53,8 @@ BOT_MATRIX_USAGE_RECORD_START = datetime(2026, 7, 4, tzinfo=UTC)
 BOT_MATRIX_USAGE_RECORD_START_LABEL = "2026-07-04"
 BOT_MATRIX_USAGE_USERNAME_ALIASES = {
     "haiku": "llm_haiku",
-    "gptnano": "llm_gptnano",
+    "gptnano": "llm_gpt45nano",
+    "llm_gptnano": "llm_gpt45nano",
     "bot_gemini25_lite": "llm_gemini25_lite",
     "bot_deepseekv4_flash": "llm_deepseekv4_flash",
     "bot_gptoss120b": "llm_gptoss120b",
@@ -65,7 +66,7 @@ BOT_MATRIX_USAGE_USERNAME_ALIASES = {
 }
 BOT_MATRIX_PLAYER_ORDER = (
     "llm_haiku",
-    "llm_gptnano",
+    "llm_gpt45nano",
     "llm_gemini25_lite",
     "llm_deepseekv4_flash",
     "llm_gptoss120b",
@@ -100,6 +101,12 @@ class UserService:
 
     def __init__(self, users_collection: Any):
         self._users = users_collection
+
+    @classmethod
+    def evict_bot_token_cache_for_user_id(cls, user_id: str) -> None:
+        for token, (_, user) in list(cls._bot_token_cache.items()):
+            if user.id == user_id:
+                cls._bot_token_cache.pop(token, None)
 
     @staticmethod
     def canonical_username(username: str) -> str:
