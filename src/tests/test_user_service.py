@@ -198,12 +198,10 @@ class FakeDB:
         users: FakeUsersCollection,
         game_archives: FakeUsersCollection,
         games: FakeUsersCollection | None = None,
-        bot_usage_records: FakeUsersCollection | None = None,
     ):
         self.users = users
         self.game_archives = game_archives
         self.games = games
-        self.bot_usage_records = bot_usage_records
 
 
 def test_find_uses_single_argument_call_when_projection_is_omitted() -> None:

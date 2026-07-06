@@ -267,29 +267,6 @@ async def test_archive_turn_count_migration_logs_success_and_propagates_cancel(
         await main_module._run_archive_turn_count_migration(app)
 
 
-@pytest.mark.asyncio
-async def test_bot_usage_game_stats_migration_logs_success_and_propagates_cancel(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import app.main as main_module
-
-    app = FastAPI()
-    app.state.db = object()
-    runner = AsyncMock(return_value={"stored": 3, "scanned": 4})
-    monkeypatch.setattr(main_module, "run_bot_usage_game_stats_migration_once", runner)
-
-    await main_module._run_bot_usage_game_stats_migration(app)
-
-    runner.assert_awaited_once_with(app.state.db)
-
-    async def cancelled(_db):  # noqa: ANN001
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr(main_module, "run_bot_usage_game_stats_migration_once", cancelled)
-    with pytest.raises(asyncio.CancelledError):
-        await main_module._run_bot_usage_game_stats_migration(app)
-
-
 def test_lifespan_cancels_pending_archive_turn_count_migration_task(monkeypatch: pytest.MonkeyPatch) -> None:
     import app.main as main_module
 
@@ -345,14 +322,11 @@ def test_lifespan_cancels_pending_archive_turn_count_migration_task(monkeypatch:
 
     with TestClient(app):
         assert app.state.archive_turn_count_migration_task is pending_task
-        assert app.state.bot_usage_game_stats_migration_task is pending_task
 
     assert calls == [
         "start",
         "task:archive-turn-count-migration",
-        "task:bot-usage-game-stats-migration",
         "shutdown",
-        "cancel",
         "cancel",
         "close_db",
     ]
