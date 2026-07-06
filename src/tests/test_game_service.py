@@ -877,6 +877,86 @@ async def test_record_llm_usage_preserves_cached_game_stats_on_flush() -> None:
 
 
 @pytest.mark.asyncio
+async def test_record_llm_usage_handles_naive_cached_usage_timestamps() -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    game_id = ObjectId()
+    prior_recorded_at = datetime(2026, 7, 6, 11)
+    now = datetime(2026, 7, 6, 12, tzinfo=UTC)
+    game = {
+        "_id": game_id,
+        "game_code": "A7K2M9",
+        "rule_variant": "berkeley_any",
+        "white": {"user_id": "bot1", "username": "llm_gptnano", "connected": True, "role": "bot"},
+        "black": {"user_id": "u2", "username": "opponent", "connected": True, "role": "user"},
+        "state": "active",
+        "turn": "white",
+        "move_number": 4,
+        "created_at": now,
+        "updated_at": now,
+        "moves": [],
+        "stats": {
+            "llm_usage": {
+                "started_at": prior_recorded_at,
+                "updated_at": prior_recorded_at,
+                "white": {
+                    "user_id": "bot1",
+                    "username": "llm_gptnano",
+                    "calls": 1,
+                    "input_tokens": 50,
+                    "cached_input_tokens": 10,
+                    "output_tokens": 15,
+                    "total_tokens": 65,
+                    "cost_usd": 0.001,
+                    "providers": ["openai"],
+                    "models": ["gpt-5.4-nano"],
+                    "response_ids": ["resp0"],
+                    "first_recorded_at": prior_recorded_at,
+                    "last_recorded_at": prior_recorded_at,
+                },
+            }
+        },
+    }
+    games.docs.append(deepcopy(game))
+    service = GameService(games, archives_collection=archives)
+    entry = await service._prime_cache(deepcopy(game), persisted=True)
+    report = LlmUsageReport(
+        game_id=str(game_id),
+        game_code="A7K2M9",
+        bot_user_id="bot1",
+        bot_username="llm_gptnano",
+        provider="openai",
+        model="gpt-5.4-nano",
+        response_id="resp1",
+        input_tokens=100,
+        cached_input_tokens=20,
+        output_tokens=30,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        total_tokens=130,
+        cost_usd=0.002,
+    )
+
+    assert await service.record_llm_usage(report, now=now) is True
+
+    await service._flush_entry(entry, reason="usage-test")
+
+    usage = games.docs[0]["stats"]["llm_usage"]
+    stored = usage["white"]
+    assert usage["started_at"] == prior_recorded_at
+    assert usage["updated_at"] == now
+    assert stored["calls"] == 2
+    assert stored["input_tokens"] == 150
+    assert stored["cached_input_tokens"] == 30
+    assert stored["output_tokens"] == 45
+    assert stored["total_tokens"] == 195
+    assert stored["cost_usd"] == pytest.approx(0.003)
+    assert stored["response_ids"] == ["resp0", "resp1"]
+    assert stored["first_recorded_at"] == prior_recorded_at
+    assert stored["last_recorded_at"] == now
+
+
+@pytest.mark.asyncio
 async def test_get_my_games_caches_player_user_lookups_within_response() -> None:
     games = FakeGamesCollection()
     archives = FakeGamesCollection()

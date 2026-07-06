@@ -308,6 +308,13 @@ def _usage_update(
 
 
 def _apply_update_to_document(document: dict[str, Any], update: dict[str, Any]) -> None:
+    def min_value_is_less(value: Any, current: Any) -> bool:
+        if isinstance(value, datetime) and isinstance(current, datetime):
+            value_utc = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+            current_utc = current.replace(tzinfo=UTC) if current.tzinfo is None else current.astimezone(UTC)
+            return value_utc < current_utc
+        return value < current
+
     def set_nested(key: str, value: Any) -> None:
         current = document
         parts = key.split(".")
@@ -336,7 +343,7 @@ def _apply_update_to_document(document: dict[str, Any], update: dict[str, Any]) 
             current.append(value)
     for key, value in update.get("$min", {}).items():
         current = resolve(key)
-        if current is None or value < current:
+        if current is None or min_value_is_less(value, current):
             set_nested(key, value)
 
 
