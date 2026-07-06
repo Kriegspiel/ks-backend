@@ -721,6 +721,7 @@ async def test_get_public_profile_and_missing_user() -> None:
         {
             "_id": user_id,
             "username": "playerone",
+            "llm_bot_tier": "tier2",
             "profile": {"bio": "Kriegspiel enthusiast", "avatar_url": None, "country": "US"},
             "stats": {
                 "games_played": 7,
@@ -756,10 +757,12 @@ async def test_get_public_profile_and_missing_user() -> None:
 
     assert profile is not None
     assert profile["username"] == "playerone"
+    assert profile["llm_bot_tier"] == "tier2"
     assert profile["stats"]["elo"] == 1337
     assert profile["stats"]["ratings"]["overall"]["elo"] == 1337
     assert "bot_metrics" not in profile
     assert bot_profile is not None
+    assert bot_profile["llm_bot_tier"] is None
     assert bot_profile["owner_email"] == "bot-random-any@kriegspiel.org"
     assert bot_profile["bot_metrics"]["completed_games"] == 0
     assert missing is None

@@ -16,6 +16,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from app.config import get_settings
+from app.llm_bot_policy import normalize_llm_bot_tier
 from app.models.auth import BotRegisterRequest, ConvertGuestRequest, RegisterRequest
 from app.models.bot import supported_rule_variants_for_bot
 from app.models.user import UserModel, default_user_stats_payload, normalize_user_stats_payload, utcnow
@@ -1593,18 +1594,21 @@ class UserService:
             or user.get("username_display")
             or user.get("username")
         )
+        role = user.get("role", "user")
+        public_llm_bot_tier = None if role == "bot" else normalize_llm_bot_tier(user.get("llm_bot_tier"), role=role)
 
         profile = {
             "username": user.get("username"),
             "display_name": display_name,
-            "role": user.get("role", "user"),
-            "is_bot": user.get("role") == "bot",
-            "owner_email": bot_profile.get("owner_email") or DEFAULT_BOT_OWNER_EMAIL if user.get("role") == "bot" else None,
+            "role": role,
+            "llm_bot_tier": public_llm_bot_tier,
+            "is_bot": role == "bot",
+            "owner_email": bot_profile.get("owner_email") or DEFAULT_BOT_OWNER_EMAIL if role == "bot" else None,
             "profile": user.get("profile", {}),
             "stats": normalize_user_stats_payload(user.get("stats")),
             "member_since": self._safe_datetime(user.get("created_at")),
         }
-        if user.get("role") == "bot":
+        if role == "bot":
             profile["bot_metrics"] = await self._bot_profile_metrics(db, user)
         return profile
 
