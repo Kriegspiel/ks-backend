@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.62
+
+- **Lobby Stats API**: allow public aggregate reads from `/game/stats` so the
+  static homepage can show a rounded all-time completed-game count.
+
 ## ks-backend v. 1.3.61
 
 - **Bot Matrix Usage Averages**: include known usage rows stored under legacy

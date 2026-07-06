@@ -94,7 +94,14 @@ def app_with_game_service() -> tuple:
                 ]
             }
         ),
-        get_lobby_stats=AsyncMock(return_value={"waiting_games": 1, "active_games": 2, "completed_games": 3}),
+        get_lobby_stats=AsyncMock(
+            return_value={
+                "active_games_now": 1,
+                "completed_last_hour": 2,
+                "completed_last_24_hours": 3,
+                "completed_total": 21012,
+            }
+        ),
         get_my_games=AsyncMock(
             return_value=[
                 {
@@ -191,6 +198,7 @@ def test_game_router_happy_path_shapes(app_with_game_service) -> None:
     app, _service = app_with_game_service
 
     with TestClient(app) as client:
+        stats = client.get("/api/game/stats")
         create = client.post(
             "/api/game/create",
             json={"rule_variant": "berkeley_any", "play_as": "white", "time_control": "rapid"},
@@ -203,6 +211,8 @@ def test_game_router_happy_path_shapes(app_with_game_service) -> None:
         active_alias = client.get("/api/game/mine-active")
         archived_alias = client.get("/api/game/mine-archived")
 
+    assert stats.status_code == 200
+    assert stats.json()["completed_total"] == 21012
     assert create.status_code == 201
     assert create.json()["game_code"] == "A7K2M9"
     assert join.status_code == 200
@@ -358,12 +368,24 @@ def test_sse_frame_uses_message_event_type_by_default() -> None:
 async def test_stats_review_and_recent_routes_cover_success_and_error_paths() -> None:
     user = _user()
     service = SimpleNamespace(
-        get_lobby_stats=AsyncMock(return_value={"waiting_games": 0, "active_games": 1, "completed_games": 2}),
+        get_lobby_stats=AsyncMock(
+            return_value={
+                "active_games_now": 0,
+                "completed_last_hour": 1,
+                "completed_last_24_hours": 2,
+                "completed_total": 21012,
+            }
+        ),
         get_game_review=AsyncMock(return_value={"game_id": "gid1", "moves": []}),
         get_recent_completed_games=AsyncMock(return_value={"games": []}),
     )
 
-    assert await get_lobby_stats(user, game_service=service) == {"waiting_games": 0, "active_games": 1, "completed_games": 2}
+    assert await get_lobby_stats(game_service=service) == {
+        "active_games_now": 0,
+        "completed_last_hour": 1,
+        "completed_last_24_hours": 2,
+        "completed_total": 21012,
+    }
     assert await get_game_review("gid1", user=user, game_service=service) == {"game_id": "gid1", "moves": []}
     assert await get_recent_games(limit=5, game_service=service) == {"games": []}
 
@@ -371,13 +393,31 @@ async def test_stats_review_and_recent_routes_cover_success_and_error_paths() ->
     service.get_game_review = AsyncMock(side_effect=GameForbiddenError(code="FORBIDDEN", message="forbidden"))
     service.get_recent_completed_games = AsyncMock(side_effect=GameConflictError(code="CONFLICT", message="conflict"))
 
-    stats_error = await get_lobby_stats(user, game_service=service)
+    stats_error = await get_lobby_stats(game_service=service)
     review_error = await get_game_review("gid1", user=user, game_service=service)
     recent_error = await get_recent_games(limit=5, game_service=service)
 
     assert stats_error.status_code == 400
     assert review_error.status_code == 403
     assert recent_error.status_code == 409
+
+
+def test_lobby_stats_endpoint_is_public(app_with_game_service) -> None:
+    app, service = app_with_game_service
+
+    def raise_unauth():
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    app.dependency_overrides[get_current_user] = raise_unauth
+
+    with TestClient(app) as client:
+        stats = client.get("/api/game/stats")
+        open_games = client.get("/api/game/open")
+
+    assert stats.status_code == 200
+    assert stats.json()["completed_total"] == 21012
+    assert open_games.status_code == 401
+    service.get_lobby_stats.assert_awaited()
 
 
 @pytest.mark.parametrize(

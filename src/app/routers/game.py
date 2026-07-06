@@ -198,7 +198,7 @@ async def get_open_games(
 
 @router.get("/stats", response_model=LobbyStatsResponse)
 async def get_lobby_stats(
-    _: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)
+    game_service: GameService = Depends(get_game_service),
 ) -> Any:
     try:
         return await game_service.get_lobby_stats()
