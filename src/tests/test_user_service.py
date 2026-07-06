@@ -2763,6 +2763,7 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
                 "game_id": "TODAY1",
                 "bot_user_id": "haiku-id",
                 "input_tokens": 50,
+                "cached_input_tokens": 20,
                 "output_tokens": 5,
                 "total_tokens": 55,
                 "cost_usd": 0.005,
@@ -2805,19 +2806,30 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
     assert nano_cell["record"] == "0-1-0"
     assert nano_cell["average_plies"] == 10
     assert nano_cell["usage_recorded_games"] == 1
+    assert nano_cell["usage_eligible_games"] == 1
     assert nano_cell["avg_calls"] == 2
     assert nano_cell["player_tokens"] == 180
+    assert nano_cell["player_input_tokens"] == 130
+    assert nano_cell["player_cache_tokens"] == 20
+    assert nano_cell["player_output_tokens"] == 30
     assert nano_cell["player_cost"] == pytest.approx(0.015)
     assert nano_cell["opponent_tokens"] == 75
+    assert nano_cell["opponent_input_tokens"] == 70
+    assert nano_cell["opponent_cache_tokens"] == 0
+    assert nano_cell["opponent_output_tokens"] == 5
     assert nano_cell["opponent_cost"] == pytest.approx(0.02)
 
     haiku_all = report["total_rows"]["all"][0]
     assert haiku_all["games"] == 3
     assert haiku_all["record"] == "1-1-1"
     assert haiku_all["avg_plies"] == 8
-    assert haiku_all["avg_calls"] == 2
-    assert haiku_all["avg_tokens"] == 180
-    assert haiku_all["avg_cost"] == pytest.approx(0.015)
+    assert haiku_all["avg_calls"] == pytest.approx(2 / 3)
+    assert haiku_all["avg_tokens"] == 60
+    assert haiku_all["avg_input_tokens"] == pytest.approx(130 / 3)
+    assert haiku_all["avg_cache_tokens"] == pytest.approx(20 / 3)
+    assert haiku_all["avg_output_tokens"] == 10
+    assert haiku_all["avg_cost"] == pytest.approx(0.005)
+    assert haiku_all["usage_eligible_games"] == 3
     assert haiku_all["usage_recorded_games"] == 1
     assert report["total_rows"]["bots"][0]["games"] == 2
     assert report["total_rows"]["humans"][0]["record"] == "0-0-1"
@@ -2867,6 +2879,7 @@ async def test_get_bot_matrix_report_maps_generic_openrouter_usage_by_model() ->
                 "bot_username": "openrouterbot",
                 "model": "meta-llama/llama-3.1-8b-instruct",
                 "input_tokens": 1000,
+                "cached_input_tokens": 200,
                 "output_tokens": 50,
                 "total_tokens": 1050,
                 "cost_usd": 0.00123,
@@ -2901,14 +2914,22 @@ async def test_get_bot_matrix_report_maps_generic_openrouter_usage_by_model() ->
     assert haiku_vs_llama["average_plies"] == 355
     assert haiku_vs_llama["player_tokens"] is None
     assert haiku_vs_llama["player_cost"] is None
+    assert haiku_vs_llama["opponent_usage_eligible_games"] == 1
     assert haiku_vs_llama["opponent_usage_recorded_games"] == 1
     assert haiku_vs_llama["opponent_tokens"] == 1050
+    assert haiku_vs_llama["opponent_input_tokens"] == 800
+    assert haiku_vs_llama["opponent_cache_tokens"] == 200
+    assert haiku_vs_llama["opponent_output_tokens"] == 50
     assert haiku_vs_llama["opponent_cost"] == pytest.approx(0.00123)
 
     llama_vs_haiku = report["matrix_rows"][1]["cells"][0]["summary"]
     assert llama_vs_haiku["record"] == "0-0-1"
+    assert llama_vs_haiku["usage_eligible_games"] == 1
     assert llama_vs_haiku["usage_recorded_games"] == 1
     assert llama_vs_haiku["player_tokens"] == 1050
+    assert llama_vs_haiku["player_input_tokens"] == 800
+    assert llama_vs_haiku["player_cache_tokens"] == 200
+    assert llama_vs_haiku["player_output_tokens"] == 50
     assert llama_vs_haiku["player_cost"] == pytest.approx(0.00123)
     assert llama_vs_haiku["opponent_tokens"] is None
     assert report["usage_available"] is True

@@ -769,13 +769,21 @@ class UserService:
             "draws": 0,
             "losses": 0,
             "plies": 0,
+            "usage_eligible_game_ids": set(),
             "usage_game_ids": set(),
             "usage_calls": 0,
             "usage_tokens": 0,
+            "usage_input_tokens": 0,
+            "usage_cache_tokens": 0,
+            "usage_output_tokens": 0,
             "usage_cost": 0.0,
+            "opponent_usage_eligible_game_ids": set(),
             "opponent_usage_game_ids": set(),
             "opponent_usage_calls": 0,
             "opponent_usage_tokens": 0,
+            "opponent_usage_input_tokens": 0,
+            "opponent_usage_cache_tokens": 0,
+            "opponent_usage_output_tokens": 0,
             "opponent_usage_cost": 0.0,
         }
 
@@ -786,6 +794,7 @@ class UserService:
         outcome: str,
         plies: int,
         game_id: str | None = None,
+        usage_eligible: bool = False,
         usage: dict[str, int | float] | None = None,
         opponent_usage: dict[str, int | float] | None = None,
     ) -> None:
@@ -798,28 +807,51 @@ class UserService:
         else:
             summary["draws"] += 1
 
-        if game_id and usage:
+        if game_id and usage_eligible:
+            summary["usage_eligible_game_ids"].add(game_id)
+            summary["opponent_usage_eligible_game_ids"].add(game_id)
+
+        if game_id and usage_eligible and usage:
             summary["usage_game_ids"].add(game_id)
             summary["usage_calls"] += int(usage.get("calls", 0) or 0)
             summary["usage_tokens"] += int(usage.get("tokens", 0) or 0)
+            summary["usage_input_tokens"] += int(usage.get("input_tokens", 0) or 0)
+            summary["usage_cache_tokens"] += int(usage.get("cache_tokens", 0) or 0)
+            summary["usage_output_tokens"] += int(usage.get("output_tokens", 0) or 0)
             summary["usage_cost"] += float(usage.get("cost", 0.0) or 0.0)
-        if game_id and opponent_usage:
+        if game_id and usage_eligible and opponent_usage:
             summary["opponent_usage_game_ids"].add(game_id)
             summary["opponent_usage_calls"] += int(opponent_usage.get("calls", 0) or 0)
             summary["opponent_usage_tokens"] += int(opponent_usage.get("tokens", 0) or 0)
+            summary["opponent_usage_input_tokens"] += int(opponent_usage.get("input_tokens", 0) or 0)
+            summary["opponent_usage_cache_tokens"] += int(opponent_usage.get("cache_tokens", 0) or 0)
+            summary["opponent_usage_output_tokens"] += int(opponent_usage.get("output_tokens", 0) or 0)
             summary["opponent_usage_cost"] += float(opponent_usage.get("cost", 0.0) or 0.0)
 
     @staticmethod
     def _bot_matrix_public_summary(summary: dict[str, Any]) -> dict[str, Any]:
         games = int(summary["games"])
         avg_plies = (float(summary["plies"]) / games) if games else None
+        usage_eligible_games = len(summary["usage_eligible_game_ids"])
         usage_games = len(summary["usage_game_ids"])
+        opponent_usage_eligible_games = len(summary["opponent_usage_eligible_game_ids"])
         opponent_usage_games = len(summary["opponent_usage_game_ids"])
         usage_calls = int(summary["usage_calls"])
         usage_tokens = int(summary["usage_tokens"])
+        usage_input_tokens = int(summary["usage_input_tokens"])
+        usage_cache_tokens = int(summary["usage_cache_tokens"])
+        usage_output_tokens = int(summary["usage_output_tokens"])
         usage_cost = float(summary["usage_cost"])
+        opponent_usage_calls = int(summary["opponent_usage_calls"])
         opponent_usage_tokens = int(summary["opponent_usage_tokens"])
+        opponent_usage_input_tokens = int(summary["opponent_usage_input_tokens"])
+        opponent_usage_cache_tokens = int(summary["opponent_usage_cache_tokens"])
+        opponent_usage_output_tokens = int(summary["opponent_usage_output_tokens"])
         opponent_usage_cost = float(summary["opponent_usage_cost"])
+
+        def usage_average(value: int | float, *, calls: int, eligible_games: int) -> float | None:
+            return (float(value) / eligible_games) if calls > 0 and eligible_games else None
+
         return {
             "games": games,
             "wins": int(summary["wins"]),
@@ -828,19 +860,75 @@ class UserService:
             "record": f"{int(summary['wins'])}-{int(summary['draws'])}-{int(summary['losses'])}",
             "average_plies": avg_plies,
             "avg_plies": avg_plies,
-            "avg_calls": (float(usage_calls) / usage_games) if usage_games else None,
-            "avg_tokens": (float(usage_tokens) / usage_games) if usage_games else None,
-            "avg_cost": (usage_cost / usage_games) if usage_games else None,
-            "player_tokens": (float(usage_tokens) / usage_games) if usage_games else None,
-            "player_cost": (usage_cost / usage_games) if usage_games else None,
-            "opponent_tokens": (float(opponent_usage_tokens) / opponent_usage_games)
-            if opponent_usage_games
-            else None,
-            "opponent_cost": (opponent_usage_cost / opponent_usage_games) if opponent_usage_games else None,
+            "avg_calls": usage_average(usage_calls, calls=usage_calls, eligible_games=usage_eligible_games),
+            "avg_tokens": usage_average(usage_tokens, calls=usage_calls, eligible_games=usage_eligible_games),
+            "avg_input_tokens": usage_average(
+                usage_input_tokens,
+                calls=usage_calls,
+                eligible_games=usage_eligible_games,
+            ),
+            "avg_cache_tokens": usage_average(
+                usage_cache_tokens,
+                calls=usage_calls,
+                eligible_games=usage_eligible_games,
+            ),
+            "avg_output_tokens": usage_average(
+                usage_output_tokens,
+                calls=usage_calls,
+                eligible_games=usage_eligible_games,
+            ),
+            "avg_cost": usage_average(usage_cost, calls=usage_calls, eligible_games=usage_eligible_games),
+            "player_tokens": usage_average(usage_tokens, calls=usage_calls, eligible_games=usage_eligible_games),
+            "player_input_tokens": usage_average(
+                usage_input_tokens,
+                calls=usage_calls,
+                eligible_games=usage_eligible_games,
+            ),
+            "player_cache_tokens": usage_average(
+                usage_cache_tokens,
+                calls=usage_calls,
+                eligible_games=usage_eligible_games,
+            ),
+            "player_output_tokens": usage_average(
+                usage_output_tokens,
+                calls=usage_calls,
+                eligible_games=usage_eligible_games,
+            ),
+            "player_cost": usage_average(usage_cost, calls=usage_calls, eligible_games=usage_eligible_games),
+            "opponent_tokens": usage_average(
+                opponent_usage_tokens,
+                calls=opponent_usage_calls,
+                eligible_games=opponent_usage_eligible_games,
+            ),
+            "opponent_input_tokens": usage_average(
+                opponent_usage_input_tokens,
+                calls=opponent_usage_calls,
+                eligible_games=opponent_usage_eligible_games,
+            ),
+            "opponent_cache_tokens": usage_average(
+                opponent_usage_cache_tokens,
+                calls=opponent_usage_calls,
+                eligible_games=opponent_usage_eligible_games,
+            ),
+            "opponent_output_tokens": usage_average(
+                opponent_usage_output_tokens,
+                calls=opponent_usage_calls,
+                eligible_games=opponent_usage_eligible_games,
+            ),
+            "opponent_cost": usage_average(
+                opponent_usage_cost,
+                calls=opponent_usage_calls,
+                eligible_games=opponent_usage_eligible_games,
+            ),
+            "usage_eligible_games": usage_eligible_games,
             "usage_recorded_games": usage_games,
             "usage_calls": usage_calls,
             "usage_tokens": usage_tokens,
+            "usage_input_tokens": usage_input_tokens,
+            "usage_cache_tokens": usage_cache_tokens,
+            "usage_output_tokens": usage_output_tokens,
             "usage_cost": usage_cost,
+            "opponent_usage_eligible_games": opponent_usage_eligible_games,
             "opponent_usage_recorded_games": opponent_usage_games,
             "usage_start_date": BOT_MATRIX_USAGE_RECORD_START_LABEL,
             "win_share": (float(summary["wins"]) / games) if games else None,
@@ -886,6 +974,22 @@ class UserService:
         except (TypeError, ValueError):
             return 0.0
         return max(0.0, number) if math.isfinite(number) else 0.0
+
+    @classmethod
+    def _bot_matrix_usage_token_split(cls, record: dict[str, Any]) -> tuple[int, int, int, int]:
+        raw_input_tokens = cls._bot_matrix_usage_int(record, "input_tokens")
+        cached_input_tokens = cls._bot_matrix_usage_int(record, "cached_input_tokens")
+        cache_tokens = (
+            cached_input_tokens
+            + cls._bot_matrix_usage_int(record, "cache_read_input_tokens")
+            + cls._bot_matrix_usage_int(record, "cache_creation_input_tokens")
+        )
+        input_tokens = max(0, raw_input_tokens - cached_input_tokens)
+        output_tokens = cls._bot_matrix_usage_int(record, "output_tokens")
+        total_tokens = cls._bot_matrix_usage_int(record, "total_tokens")
+        if total_tokens <= 0:
+            total_tokens = input_tokens + cache_tokens + output_tokens
+        return input_tokens, cache_tokens, output_tokens, total_tokens
 
     @staticmethod
     def _bot_matrix_usage_username(
@@ -962,6 +1066,7 @@ class UserService:
             "bot_user_id": 1,
             "model": 1,
             "input_tokens": 1,
+            "cached_input_tokens": 1,
             "output_tokens": 1,
             "cache_read_input_tokens": 1,
             "cache_creation_input_tokens": 1,
@@ -981,20 +1086,26 @@ class UserService:
             raw_game_id = str(record.get("game_id") or "").strip()
             raw_game_code = str(record.get("game_code") or "").strip()
             game_keys = [raw_game_id, raw_game_id.upper(), raw_game_code, raw_game_code.upper()]
-            total_tokens = self._bot_matrix_usage_int(record, "total_tokens")
-            if total_tokens <= 0:
-                total_tokens = (
-                    self._bot_matrix_usage_int(record, "input_tokens")
-                    + self._bot_matrix_usage_int(record, "output_tokens")
-                    + self._bot_matrix_usage_int(record, "cache_read_input_tokens")
-                    + self._bot_matrix_usage_int(record, "cache_creation_input_tokens")
-                )
+            input_tokens, cache_tokens, output_tokens, total_tokens = self._bot_matrix_usage_token_split(record)
             cost = self._bot_matrix_usage_float(record, "cost_usd")
 
             for game_key in {key for key in game_keys if key}:
-                aggregate = usage_by_game.setdefault((game_key, username), {"calls": 0, "tokens": 0, "cost": 0.0})
+                aggregate = usage_by_game.setdefault(
+                    (game_key, username),
+                    {
+                        "calls": 0,
+                        "tokens": 0,
+                        "input_tokens": 0,
+                        "cache_tokens": 0,
+                        "output_tokens": 0,
+                        "cost": 0.0,
+                    },
+                )
                 aggregate["calls"] = int(aggregate["calls"]) + 1
                 aggregate["tokens"] = int(aggregate["tokens"]) + total_tokens
+                aggregate["input_tokens"] = int(aggregate["input_tokens"]) + input_tokens
+                aggregate["cache_tokens"] = int(aggregate["cache_tokens"]) + cache_tokens
+                aggregate["output_tokens"] = int(aggregate["output_tokens"]) + output_tokens
                 aggregate["cost"] = float(aggregate["cost"]) + cost
         return usage_by_game
 
@@ -2454,10 +2565,12 @@ class UserService:
                     return usage
             return None
 
+        usage_game_cutoff = self._bot_matrix_usage_cutoff(cutoff)
         async for game in cursor:
             played_at = self._utc_datetime(game.get("updated_at")) or self._utc_datetime(game.get("created_at"))
             if cutoff is not None and (played_at is None or not (cutoff <= played_at <= generated_at)):
                 continue
+            usage_eligible = played_at is not None and usage_game_cutoff <= played_at <= generated_at
 
             white = game.get("white") if isinstance(game.get("white"), dict) else {}
             black = game.get("black") if isinstance(game.get("black"), dict) else {}
@@ -2491,6 +2604,7 @@ class UserService:
                     outcome=outcome,
                     plies=plies,
                     game_id=game_usage_id,
+                    usage_eligible=usage_eligible,
                     usage=player_usage,
                 )
                 scope = "bots" if opponent_is_bot else "humans"
@@ -2499,6 +2613,7 @@ class UserService:
                     outcome=outcome,
                     plies=plies,
                     game_id=game_usage_id,
+                    usage_eligible=usage_eligible,
                     usage=player_usage,
                 )
 
@@ -2508,6 +2623,7 @@ class UserService:
                         outcome=outcome,
                         plies=plies,
                         game_id=game_usage_id,
+                        usage_eligible=usage_eligible,
                         usage=player_usage,
                         opponent_usage=opponent_usage,
                     )
@@ -2516,6 +2632,7 @@ class UserService:
                         outcome=outcome,
                         plies=plies,
                         game_id=game_usage_id,
+                        usage_eligible=usage_eligible,
                         usage=player_usage,
                         opponent_usage=opponent_usage,
                     )
