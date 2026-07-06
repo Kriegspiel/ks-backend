@@ -11,6 +11,7 @@ SupportedRuleVariant = str
 ALL_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
 SUPPORTED_RULE_VARIANT_VALUES = frozenset(ALL_SUPPORTED_RULE_VARIANTS)
 DEFAULT_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any"]
+BOT_USERNAME_PATTERN = r"^[a-zA-Z0-9_]+$"
 BOT_SPECIFIC_DEFAULT_RULE_VARIANTS: dict[str, list[SupportedRuleVariant]] = {
     "randobot": ALL_SUPPORTED_RULE_VARIANTS,
     "randobotany": ["berkeley_any"],
@@ -131,6 +132,9 @@ class BotUsageReportResponse(BaseModel):
 class BotProfileSyncRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
+    username: str | None = Field(default=None, min_length=1, max_length=33, pattern=BOT_USERNAME_PATTERN)
+    display_name: str | None = Field(default=None, min_length=3, max_length=40)
+    description: str | None = Field(default=None, max_length=280)
     supported_rule_variants: list[SupportedRuleVariant]
 
     @field_validator("supported_rule_variants")
@@ -146,4 +150,7 @@ class BotProfileSyncResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ok: bool = True
+    username: str
+    display_name: str
+    description: str
     supported_rule_variants: list[SupportedRuleVariant]

@@ -16,14 +16,19 @@ from app.models.bot import (
     BotUsageReportResponse,
 )
 from app.models.user import UserModel
-from app.services.bot_service import BotService
+from app.services.bot_service import BotProfileConflictError, BotService
+from app.services.user_service import UserService
 
 router = APIRouter(prefix="/bots", tags=["bots"])
 
 
 def get_bot_service() -> BotService:
     db = get_db()
-    return BotService(db.users, usage_collection=getattr(db, "bot_usage_records", None))
+    return BotService(
+        db.users,
+        usage_collection=getattr(db, "bot_usage_records", None),
+        game_collections=(getattr(db, "games", None), getattr(db, "game_archives", None)),
+    )
 
 
 @router.get("", response_model=BotListResponse)
@@ -82,10 +87,23 @@ async def sync_bot_profile(
     if user.role != "bot":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only bots can sync bot profiles")
 
-    updated = await bot_service.sync_supported_rule_variants(
-        user_id=user.id,
-        supported_rule_variants=payload.supported_rule_variants,
-    )
+    try:
+        updated = await bot_service.sync_supported_rule_variants(
+            user_id=user.id,
+            supported_rule_variants=payload.supported_rule_variants,
+            username=payload.username,
+            display_name=payload.display_name,
+            description=payload.description,
+        )
+    except BotProfileConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
-    return BotProfileSyncResponse(supported_rule_variants=payload.supported_rule_variants)
+    UserService.evict_bot_token_cache_for_user_id(user.id)
+    profile = updated.get("bot_profile") if isinstance(updated.get("bot_profile"), dict) else {}
+    return BotProfileSyncResponse(
+        username=str(updated.get("username") or user.username),
+        display_name=str(profile.get("display_name") or updated.get("username_display") or updated.get("username") or user.username),
+        description=str(profile.get("description") or ""),
+        supported_rule_variants=payload.supported_rule_variants,
+    )

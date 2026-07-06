@@ -6,6 +6,7 @@ from typing import Any
 
 from bson import ObjectId
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from app.models.bot import BotListItem, BotListResponse, BotUsageReportRequest, supported_rule_variants_for_bot
 from app.models.user import normalize_user_stats_payload
@@ -19,10 +20,15 @@ from app.llm_bot_policy import (
 
 
 MODEL_AVAILABILITY_REQUIRED_BOTS = {
+    "llm_gpt45nano": "openai",
     "llm_gptnano": "openai",
     "llm_haiku": "anthropic",
 }
 MODEL_AVAILABILITY_STALE_AFTER = timedelta(seconds=120)
+
+
+class BotProfileConflictError(Exception):
+    pass
 
 
 class BotService:
@@ -31,10 +37,12 @@ class BotService:
         users_collection: Any,
         *,
         usage_collection: Any | None = None,
+        game_collections: tuple[Any, ...] = (),
         now_factory: Callable[[], datetime] | None = None,
     ):
         self._users = users_collection
         self._usage = usage_collection
+        self._game_collections = tuple(collection for collection in game_collections if collection is not None)
         self._now_factory = now_factory or (lambda: datetime.now(UTC))
 
     @staticmethod
@@ -210,17 +218,70 @@ class BotService:
         *,
         user_id: str,
         supported_rule_variants: list[str],
+        username: str | None = None,
+        display_name: str | None = None,
+        description: str | None = None,
     ) -> dict[str, Any] | None:
-        now = self._now_factory()
-        update = {
-            "$set": {
-                "bot_profile.supported_rule_variants": list(supported_rule_variants),
-                "updated_at": now,
-            }
-        }
+        current = await self._find_active_bot(user_id)
+        if current is None:
+            return None
 
+        now = self._now_factory()
+        old_username = str(current.get("username") or "").strip().lower()
+        new_username = username.strip().lower() if isinstance(username, str) and username.strip() else old_username
+        if new_username != old_username:
+            existing = await self._users.find_one({"username": new_username, "_id": {"$ne": current["_id"]}})
+            if existing is not None:
+                raise BotProfileConflictError(f"Username already exists: {new_username}")
+
+        changes: dict[str, Any] = {
+            "bot_profile.supported_rule_variants": list(supported_rule_variants),
+            "updated_at": now,
+        }
+        if new_username != old_username:
+            changes["username"] = new_username
+        if isinstance(display_name, str) and display_name.strip():
+            normalized_display = display_name.strip()
+            changes["username_display"] = normalized_display
+            changes["bot_profile.display_name"] = normalized_display
+        if isinstance(description, str):
+            normalized_description = description.strip()
+            changes["bot_profile.description"] = normalized_description
+            changes["profile.bio"] = normalized_description
+
+        update = {"$set": changes}
+
+        try:
+            updated = await self._users.find_one_and_update(
+                {"_id": current["_id"], "role": "bot", "status": "active"},
+                update,
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError as exc:
+            raise BotProfileConflictError(f"Username already exists: {new_username}") from exc
+        if updated is not None and new_username != old_username:
+            await self._update_bot_username_references(
+                user_id=str(current["_id"]),
+                old_username=old_username,
+                new_username=new_username,
+            )
+        return updated
+
+    async def _find_active_bot(self, user_id: str) -> dict[str, Any] | None:
         for query in self._active_bot_queries(user_id):
-            updated = await self._users.find_one_and_update(query, update, return_document=ReturnDocument.AFTER)
-            if updated is not None:
-                return updated
+            found = await self._users.find_one(query)
+            if found is not None:
+                return found
         return None
+
+    async def _update_bot_username_references(self, *, user_id: str, old_username: str, new_username: str) -> None:
+        for collection in self._game_collections:
+            for side in ("white", "black"):
+                await collection.update_many({f"{side}.user_id": user_id}, {"$set": {f"{side}.username": new_username}})
+                await collection.update_many(
+                    {f"{side}.username": old_username},
+                    {"$set": {f"{side}.username": new_username}},
+                )
+            await collection.update_many({"created_by": old_username}, {"$set": {"created_by": new_username}})
+        if self._usage is not None:
+            await self._usage.update_many({"bot_username": old_username}, {"$set": {"bot_username": new_username}})

@@ -83,7 +83,15 @@ def test_bot_register_request_allows_supported_rule_variants_to_be_omitted() -> 
 
 
 def test_bot_profile_sync_request_validates_supported_rule_variants() -> None:
-    payload = BotProfileSyncRequest(supported_rule_variants=["wild16", "berkeley_any", "wild16"])
+    payload = BotProfileSyncRequest(
+        username="llm_gpt45nano",
+        display_name="LLM GPT-4.5 Nano (bot)",
+        description="LLM GPT-4.5 Nano (bot) Kriegspiel model bot.",
+        supported_rule_variants=["wild16", "berkeley_any", "wild16"],
+    )
+    assert payload.username == "llm_gpt45nano"
+    assert payload.display_name == "LLM GPT-4.5 Nano (bot)"
+    assert payload.description == "LLM GPT-4.5 Nano (bot) Kriegspiel model bot."
     assert payload.supported_rule_variants == ["wild16", "berkeley_any"]
 
     with pytest.raises(ValueError, match="At least one supported rule variant is required"):
