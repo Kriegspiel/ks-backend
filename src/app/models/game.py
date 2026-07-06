@@ -40,6 +40,7 @@ class GameDocument(BaseModel):
     move_number: int = Field(default=1, ge=1)
     llm_bot_tier: LlmBotTier | None = None
     llm_bot_ply_limit: int | None = Field(default=None, ge=0)
+    llm_bot_ply_limits: dict[str, int] | None = None
     llm_bot_user_id: str | None = None
     created_at: datetime
     updated_at: datetime

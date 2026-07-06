@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.75
+
+- **LLM Bot Caps**: remove ply caps from human-vs-LLM-bot games while assigning
+  per-side random 128-256 ply caps when LLM bots enter bot-vs-bot games.
+
 ## ks-backend v. 1.3.71
 
 - **Bot Matrix Usage Averages**: divide token, call, and spend averages by games

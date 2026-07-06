@@ -4,6 +4,7 @@ import asyncio
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+import random
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -74,6 +75,8 @@ ELO_K_FACTOR = 32
 WAITING_GAME_TTL = timedelta(minutes=10)
 PRE_START_ACTIVE_GAME_TTL = timedelta(hours=1)
 BOT_GAME_FLUSH_PLIES = 20
+BOT_VS_BOT_LLM_PLY_LIMIT_MIN = 128
+BOT_VS_BOT_LLM_PLY_LIMIT_MAX = 256
 BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
 FLUSH_LOOP_INTERVAL_SECONDS = 1.0
 TIMEOUT_SWEEP_INTERVAL = timedelta(minutes=25)
@@ -92,6 +95,7 @@ GAME_METADATA_PROJECTION = {
     "move_number": 1,
     "llm_bot_tier": 1,
     "llm_bot_ply_limit": 1,
+    "llm_bot_ply_limits": 1,
     "llm_bot_user_id": 1,
     "created_at": 1,
     "updated_at": 1,
@@ -1739,16 +1743,89 @@ class GameService:
             return None
         return limit if limit > 0 else None
 
+    @classmethod
+    def _stored_llm_bot_ply_limit_for_color(cls, game: dict[str, Any], color: str) -> int | None:
+        limits = game.get("llm_bot_ply_limits")
+        if isinstance(limits, dict):
+            raw = limits.get(color)
+            if raw is not None:
+                try:
+                    limit = int(raw)
+                except (TypeError, ValueError):
+                    return None
+                return limit if limit > 0 else None
+        return cls._stored_llm_bot_ply_limit(game)
+
+    @staticmethod
+    def _has_per_color_llm_bot_ply_limits(game: dict[str, Any]) -> bool:
+        limits = game.get("llm_bot_ply_limits")
+        return isinstance(limits, dict) and bool(limits)
+
+    def _visible_llm_bot_ply_limit(self, *, game: dict[str, Any], viewer_color: str) -> int | None:
+        if self._is_human_involved_game(game):
+            return None
+
+        player = game.get(viewer_color) if isinstance(game.get(viewer_color), dict) else None
+        if not player or player.get("role") != "bot":
+            return None
+        return self._stored_llm_bot_ply_limit_for_color(game, viewer_color)
+
+    def _sample_bot_vs_bot_llm_ply_limit(self) -> int:
+        if self._rng is not None and hasattr(self._rng, "randint"):
+            return int(self._rng.randint(BOT_VS_BOT_LLM_PLY_LIMIT_MIN, BOT_VS_BOT_LLM_PLY_LIMIT_MAX))
+        return random.randint(BOT_VS_BOT_LLM_PLY_LIMIT_MIN, BOT_VS_BOT_LLM_PLY_LIMIT_MAX)
+
+    def _sample_distinct_bot_vs_bot_llm_ply_limits(self, count: int) -> list[int]:
+        limits: list[int] = []
+        attempts = 0
+        while len(limits) < count:
+            limit = self._sample_bot_vs_bot_llm_ply_limit()
+            attempts += 1
+            if count <= 1 or limit not in limits:
+                limits.append(limit)
+                continue
+            if attempts < 16:
+                continue
+
+            span = BOT_VS_BOT_LLM_PLY_LIMIT_MAX - BOT_VS_BOT_LLM_PLY_LIMIT_MIN + 1
+            fallback = BOT_VS_BOT_LLM_PLY_LIMIT_MIN + ((limit - BOT_VS_BOT_LLM_PLY_LIMIT_MIN + 1) % span)
+            while fallback in limits:
+                fallback = BOT_VS_BOT_LLM_PLY_LIMIT_MIN + ((fallback - BOT_VS_BOT_LLM_PLY_LIMIT_MIN + 1) % span)
+            limits.append(fallback)
+        return limits
+
+    async def _bot_vs_bot_llm_limit_payload(
+        self,
+        *,
+        white: dict[str, Any],
+        black: dict[str, Any],
+    ) -> dict[str, Any]:
+        llm_bot_colors: list[PlayerColor] = []
+        for color, player in (("white", white), ("black", black)):
+            if player.get("role") != "bot":
+                continue
+            if is_llm_bot_document(await self._bot_doc_for_player(player)):
+                llm_bot_colors.append(color)
+
+        if not llm_bot_colors:
+            return {}
+
+        sampled_limits = self._sample_distinct_bot_vs_bot_llm_ply_limits(len(llm_bot_colors))
+        return {"llm_bot_ply_limits": dict(zip(llm_bot_colors, sampled_limits, strict=True))}
+
     def _apply_llm_bot_ply_limit_locked(self, *, game: dict[str, Any], now: datetime) -> bool:
         if game.get("state") != "active":
             return False
 
-        limit = self._stored_llm_bot_ply_limit(game)
-        if limit is None or self._ply_count(game) < limit:
+        if self._is_human_involved_game(game):
             return False
 
         turn = game.get("turn")
         if turn not in ("white", "black"):
+            return False
+
+        limit = self._stored_llm_bot_ply_limit_for_color(game, turn)
+        if limit is None or self._ply_count(game) < limit:
             return False
 
         player = game.get(turn) if isinstance(game.get(turn), dict) else None
@@ -1756,7 +1833,11 @@ class GameService:
             return False
 
         llm_bot_user_id = str(game.get("llm_bot_user_id") or "")
-        if llm_bot_user_id and str(player.get("user_id") or "") != llm_bot_user_id:
+        if (
+            not self._has_per_color_llm_bot_ply_limits(game)
+            and llm_bot_user_id
+            and str(player.get("user_id") or "") != llm_bot_user_id
+        ):
             return False
 
         winner: PlayerColor = "black" if turn == "white" else "white"
@@ -2077,6 +2158,9 @@ class GameService:
             white = joiner
             black = creator
 
+        if role == "bot" and creator.get("role") == "bot":
+            llm_bot_payload = await self._bot_vs_bot_llm_limit_payload(white=white, black=black)
+
         engine = create_new_game(rule_variant=game.get("rule_variant", "berkeley_any"))
         updated = await self._games.find_one_and_update(
             {"_id": game["_id"], "state": "waiting"},
@@ -2265,7 +2349,7 @@ class GameService:
             move_number=game.get("move_number", 1),
             ply_count=self._ply_count(game),
             llm_bot_tier=game.get("llm_bot_tier"),
-            llm_bot_ply_limit=game.get("llm_bot_ply_limit"),
+            llm_bot_ply_limit=self._visible_llm_bot_ply_limit(game=game, viewer_color=color),
             your_color=color,
             your_fen=project_player_fen(engine=engine, viewer_color=color, game_state=game["state"]),
             allowed_moves=allowed_moves_for_player(
