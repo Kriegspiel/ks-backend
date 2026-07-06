@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.71
+
+- **Bot Matrix Usage Averages**: divide token, call, and spend averages by games
+  with recorded usage only, and map generic GPT Nano model usage to the
+  canonical `llm_gptnano` bot.
+
 ## ks-backend v. 1.3.70
 
 - **Bot Matrix Usage Averages**: split average usage into input/cache/output

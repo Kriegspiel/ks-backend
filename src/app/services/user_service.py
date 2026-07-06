@@ -68,7 +68,7 @@ BOT_MATRIX_USAGE_USERNAME_ALIASES = {
 BOT_MATRIX_USAGE_GENERIC_USERNAMES = frozenset({"openrouterbot"})
 BOT_MATRIX_USAGE_MODEL_ALIASES = {
     "claude-haiku-4-5-20251001": "llm_haiku",
-    "gpt-5.4-nano": "llm_gpt45nano",
+    "gpt-5.4-nano": "llm_gptnano",
     "google/gemini-2.5-flash-lite": "llm_gemini25_lite",
     "gemini-2.5-flash-lite": "llm_gemini25_lite",
     "deepseek-v4-flash": "llm_deepseekv4_flash",
@@ -849,8 +849,8 @@ class UserService:
         opponent_usage_output_tokens = int(summary["opponent_usage_output_tokens"])
         opponent_usage_cost = float(summary["opponent_usage_cost"])
 
-        def usage_average(value: int | float, *, calls: int, eligible_games: int) -> float | None:
-            return (float(value) / eligible_games) if calls > 0 and eligible_games else None
+        def usage_average(value: int | float, *, calls: int, recorded_games: int) -> float | None:
+            return (float(value) / recorded_games) if calls > 0 and recorded_games else None
 
         return {
             "games": games,
@@ -860,65 +860,65 @@ class UserService:
             "record": f"{int(summary['wins'])}-{int(summary['draws'])}-{int(summary['losses'])}",
             "average_plies": avg_plies,
             "avg_plies": avg_plies,
-            "avg_calls": usage_average(usage_calls, calls=usage_calls, eligible_games=usage_eligible_games),
-            "avg_tokens": usage_average(usage_tokens, calls=usage_calls, eligible_games=usage_eligible_games),
+            "avg_calls": usage_average(usage_calls, calls=usage_calls, recorded_games=usage_games),
+            "avg_tokens": usage_average(usage_tokens, calls=usage_calls, recorded_games=usage_games),
             "avg_input_tokens": usage_average(
                 usage_input_tokens,
                 calls=usage_calls,
-                eligible_games=usage_eligible_games,
+                recorded_games=usage_games,
             ),
             "avg_cache_tokens": usage_average(
                 usage_cache_tokens,
                 calls=usage_calls,
-                eligible_games=usage_eligible_games,
+                recorded_games=usage_games,
             ),
             "avg_output_tokens": usage_average(
                 usage_output_tokens,
                 calls=usage_calls,
-                eligible_games=usage_eligible_games,
+                recorded_games=usage_games,
             ),
-            "avg_cost": usage_average(usage_cost, calls=usage_calls, eligible_games=usage_eligible_games),
-            "player_tokens": usage_average(usage_tokens, calls=usage_calls, eligible_games=usage_eligible_games),
+            "avg_cost": usage_average(usage_cost, calls=usage_calls, recorded_games=usage_games),
+            "player_tokens": usage_average(usage_tokens, calls=usage_calls, recorded_games=usage_games),
             "player_input_tokens": usage_average(
                 usage_input_tokens,
                 calls=usage_calls,
-                eligible_games=usage_eligible_games,
+                recorded_games=usage_games,
             ),
             "player_cache_tokens": usage_average(
                 usage_cache_tokens,
                 calls=usage_calls,
-                eligible_games=usage_eligible_games,
+                recorded_games=usage_games,
             ),
             "player_output_tokens": usage_average(
                 usage_output_tokens,
                 calls=usage_calls,
-                eligible_games=usage_eligible_games,
+                recorded_games=usage_games,
             ),
-            "player_cost": usage_average(usage_cost, calls=usage_calls, eligible_games=usage_eligible_games),
+            "player_cost": usage_average(usage_cost, calls=usage_calls, recorded_games=usage_games),
             "opponent_tokens": usage_average(
                 opponent_usage_tokens,
                 calls=opponent_usage_calls,
-                eligible_games=opponent_usage_eligible_games,
+                recorded_games=opponent_usage_games,
             ),
             "opponent_input_tokens": usage_average(
                 opponent_usage_input_tokens,
                 calls=opponent_usage_calls,
-                eligible_games=opponent_usage_eligible_games,
+                recorded_games=opponent_usage_games,
             ),
             "opponent_cache_tokens": usage_average(
                 opponent_usage_cache_tokens,
                 calls=opponent_usage_calls,
-                eligible_games=opponent_usage_eligible_games,
+                recorded_games=opponent_usage_games,
             ),
             "opponent_output_tokens": usage_average(
                 opponent_usage_output_tokens,
                 calls=opponent_usage_calls,
-                eligible_games=opponent_usage_eligible_games,
+                recorded_games=opponent_usage_games,
             ),
             "opponent_cost": usage_average(
                 opponent_usage_cost,
                 calls=opponent_usage_calls,
-                eligible_games=opponent_usage_eligible_games,
+                recorded_games=opponent_usage_games,
             ),
             "usage_eligible_games": usage_eligible_games,
             "usage_recorded_games": usage_games,
