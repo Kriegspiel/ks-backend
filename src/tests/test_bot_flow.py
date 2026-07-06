@@ -342,6 +342,8 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
 
     assert BotService.bot_can_start_games({"username": "randobot"}, now=now) is True
     assert BotService.bot_can_start_games({"username": "llm_gptnano"}, now=now) is False
+    assert BotService.bot_can_start_games({"username": "llm_gpt55"}, now=now) is False
+    assert BotService.bot_can_start_games({"username": "llm_sonnet5"}, now=now) is False
     assert (
         BotService.bot_can_start_games(
             {
@@ -384,6 +386,26 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
             now=now,
         )
         is False
+    )
+    assert (
+        BotService.bot_can_start_games(
+            {
+                "username": "llm_gpt55",
+                "bot_profile": {"model_availability": {"provider": "openai", "ready": True, "checked_at": now}},
+            },
+            now=now,
+        )
+        is True
+    )
+    assert (
+        BotService.bot_can_start_games(
+            {
+                "username": "llm_sonnet5",
+                "bot_profile": {"model_availability": {"provider": "anthropic", "ready": True, "checked_at": now}},
+            },
+            now=now,
+        )
+        is True
     )
 
 

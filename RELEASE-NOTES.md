@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.75
+
+- **LLM Bot Catalogue**: recognize the full T2-T5 model-bot username catalogue
+  and require fresh provider availability before newly configured model bots
+  appear in bot selection.
+
 ## ks-backend v. 1.3.71
 
 - **Bot Matrix Usage Averages**: divide token, call, and spend averages by games
