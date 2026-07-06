@@ -760,16 +760,85 @@ async def test_get_public_profile_and_missing_user() -> None:
     assert profile["llm_bot_tier"] == "tier2"
     assert profile["stats"]["elo"] == 1337
     assert profile["stats"]["ratings"]["overall"]["elo"] == 1337
+    assert profile["user_metrics"]["completed_games"] == 0
     assert "bot_metrics" not in profile
     assert bot_profile is not None
     assert bot_profile["llm_bot_tier"] is None
     assert bot_profile["owner_email"] == "bot-random-any@kriegspiel.org"
+    assert bot_profile["user_metrics"]["completed_games"] == 0
     assert bot_profile["bot_metrics"]["completed_games"] == 0
     assert missing is None
 
 
 @pytest.mark.asyncio
-async def test_get_public_bot_profile_includes_generic_bot_metrics() -> None:
+async def test_get_public_profile_includes_user_metrics_for_regular_users() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": user_id,
+            "username": "fil",
+            "username_display": "fil",
+            "email": "fil@example.com",
+            "email_verified": True,
+            "password_hash": "hash",
+            "auth_providers": ["local"],
+            "profile": {"bio": "", "avatar_url": None, "country": None},
+            "stats": default_user_stats_payload(),
+            "settings": {},
+            "role": "user",
+            "status": "active",
+            "created_at": datetime(2026, 5, 18, tzinfo=UTC),
+            "updated_at": datetime(2026, 5, 18, tzinfo=UTC),
+        }
+    )
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "USR001",
+                "white": {"user_id": str(user_id), "username": "fil", "role": "user"},
+                "black": {"user_id": "bot-1", "username": "randobot", "role": "bot"},
+                "rule_variant": "berkeley",
+                "turn_count": 5,
+                "result": {"winner": "black"},
+                "created_at": datetime(2026, 5, 18, 10, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 18, 10, 5, tzinfo=UTC),
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "USR002",
+                "white": {"user_id": "human-1", "username": "amy", "role": "user"},
+                "black": {"user_id": str(user_id), "username": "fil", "role": "user"},
+                "rule_variant": "english",
+                "move_count": 7,
+                "result": {"winner": "black"},
+                "created_at": datetime(2026, 5, 18, 11, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 18, 11, 10, tzinfo=UTC),
+            },
+        ]
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    profile = await service.get_public_profile(db, "fil")
+
+    assert profile is not None
+    assert "bot_metrics" not in profile
+    metrics = profile["user_metrics"]
+    assert metrics["completed_games"] == 2
+    assert metrics["average_turn_count"] == 6.0
+    assert metrics["vs_bots"] == {"total_games": 1, "wins": 0, "losses": 1, "draws": 0, "win_rate": 0.0}
+    assert metrics["vs_humans"] == {"total_games": 1, "wins": 1, "losses": 0, "draws": 0, "win_rate": 1.0}
+    assert metrics["as_white"] == {"total_games": 1, "wins": 0, "losses": 1, "draws": 0, "win_rate": 0.0}
+    assert metrics["as_black"] == {"total_games": 1, "wins": 1, "losses": 0, "draws": 0, "win_rate": 1.0}
+    assert metrics["opponents"][0]["username"] == "amy"
+    assert metrics["rulesets"][0]["rule_variant"] == "berkeley"
+
+
+@pytest.mark.asyncio
+async def test_get_public_bot_profile_includes_generic_profile_metrics() -> None:
     users = FakeUsersCollection()
     archives = FakeUsersCollection()
     bot_id = ObjectId()
@@ -848,7 +917,8 @@ async def test_get_public_bot_profile_includes_generic_bot_metrics() -> None:
     profile = await service.get_public_profile(db, "darkboardmcts")
 
     assert profile is not None
-    metrics = profile["bot_metrics"]
+    metrics = profile["user_metrics"]
+    assert profile["bot_metrics"] == metrics
     assert metrics["completed_games"] == 3
     assert metrics["average_duration_seconds"] == 600
     assert metrics["average_turn_count"] == 10.0
@@ -1713,16 +1783,16 @@ def test_remaining_user_service_helper_edges(monkeypatch: pytest.MonkeyPatch) ->
     assert UserService._created_day({"_id": generated_id}) == generated_id.generation_time.date().isoformat()
     assert UserService._result_tracks_are_consistent(inconsistent_stats) is False
     assert (
-        UserService._bot_metric_play_as(
+        UserService._profile_metric_play_as(
             {"white": None, "black": {"username": "MetricBot"}},
             user_id="missing",
             username="metricbot",
         )
         == "black"
     )
-    assert UserService._bot_metric_play_as({"white": None, "black": None}, user_id="missing", username="metricbot") is None
-    assert UserService._bot_metric_turn_count({"turn_count": "bad", "move_count": 5}) == 5
-    assert UserService._bot_metric_turn_count({"turn_count": "bad", "move_count": "bad"}) == 0
+    assert UserService._profile_metric_play_as({"white": None, "black": None}, user_id="missing", username="metricbot") is None
+    assert UserService._profile_metric_turn_count({"turn_count": "bad", "move_count": 5}) == 5
+    assert UserService._profile_metric_turn_count({"turn_count": "bad", "move_count": "bad"}) == 0
     assert UserService._activity_game_has_completed_move({"moves": [{"move_done": True}]}) is True
     assert (
         UserService._activity_game_has_completed_move(
@@ -1781,7 +1851,7 @@ def test_game_clock_duration_handles_invalid_colors_and_pending_attempts() -> No
 
 
 @pytest.mark.asyncio
-async def test_bot_profile_metrics_skips_unmatched_games_and_uses_username_match(
+async def test_profile_metrics_skips_unmatched_games_and_uses_username_match(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bot_id = ObjectId()
@@ -1825,7 +1895,7 @@ async def test_bot_profile_metrics_skips_unmatched_games_and_uses_username_match
     service = UserService(FakeUsersCollection())
     monkeypatch.setattr(service, "_find", lambda collection, query, projection=None: FakeCursor(archive_docs))  # noqa: ARG005
 
-    metrics = await service._bot_profile_metrics(
+    metrics = await service._profile_metrics(
         FakeDB(users=FakeUsersCollection(), game_archives=FakeUsersCollection()),
         {"_id": bot_id, "username": "metricbot"},
     )

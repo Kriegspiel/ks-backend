@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.66
+
+- **Profile Metrics API**: include archive-derived `user_metrics` on every
+  public profile while keeping `bot_metrics` as a bot-profile compatibility
+  alias.
+
 ## ks-backend v. 1.3.65
 
 - **Game History API**: allow opponent filters to use `human:*` and `bot:*`
