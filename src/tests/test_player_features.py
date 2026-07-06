@@ -162,7 +162,7 @@ def _build_app_and_db():
             },
             {
                 "_id": ObjectId("507f1f77bcf86cd799439017"),
-                "username": "llm_gpt45nano",
+                "username": "llm_gptnano",
                 "username_display": "LLM GPT-4.5 Nano (bot)",
                 "role": "bot",
                 "bot_profile": {"display_name": "LLM GPT-4.5 Nano (bot)", "listed": True},
@@ -357,7 +357,7 @@ def test_leaderboard_orders_by_elo_and_filters_min_games() -> None:
 
     assert leaderboard.status_code == 200
     players = leaderboard.json()["players"]
-    assert [p["username"] for p in players] == ["alpha", "randobot", "playerone", "llm_gpt45nano"]
+    assert [p["username"] for p in players] == ["alpha", "randobot", "playerone", "llm_gptnano"]
     assert "guest_adolf_adams" not in [p["username"] for p in players]
     assert all(p["games_played"] >= 5 for p in players if not p["is_bot"])
     assert players[1]["is_bot"] is True

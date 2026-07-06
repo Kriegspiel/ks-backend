@@ -1642,7 +1642,7 @@ async def test_get_game_history_exposes_named_track_snapshots_for_selected_track
         {
             "_id": ObjectId(),
             "game_code": "D7K2M9",
-            "white": {"user_id": str(user_id), "username": "llm_gpt45nano", "role": "bot"},
+            "white": {"user_id": str(user_id), "username": "llm_gptnano", "role": "bot"},
             "black": {"user_id": str(other_id), "username": "randobot", "role": "bot"},
             "result": {"winner": "black", "reason": "checkmate"},
             "rating_snapshot": {
@@ -2406,7 +2406,7 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
         [
             {"_id": human_id, "username": "fil", "role": "user"},
             {"_id": guest_id, "username": "guest_judit_polgar", "role": "guest"},
-            {"_id": bot_id, "username": "llm_gpt45nano", "role": "bot"},
+            {"_id": bot_id, "username": "llm_gptnano", "role": "bot"},
             {"_id": other_bot_id, "username": "llm_haiku", "role": "bot"},
         ]
     )
@@ -2419,7 +2419,7 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
                 "rule_variant": "crazykrieg",
                 "state": "completed",
                 "white": {"user_id": str(human_id), "username": "fil", "role": "user"},
-                "black": {"user_id": str(bot_id), "username": "llm_gpt45nano"},
+                "black": {"user_id": str(bot_id), "username": "llm_gptnano"},
                 "result": {"winner": "white", "reason": "checkmate"},
                 "updated_at": datetime(2026, 5, 1, 10, tzinfo=UTC),
                 "turn_count": 12,
@@ -2427,7 +2427,7 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
             {
                 "_id": ObjectId(),
                 "game_code": "BOTBOT",
-                "white": {"user_id": str(bot_id), "username": "llm_gpt45nano", "role": "bot"},
+                "white": {"user_id": str(bot_id), "username": "llm_gptnano", "role": "bot"},
                 "black": {"user_id": str(other_bot_id), "username": "llm_haiku", "role": "bot"},
                 "result": {"winner": "black"},
                 "updated_at": datetime(2026, 4, 30, 15, tzinfo=UTC),
@@ -2442,7 +2442,7 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
             "rule_variant": "wild16",
             "state": "active",
             "white": {"user_id": str(guest_id), "username": "guest_judit_polgar", "role": "guest"},
-            "black": {"user_id": str(bot_id), "username": "llm_gpt45nano"},
+            "black": {"user_id": str(bot_id), "username": "llm_gptnano"},
             "move_number": 2,
             "created_at": datetime(2026, 5, 1, 10, 30, tzinfo=UTC),
             "updated_at": datetime(2026, 5, 1, 11, tzinfo=UTC),
@@ -2455,7 +2455,7 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
             "rule_variant": "berkeley_any",
             "state": "waiting",
             "white": None,
-            "black": {"user_id": str(bot_id), "username": "llm_gpt45nano", "role": "bot"},
+            "black": {"user_id": str(bot_id), "username": "llm_gptnano", "role": "bot"},
             "created_at": datetime(2026, 5, 1, 11, 30, tzinfo=UTC),
             "updated_at": datetime(2026, 5, 1, 11, 30, tzinfo=UTC),
         }
@@ -2467,7 +2467,7 @@ async def test_get_user_activity_report_counts_periods_and_user_games() -> None:
             "rule_variant": "berkeley_any",
             "state": "active",
             "white": {"user_id": str(human_id), "username": "fil", "role": "user"},
-            "black": {"user_id": str(bot_id), "username": "llm_gpt45nano", "role": "bot"},
+            "black": {"user_id": str(bot_id), "username": "llm_gptnano", "role": "bot"},
             "move_number": 1,
             "created_at": datetime(2026, 5, 1, 11, 40, tzinfo=UTC),
             "updated_at": datetime(2026, 5, 1, 11, 40, tzinfo=UTC),
@@ -2632,7 +2632,7 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
             },
             {
                 "_id": "nano-id",
-                "username": "llm_gpt45nano",
+                "username": "llm_gptnano",
                 "username_display": "LLM GPT-4.5 Nano (bot)",
                 "role": "bot",
                 "bot_profile": {"listed": True, "display_name": "LLM GPT-4.5 Nano (bot)"},
@@ -2661,7 +2661,7 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
                 "game_code": "OLD001",
                 "updated_at": datetime(2026, 7, 4, 12, tzinfo=UTC),
                 "white": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
-                "black": {"user_id": "nano-id", "username": "llm_gpt45nano", "role": "bot"},
+                "black": {"user_id": "nano-id", "username": "llm_gptnano", "role": "bot"},
                 "result": {"winner": "white", "reason": "checkmate"},
                 "move_count": 20,
             },
@@ -2669,7 +2669,7 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
                 "state": "completed",
                 "game_code": "TODAY1",
                 "updated_at": datetime(2026, 7, 5, 9, tzinfo=UTC),
-                "white": {"user_id": "nano-id", "username": "llm_gpt45nano", "role": "bot"},
+                "white": {"user_id": "nano-id", "username": "llm_gptnano", "role": "bot"},
                 "black": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
                 "result": {"winner": None, "reason": "insufficient"},
                 "move_count": 10,
@@ -2743,7 +2743,7 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
     assert report["period"] == "today"
     assert report["unique_game_count"] == 1
     assert report["row_record_count"] == 2
-    assert [player["username"] for player in report["players"]] == ["llm_haiku", "llm_gpt45nano"]
+    assert [player["username"] for player in report["players"]] == ["llm_haiku", "llm_gptnano"]
     assert report["end_condition_rows"] == [{"condition": "insufficient", "label": "Insufficient material", "games": 1}]
 
     haiku_row = report["matrix_rows"][0]
@@ -2787,31 +2787,31 @@ async def test_get_listed_bot_daily_report_aggregates_daily_win_rates(monkeypatc
 
     listed_bot_docs = [
         {"username": "llm_haiku"},
-        {"username": "llm_gpt45nano"},
+        {"username": "llm_gptnano"},
         {"username": "   "},
     ]
     archive_docs = [
         {
             "updated_at": previous_midday_local.astimezone(UTC),
-            "white": {"username": "llm_gpt45nano", "role": "bot"},
+            "white": {"username": "llm_gptnano", "role": "bot"},
             "black": {"username": "humanone", "role": "user"},
             "result": {"winner": "white"},
         },
         {
             "updated_at": midday_local.astimezone(UTC).replace(tzinfo=None),
-            "white": {"username": "llm_gpt45nano", "role": "bot"},
+            "white": {"username": "llm_gptnano", "role": "bot"},
             "black": {"username": "llm_haiku", "role": "bot"},
             "result": {"winner": "black"},
         },
         {
             "updated_at": "bad-timestamp",
-            "white": {"username": "llm_gpt45nano", "role": "bot"},
+            "white": {"username": "llm_gptnano", "role": "bot"},
             "black": {"username": "llm_haiku", "role": "bot"},
             "result": {"winner": "white"},
         },
         {
             "updated_at": (previous_midday_local - timedelta(days=30)).astimezone(UTC),
-            "white": {"username": "llm_gpt45nano", "role": "bot"},
+            "white": {"username": "llm_gptnano", "role": "bot"},
             "black": {"username": "human", "role": "user"},
             "result": {"winner": "white"},
         },
@@ -2829,7 +2829,7 @@ async def test_get_listed_bot_daily_report_aggregates_daily_win_rates(monkeypatc
     report = await service.get_listed_bot_daily_report(db, days=3, timezone_name="America/New_York")
 
     assert report["timezone"] == "America/New_York"
-    assert [bot["username"] for bot in report["bots"]] == ["llm_gpt45nano", "llm_haiku"]
+    assert [bot["username"] for bot in report["bots"]] == ["llm_gptnano", "llm_haiku"]
     assert len(report["bots"][0]["rows"]) == 3
 
     gpt_rows = report["bots"][0]["rows"]
