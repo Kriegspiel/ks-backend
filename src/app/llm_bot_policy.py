@@ -48,8 +48,8 @@ LLM_BOT_TIER_ALIASES: dict[str, LlmBotTier] = {
 
 KNOWN_LLM_BOT_USERNAMES = frozenset(
     {
-        "llm_gpt45nano",
         "llm_gptnano",
+        "llm_gpt45nano",
         "llm_haiku",
         "openrouterbot",
         "openrouter_gemini25_lite",

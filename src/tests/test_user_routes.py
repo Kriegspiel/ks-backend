@@ -85,7 +85,7 @@ class StubService:
                 "timezone": "America/New_York",
                 "bots": [
                     {
-                        "username": "llm_gpt45nano",
+                        "username": "llm_gptnano",
                         "rows": [
                             {
                                 "date": "2026-04-08",
@@ -103,7 +103,7 @@ class StubService:
         self.get_bot_matrix_report = AsyncMock(
             return_value={
                 "period": "lifetime",
-                "players": [{"username": "llm_gpt45nano", "name": "LLM GPT-4.5 Nano (bot)"}],
+                "players": [{"username": "llm_gptnano", "name": "LLM GPT-4.5 Nano (bot)"}],
                 "matrix_rows": [],
                 "end_condition_rows": [],
                 "total_rows": {"all": [], "humans": [], "bots": []},
@@ -281,7 +281,7 @@ def test_tech_report_routes_require_operator_access() -> None:
         users_report = client.get("/api/tech/users-report")
 
     assert bots_report.status_code == 200
-    assert bots_report.json()["bots"][0]["username"] == "llm_gpt45nano"
+    assert bots_report.json()["bots"][0]["username"] == "llm_gptnano"
 
     assert bot_matrix_report.status_code == 200
     assert bot_matrix_report.json()["unique_game_count"] == 27348

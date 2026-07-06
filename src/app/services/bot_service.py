@@ -20,8 +20,8 @@ from app.llm_bot_policy import (
 
 
 MODEL_AVAILABILITY_REQUIRED_BOTS = {
-    "llm_gpt45nano": "openai",
     "llm_gptnano": "openai",
+    "llm_gpt45nano": "openai",
     "llm_haiku": "anthropic",
 }
 MODEL_AVAILABILITY_STALE_AFTER = timedelta(seconds=120)

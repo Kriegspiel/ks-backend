@@ -54,8 +54,8 @@ BOT_MATRIX_USAGE_RECORD_START = datetime(2026, 7, 4, tzinfo=UTC)
 BOT_MATRIX_USAGE_RECORD_START_LABEL = "2026-07-04"
 BOT_MATRIX_USAGE_USERNAME_ALIASES = {
     "haiku": "llm_haiku",
-    "gptnano": "llm_gpt45nano",
-    "llm_gptnano": "llm_gpt45nano",
+    "gptnano": "llm_gptnano",
+    "llm_gpt45nano": "llm_gptnano",
     "bot_gemini25_lite": "llm_gemini25_lite",
     "bot_deepseekv4_flash": "llm_deepseekv4_flash",
     "bot_gptoss120b": "llm_gptoss120b",
@@ -67,7 +67,7 @@ BOT_MATRIX_USAGE_USERNAME_ALIASES = {
 }
 BOT_MATRIX_PLAYER_ORDER = (
     "llm_haiku",
-    "llm_gpt45nano",
+    "llm_gptnano",
     "llm_gemini25_lite",
     "llm_deepseekv4_flash",
     "llm_gptoss120b",
