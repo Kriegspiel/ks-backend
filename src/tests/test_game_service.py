@@ -1223,26 +1223,35 @@ async def test_resign_rejects_non_participant() -> None:
 @pytest.mark.asyncio
 async def test_get_game_state_auto_completes_llm_bot_at_ply_limit() -> None:
     games = FakeGamesCollection()
-    game = active_game_doc(black_role="bot", turn="black")
+    game = active_game_doc(white_role="bot", black_role="bot", turn="black")
     game["_id"] = ObjectId()
     game["game_code"] = "L4M7T2"
     game["move_number"] = 129
     game["moves"] = [{"ply": index + 1, "move_done": True} for index in range(128)]
-    game["llm_bot_tier"] = "tier1"
-    game["llm_bot_ply_limit"] = 128
-    game["llm_bot_user_id"] = "u2"
+    game["llm_bot_ply_limits"] = {"white": 200, "black": 128}
     games.docs.append(game)
     service = GameService(games)
 
-    state = await service.get_game_state(game_id=str(game["_id"]), user_id="u1")
+    state = await service.get_game_state(game_id=str(game["_id"]), user_id="u2")
 
     assert state.state == "completed"
     assert state.result == {"winner": "white", "reason": "resignation"}
     assert state.ply_count == 128
-    assert state.llm_bot_tier == "tier1"
     assert state.llm_bot_ply_limit == 128
+    await service.flush_all()
     assert games.docs[0]["state"] == "completed"
     assert games.docs[0]["result"] == {"winner": "white", "reason": "resignation"}
+
+
+def test_bot_vs_bot_llm_cap_sampling_resolves_collisions() -> None:
+    class Rng:
+        def randint(self, lower: int, upper: int) -> int:
+            assert (lower, upper) == (128, 256)
+            return 150
+
+    service = GameService(FakeGamesCollection(), rng=Rng())
+
+    assert service._sample_distinct_bot_vs_bot_llm_ply_limits(2) == [150, 151]
 
 
 @pytest.mark.asyncio

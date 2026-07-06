@@ -10,17 +10,17 @@ UNLIMITED_LLM_BOT_TIER: LlmBotTier = "tier4"
 
 LLM_BOT_TIER_PLY_LIMITS: dict[LlmBotTier, int | None] = {
     "guest": 0,
-    "tier1": 128,
-    "tier2": 256,
-    "tier3": 1024,
+    "tier1": None,
+    "tier2": None,
+    "tier3": None,
     "tier4": None,
 }
 
 LLM_BOT_TIER_LIMIT_LABELS: dict[LlmBotTier, str] = {
     "guest": "No LLM bots",
-    "tier1": "128 ply limit",
-    "tier2": "256 ply limit",
-    "tier3": "1024 ply limit",
+    "tier1": "No ply limit",
+    "tier2": "No ply limit",
+    "tier3": "No ply limit",
     "tier4": "No ply limit",
 }
 

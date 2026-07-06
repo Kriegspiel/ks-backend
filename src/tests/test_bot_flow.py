@@ -214,7 +214,7 @@ async def test_create_game_with_bot_immediately_activates() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_llm_bot_game_stores_viewer_tier_limit() -> None:
+async def test_create_llm_bot_game_stores_viewer_tier_without_human_cap() -> None:
     games = FakeGamesCollection()
     users = FakeUsersCollection()
     bot_id = ObjectId()
@@ -247,7 +247,7 @@ async def test_create_llm_bot_game_stores_viewer_tier_limit() -> None:
 
     assert response.state == "active"
     assert games.docs[0]["llm_bot_tier"] == "tier3"
-    assert games.docs[0]["llm_bot_ply_limit"] == 1024
+    assert games.docs[0]["llm_bot_ply_limit"] is None
     assert games.docs[0]["llm_bot_user_id"] == str(bot_id)
 
 
@@ -323,8 +323,8 @@ async def test_guest_bot_list_filters_llm_bots_and_user_list_shows_limit() -> No
     llm_gptnano = next(bot for bot in user_listing.bots if bot.username == "llm_gptnano")
     assert llm_gptnano.llm_backed is True
     assert llm_gptnano.llm_bot_tier == "tier2"
-    assert llm_gptnano.llm_bot_ply_limit == 256
-    assert llm_gptnano.llm_bot_limit_label == "256 ply limit"
+    assert llm_gptnano.llm_bot_ply_limit is None
+    assert llm_gptnano.llm_bot_limit_label == "No ply limit"
 
 
 def test_bot_service_datetime_and_query_helpers_cover_invalid_inputs() -> None:
@@ -634,7 +634,7 @@ async def test_join_rejects_bot_reserved_game() -> None:
 
 
 @pytest.mark.asyncio
-async def test_join_llm_bot_created_lobby_applies_joiner_tier_and_blocks_guests() -> None:
+async def test_join_llm_bot_created_lobby_stores_joiner_tier_without_human_cap() -> None:
     games = FakeGamesCollection()
     users = FakeUsersCollection()
     bot_id = ObjectId()
@@ -687,8 +687,74 @@ async def test_join_llm_bot_created_lobby_applies_joiner_tier_and_blocks_guests(
 
     assert joined.state == "active"
     assert games.docs[0]["llm_bot_tier"] == "tier2"
-    assert games.docs[0]["llm_bot_ply_limit"] == 256
+    assert games.docs[0]["llm_bot_ply_limit"] is None
     assert games.docs[0]["llm_bot_user_id"] == str(bot_id)
+
+
+@pytest.mark.asyncio
+async def test_bot_vs_bot_join_assigns_distinct_random_llm_caps() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    creator_id = ObjectId()
+    joiner_id = ObjectId()
+    now = datetime.now(UTC)
+    for bot_id, username in ((creator_id, "llm_gptnano"), (joiner_id, "llm_haiku")):
+        users.docs.append(
+            {
+                "_id": bot_id,
+                "username": username,
+                "username_display": username,
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {
+                    "display_name": username,
+                    "description": "Model bot",
+                    "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+                },
+            }
+        )
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "B7K2M9",
+            "rule_variant": "berkeley_any",
+            "creator_color": "white",
+            "opponent_type": "human",
+            "selected_bot_id": None,
+            "white": {"user_id": str(creator_id), "username": "llm_gptnano", "connected": True, "role": "bot"},
+            "black": None,
+            "state": "waiting",
+            "turn": None,
+            "move_number": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+
+    class Rng:
+        values = [140, 220]
+
+        def randint(self, lower: int, upper: int) -> int:
+            assert (lower, upper) == (128, 256)
+            return self.values.pop(0)
+
+    service = GameService(games, users_collection=users, rng=Rng())
+
+    joined = await service.join_game(
+        user_id=str(joiner_id),
+        username="llm_haiku",
+        game_code="B7K2M9",
+        role="bot",
+    )
+
+    assert joined.state == "active"
+    assert games.docs[0]["llm_bot_ply_limits"] == {"white": 140, "black": 220}
+
+    white_state = await service.get_game_state(game_id=str(games.docs[0]["_id"]), user_id=str(creator_id))
+    black_state = await service.get_game_state(game_id=str(games.docs[0]["_id"]), user_id=str(joiner_id))
+
+    assert white_state.llm_bot_ply_limit == 140
+    assert black_state.llm_bot_ply_limit == 220
 
 
 @pytest.mark.asyncio
