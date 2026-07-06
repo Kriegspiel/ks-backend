@@ -1186,6 +1186,8 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
                     "white_track": "vs_bots",
                     "black_track": "vs_humans",
                 },
+                "move_count": 3,
+                "turn_count": 1,
                 "moves": [{"move_done": True}, {"move_done": False}, {"move_done": True}],
                 "created_at": datetime(2026, 3, 10, tzinfo=UTC),
                 "updated_at": datetime(2026, 3, 10, tzinfo=UTC),
@@ -1196,6 +1198,8 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
                 "white": {"user_id": str(other_id), "username": "rival-b"},
                 "black": {"user_id": str(user_id), "username": "playerone"},
                 "result": {"winner": None, "reason": "stalemate"},
+                "move_count": 2,
+                "turn_count": 1,
                 "moves": [{"move_done": True}, {"move_done": True}],
                 "created_at": datetime(2026, 3, 9, tzinfo=UTC),
                 "updated_at": datetime(2026, 3, 9, tzinfo=UTC),
@@ -1205,11 +1209,13 @@ async def test_get_game_history_paginates_newest_first_and_out_of_range_empty() 
     db = FakeDB(users=users, game_archives=archives)
     service = UserService(users)
 
-    page_1, total = await service.get_game_history(db, str(user_id), page=1, per_page=1)
-    out_of_range, total_2 = await service.get_game_history(db, str(user_id), page=4, per_page=1)
+    page_1, total, filter_options = await service.get_game_history(db, str(user_id), page=1, per_page=1)
+    out_of_range, total_2, _ = await service.get_game_history(db, str(user_id), page=4, per_page=1)
 
     assert total == 2
     assert total_2 == 2
+    assert {"value": "bot:rival-a", "group": "Bots", "count": 1} in filter_options["opponent"]
+    assert {"value": "human:rival-b", "group": "Humans", "count": 1} in filter_options["opponent"]
     assert page_1[0]["game_code"] == "A7K2M9"
     assert page_1[0]["rule_variant"] is None
     assert page_1[0]["opponent"] == "rival-a"
@@ -1235,17 +1241,83 @@ async def test_get_game_history_clamps_direct_service_calls_to_10000_per_page() 
             "created_at": datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=idx),
             "updated_at": datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=idx),
             "result": {"winner": "white", "reason": "checkmate"},
-            "moves": [],
+            "move_count": 0,
+            "turn_count": 0,
         }
         for idx in range(10005)
     )
     db = FakeDB(users=users, game_archives=archives)
     service = UserService(users)
 
-    page, total = await service.get_game_history(db, str(user_id), page=1, per_page=10001)
+    page, total, _ = await service.get_game_history(db, str(user_id), page=1, per_page=10001)
 
     assert total == 10005
     assert len(page) == 10000
+
+
+@pytest.mark.asyncio
+async def test_get_game_history_filters_and_sorts_before_paginating() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "game_code": "BOT001",
+                "white": {"user_id": str(user_id), "username": "randobotany", "role": "bot"},
+                "black": {"user_id": "bot-gemini", "username": "bot_gemini31_lite", "role": "bot"},
+                "rule_variant": "berkeley_any",
+                "result": {"winner": "white", "reason": "resignation"},
+                "move_count": 8,
+                "turn_count": 4,
+                "created_at": datetime(2026, 7, 1, tzinfo=UTC),
+                "updated_at": datetime(2026, 7, 1, tzinfo=UTC),
+            },
+            {
+                "_id": ObjectId(),
+                "game_code": "BOT002",
+                "white": {"user_id": str(user_id), "username": "randobotany", "role": "bot"},
+                "black": {"user_id": "bot-random", "username": "randobot", "role": "bot"},
+                "rule_variant": "berkeley_any",
+                "result": {"winner": "black", "reason": "timeout"},
+                "move_count": 16,
+                "turn_count": 8,
+                "created_at": datetime(2026, 7, 2, tzinfo=UTC),
+                "updated_at": datetime(2026, 7, 2, tzinfo=UTC),
+            },
+        ]
+    )
+    db = FakeDB(users=users, game_archives=archives)
+    service = UserService(users)
+
+    page, total, filter_options = await service.get_game_history(
+        db,
+        str(user_id),
+        page=1,
+        per_page=100,
+        filters={"opponent": ["bot:bot_gemini31_lite"]},
+        sort_key="turns",
+        sort_direction="desc",
+    )
+
+    assert total == 1
+    assert [game["game_code"] for game in page] == ["BOT001"]
+    assert {option["value"] for option in filter_options["opponent"]} == {
+        "bot:bot_gemini31_lite",
+        "bot:randobot",
+    }
+
+    no_sort_page, _, _ = await service.get_game_history(
+        db,
+        str(user_id),
+        page=1,
+        per_page=100,
+        sort_key="none",
+        sort_direction="asc",
+    )
+
+    assert [game["game_code"] for game in no_sort_page] == ["BOT002", "BOT001"]
 
 
 @pytest.mark.asyncio
@@ -1261,6 +1333,8 @@ async def test_get_game_history_handles_null_result_documents() -> None:
             "white": {"user_id": str(user_id), "username": "playerone"},
             "black": {"user_id": str(other_id), "username": "rival-a"},
             "result": None,
+            "move_count": 3,
+            "turn_count": 2,
             "moves": [{"move_done": True}, {"move_done": True}, {"move_done": True}],
             "created_at": datetime(2026, 3, 10, tzinfo=UTC),
             "updated_at": datetime(2026, 3, 10, tzinfo=UTC),
@@ -1269,7 +1343,7 @@ async def test_get_game_history_handles_null_result_documents() -> None:
     db = FakeDB(users=users, game_archives=archives)
     service = UserService(users)
 
-    page, total = await service.get_game_history(db, str(user_id), page=1, per_page=10)
+    page, total, _ = await service.get_game_history(db, str(user_id), page=1, per_page=10)
 
     assert total == 1
     assert page[0]["result"] == "draw"
@@ -1310,6 +1384,8 @@ async def test_get_game_history_exposes_named_track_snapshots_for_selected_track
                 "white_track": "vs_bots",
                 "black_track": "vs_bots",
             },
+            "move_count": 1,
+            "turn_count": 1,
             "moves": [{"move_done": True}],
             "created_at": datetime(2026, 4, 6, tzinfo=UTC),
             "updated_at": datetime(2026, 4, 6, tzinfo=UTC),
@@ -1318,7 +1394,7 @@ async def test_get_game_history_exposes_named_track_snapshots_for_selected_track
     db = FakeDB(users=users, game_archives=archives)
     service = UserService(users)
 
-    page, total = await service.get_game_history(db, str(user_id), page=1, per_page=10)
+    page, total, _ = await service.get_game_history(db, str(user_id), page=1, per_page=10)
 
     assert total == 1
     assert page[0]["elo_after"] == 1312

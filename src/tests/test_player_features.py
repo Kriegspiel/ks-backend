@@ -311,6 +311,20 @@ def test_history_out_of_range_returns_empty_with_stable_total() -> None:
     assert out.json()["pagination"]["total"] == 2
 
 
+def test_history_filters_before_paginating_and_returns_filter_options() -> None:
+    app, db, _ = _build_app_and_db()
+    dependencies.get_db = lambda: db
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        filtered = client.get("/api/user/playerone/games?page=1&per_page=100&result=win")
+
+    assert filtered.status_code == 200
+    body = filtered.json()
+    assert body["pagination"] == {"page": 1, "per_page": 100, "total": 1, "pages": 1}
+    assert [game["game_id"] for game in body["games"]] == ["664b2ca7f7f86cd799439011"]
+    assert {option["value"] for option in body["filter_options"]["result"]} == {"win", "loss"}
+
+
 def test_history_accepts_large_pages_but_leaderboard_stays_capped_at_100() -> None:
     app, db, _ = _build_app_and_db()
     dependencies.get_db = lambda: db
