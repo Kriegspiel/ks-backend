@@ -12,6 +12,8 @@ from app.models.bot import (
     BotListResponse,
     BotProfileSyncRequest,
     BotProfileSyncResponse,
+    BotUsageReportRequest,
+    BotUsageReportResponse,
 )
 from app.models.user import UserModel
 from app.services.bot_service import BotService
@@ -21,7 +23,7 @@ router = APIRouter(prefix="/bots", tags=["bots"])
 
 def get_bot_service() -> BotService:
     db = get_db()
-    return BotService(db.users)
+    return BotService(db.users, usage_collection=getattr(db, "bot_usage_records", None))
 
 
 @router.get("", response_model=BotListResponse)
@@ -50,6 +52,25 @@ async def report_bot_availability(
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
     return BotAvailabilityReportResponse()
+
+
+@router.post("/usage", response_model=BotUsageReportResponse)
+async def report_bot_usage(
+    payload: BotUsageReportRequest,
+    user: UserModel = Depends(get_current_user),
+    bot_service: BotService = Depends(get_bot_service),
+) -> BotUsageReportResponse:
+    if user.role != "bot":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only bots can report model usage")
+
+    stored = await bot_service.record_usage(
+        user_id=user.id,
+        username=user.username,
+        payload=payload,
+    )
+    if not stored:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Usage storage unavailable")
+    return BotUsageReportResponse()
 
 
 @router.post("/profile", response_model=BotProfileSyncResponse)

@@ -51,6 +51,15 @@ async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.audit_log.create_index([("user_id", ASCENDING), ("timestamp", ASCENDING)])
     await db.audit_log.create_index([("game_id", ASCENDING)])
 
+    await db.bot_usage_records.create_index([("game_id", ASCENDING), ("bot_username", ASCENDING)])
+    await db.bot_usage_records.create_index([("game_code", ASCENDING), ("bot_username", ASCENDING)])
+    await db.bot_usage_records.create_index([("bot_username", ASCENDING), ("recorded_at", DESCENDING)])
+    await db.bot_usage_records.create_index(
+        [("bot_user_id", ASCENDING), ("response_id", ASCENDING)],
+        unique=True,
+        partialFilterExpression={"response_id": {"$type": "string"}},
+    )
+
     await db.sessions.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
     await db.sessions.create_index([("user_id", ASCENDING)])
     await db.sessions.create_index([("attribution.attribution_id", ASCENDING)])
@@ -59,7 +68,9 @@ async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.analytics_events.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
     await db.analytics_events.create_index([("event_type", ASCENDING), ("occurred_at", DESCENDING)])
     await db.analytics_events.create_index([("attribution_id", ASCENDING)], unique=True)
-    await db.analytics_events.create_index([("utm.source", ASCENDING), ("utm.campaign", ASCENDING), ("occurred_at", DESCENDING)])
+    await db.analytics_events.create_index(
+        [("utm.source", ASCENDING), ("utm.campaign", ASCENDING), ("occurred_at", DESCENDING)]
+    )
 
 
 async def init_db(settings: Settings) -> AsyncIOMotorDatabase:

@@ -29,6 +29,8 @@ BOT_MATRIX_PERIOD_DAY_WINDOWS = {
     "year": 365,
 }
 BOT_MATRIX_PERIODS = frozenset({"today", "week", "month", "year", "lifetime"})
+BOT_MATRIX_USAGE_RECORD_START = datetime(2026, 7, 4, tzinfo=UTC)
+BOT_MATRIX_USAGE_RECORD_START_LABEL = "2026-07-04"
 BOT_MATRIX_PLAYER_ORDER = (
     "llm_haiku",
     "llm_gptnano",
@@ -259,11 +261,33 @@ class UserService:
         return max(0, turn_count * 2)
 
     @staticmethod
-    def _bot_matrix_empty_summary() -> dict[str, int]:
-        return {"games": 0, "wins": 0, "draws": 0, "losses": 0, "plies": 0}
+    def _bot_matrix_empty_summary() -> dict[str, Any]:
+        return {
+            "games": 0,
+            "wins": 0,
+            "draws": 0,
+            "losses": 0,
+            "plies": 0,
+            "usage_game_ids": set(),
+            "usage_calls": 0,
+            "usage_tokens": 0,
+            "usage_cost": 0.0,
+            "opponent_usage_game_ids": set(),
+            "opponent_usage_calls": 0,
+            "opponent_usage_tokens": 0,
+            "opponent_usage_cost": 0.0,
+        }
 
     @staticmethod
-    def _bot_matrix_record_result(summary: dict[str, int], *, outcome: str, plies: int) -> None:
+    def _bot_matrix_record_result(
+        summary: dict[str, Any],
+        *,
+        outcome: str,
+        plies: int,
+        game_id: str | None = None,
+        usage: dict[str, int | float] | None = None,
+        opponent_usage: dict[str, int | float] | None = None,
+    ) -> None:
         summary["games"] += 1
         summary["plies"] += plies
         if outcome == "win":
@@ -273,10 +297,28 @@ class UserService:
         else:
             summary["draws"] += 1
 
+        if game_id and usage:
+            summary["usage_game_ids"].add(game_id)
+            summary["usage_calls"] += int(usage.get("calls", 0) or 0)
+            summary["usage_tokens"] += int(usage.get("tokens", 0) or 0)
+            summary["usage_cost"] += float(usage.get("cost", 0.0) or 0.0)
+        if game_id and opponent_usage:
+            summary["opponent_usage_game_ids"].add(game_id)
+            summary["opponent_usage_calls"] += int(opponent_usage.get("calls", 0) or 0)
+            summary["opponent_usage_tokens"] += int(opponent_usage.get("tokens", 0) or 0)
+            summary["opponent_usage_cost"] += float(opponent_usage.get("cost", 0.0) or 0.0)
+
     @staticmethod
-    def _bot_matrix_public_summary(summary: dict[str, int]) -> dict[str, Any]:
+    def _bot_matrix_public_summary(summary: dict[str, Any]) -> dict[str, Any]:
         games = int(summary["games"])
         avg_plies = (float(summary["plies"]) / games) if games else None
+        usage_games = len(summary["usage_game_ids"])
+        opponent_usage_games = len(summary["opponent_usage_game_ids"])
+        usage_calls = int(summary["usage_calls"])
+        usage_tokens = int(summary["usage_tokens"])
+        usage_cost = float(summary["usage_cost"])
+        opponent_usage_tokens = int(summary["opponent_usage_tokens"])
+        opponent_usage_cost = float(summary["opponent_usage_cost"])
         return {
             "games": games,
             "wins": int(summary["wins"]),
@@ -285,13 +327,21 @@ class UserService:
             "record": f"{int(summary['wins'])}-{int(summary['draws'])}-{int(summary['losses'])}",
             "average_plies": avg_plies,
             "avg_plies": avg_plies,
-            "avg_calls": None,
-            "avg_tokens": None,
-            "avg_cost": None,
-            "player_tokens": None,
-            "player_cost": None,
-            "opponent_tokens": None,
-            "opponent_cost": None,
+            "avg_calls": (float(usage_calls) / usage_games) if usage_games else None,
+            "avg_tokens": (float(usage_tokens) / usage_games) if usage_games else None,
+            "avg_cost": (usage_cost / usage_games) if usage_games else None,
+            "player_tokens": (float(usage_tokens) / usage_games) if usage_games else None,
+            "player_cost": (usage_cost / usage_games) if usage_games else None,
+            "opponent_tokens": (float(opponent_usage_tokens) / opponent_usage_games)
+            if opponent_usage_games
+            else None,
+            "opponent_cost": (opponent_usage_cost / opponent_usage_games) if opponent_usage_games else None,
+            "usage_recorded_games": usage_games,
+            "usage_calls": usage_calls,
+            "usage_tokens": usage_tokens,
+            "usage_cost": usage_cost,
+            "opponent_usage_recorded_games": opponent_usage_games,
+            "usage_start_date": BOT_MATRIX_USAGE_RECORD_START_LABEL,
             "win_share": (float(summary["wins"]) / games) if games else None,
             "draw_share": (float(summary["draws"]) / games) if games else None,
             "loss_share": (float(summary["losses"]) / games) if games else None,
@@ -308,6 +358,88 @@ class UserService:
             "too_many_reversible_moves": "Too many reversible moves",
             "unknown": "Unknown",
         }.get(condition, condition.replace("_", " ").title())
+
+    @staticmethod
+    def _bot_matrix_usage_cutoff(cutoff: datetime | None) -> datetime:
+        if cutoff is None or cutoff < BOT_MATRIX_USAGE_RECORD_START:
+            return BOT_MATRIX_USAGE_RECORD_START
+        return cutoff
+
+    @staticmethod
+    def _bot_matrix_usage_int(record: dict[str, Any], key: str) -> int:
+        value = record.get(key)
+        if isinstance(value, bool):
+            return 0
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _bot_matrix_usage_float(record: dict[str, Any], key: str) -> float:
+        value = record.get(key)
+        if isinstance(value, bool):
+            return 0.0
+        try:
+            number = float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, number) if math.isfinite(number) else 0.0
+
+    async def _bot_matrix_usage_records(
+        self,
+        db: Any,
+        *,
+        listed_usernames: set[str],
+        cutoff: datetime | None,
+        generated_at: datetime,
+    ) -> dict[tuple[str, str], dict[str, int | float]]:
+        usage_collection = getattr(db, "bot_usage_records", None)
+        if usage_collection is None or not listed_usernames:
+            return {}
+
+        usage_cutoff = self._bot_matrix_usage_cutoff(cutoff)
+        query = {
+            "bot_username": {"$in": sorted(listed_usernames)},
+            "recorded_at": {"$gte": usage_cutoff, "$lte": generated_at},
+        }
+        projection = {
+            "game_id": 1,
+            "game_code": 1,
+            "bot_username": 1,
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 1,
+            "cache_creation_input_tokens": 1,
+            "total_tokens": 1,
+            "cost_usd": 1,
+        }
+        usage_by_game: dict[tuple[str, str], dict[str, int | float]] = {}
+        async for record in self._find(usage_collection, query, projection):
+            username = str(record.get("bot_username") or "").strip()
+            if username not in listed_usernames:
+                continue
+
+            game_keys = [
+                str(record.get("game_id") or "").strip(),
+                str(record.get("game_code") or "").strip().upper(),
+            ]
+            total_tokens = self._bot_matrix_usage_int(record, "total_tokens")
+            if total_tokens <= 0:
+                total_tokens = (
+                    self._bot_matrix_usage_int(record, "input_tokens")
+                    + self._bot_matrix_usage_int(record, "output_tokens")
+                    + self._bot_matrix_usage_int(record, "cache_read_input_tokens")
+                    + self._bot_matrix_usage_int(record, "cache_creation_input_tokens")
+                )
+            cost = self._bot_matrix_usage_float(record, "cost_usd")
+
+            for game_key in {key for key in game_keys if key}:
+                aggregate = usage_by_game.setdefault((game_key, username), {"calls": 0, "tokens": 0, "cost": 0.0})
+                aggregate["calls"] = int(aggregate["calls"]) + 1
+                aggregate["tokens"] = int(aggregate["tokens"]) + total_tokens
+                aggregate["cost"] = float(aggregate["cost"]) + cost
+        return usage_by_game
 
     @staticmethod
     def _completed_turn_count(game: dict[str, Any]) -> int:
@@ -1650,6 +1782,7 @@ class UserService:
                 "unique_game_count": 0,
                 "row_record_count": 0,
                 "usage_available": False,
+                "usage_start_date": BOT_MATRIX_USAGE_RECORD_START_LABEL,
             }
 
         query: dict[str, Any] = {
@@ -1686,6 +1819,27 @@ class UserService:
         if hasattr(cursor, "batch_size"):
             cursor = cursor.batch_size(1000)
 
+        usage_records = await self._bot_matrix_usage_records(
+            db,
+            listed_usernames=listed_username_set,
+            cutoff=cutoff,
+            generated_at=generated_at,
+        )
+
+        def usage_for(game: dict[str, Any], username: str | None) -> dict[str, int | float] | None:
+            if username not in listed_username_set:
+                return None
+            for key in (
+                str(game.get("_id") or "").strip(),
+                str(game.get("game_code") or "").strip().upper(),
+            ):
+                if not key:
+                    continue
+                usage = usage_records.get((key, username))
+                if usage is not None:
+                    return usage
+            return None
+
         async for game in cursor:
             played_at = self._utc_datetime(game.get("updated_at")) or self._utc_datetime(game.get("created_at"))
             if cutoff is not None and (played_at is None or not (cutoff <= played_at <= generated_at)):
@@ -1695,6 +1849,7 @@ class UserService:
             black = game.get("black") if isinstance(game.get("black"), dict) else {}
             white_username = listed_username_for(white)
             black_username = listed_username_for(black)
+            game_usage_id = str(game.get("_id") or game.get("game_code") or "").strip()
             plies = self._bot_matrix_ply_count(game)
             result = game.get("result") if isinstance(game.get("result"), dict) else {}
             winner = result.get("winner")
@@ -1715,13 +1870,41 @@ class UserService:
                     or opponent_name in all_bot_usernames
                 )
                 outcome = self._winner_result(winner, color)
-                self._bot_matrix_record_result(total_buckets["all"][username], outcome=outcome, plies=plies)
+                player_usage = usage_for(game, username)
+                opponent_usage = usage_for(game, opponent_username)
+                self._bot_matrix_record_result(
+                    total_buckets["all"][username],
+                    outcome=outcome,
+                    plies=plies,
+                    game_id=game_usage_id,
+                    usage=player_usage,
+                )
                 scope = "bots" if opponent_is_bot else "humans"
-                self._bot_matrix_record_result(total_buckets[scope][username], outcome=outcome, plies=plies)
+                self._bot_matrix_record_result(
+                    total_buckets[scope][username],
+                    outcome=outcome,
+                    plies=plies,
+                    game_id=game_usage_id,
+                    usage=player_usage,
+                )
 
                 if opponent_username in listed_username_set:
-                    self._bot_matrix_record_result(empty_matrix[username][opponent_username], outcome=outcome, plies=plies)
-                    self._bot_matrix_record_result(matrix_totals[username], outcome=outcome, plies=plies)
+                    self._bot_matrix_record_result(
+                        empty_matrix[username][opponent_username],
+                        outcome=outcome,
+                        plies=plies,
+                        game_id=game_usage_id,
+                        usage=player_usage,
+                        opponent_usage=opponent_usage,
+                    )
+                    self._bot_matrix_record_result(
+                        matrix_totals[username],
+                        outcome=outcome,
+                        plies=plies,
+                        game_id=game_usage_id,
+                        usage=player_usage,
+                        opponent_usage=opponent_usage,
+                    )
                     matrix_row_record_count += 1
 
             if white_username in listed_username_set and black_username in listed_username_set:
@@ -1785,7 +1968,8 @@ class UserService:
             "total_rows": total_rows,
             "unique_game_count": matrix_game_count,
             "row_record_count": matrix_row_record_count,
-            "usage_available": False,
+            "usage_available": bool(usage_records),
+            "usage_start_date": BOT_MATRIX_USAGE_RECORD_START_LABEL,
         }
 
     async def get_listed_bot_daily_report(

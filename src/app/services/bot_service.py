@@ -7,7 +7,7 @@ from typing import Any
 from bson import ObjectId
 from pymongo import ReturnDocument
 
-from app.models.bot import BotListItem, BotListResponse, supported_rule_variants_for_bot
+from app.models.bot import BotListItem, BotListResponse, BotUsageReportRequest, supported_rule_variants_for_bot
 from app.models.user import normalize_user_stats_payload
 from app.llm_bot_policy import (
     is_llm_bot_document,
@@ -26,8 +26,15 @@ MODEL_AVAILABILITY_STALE_AFTER = timedelta(seconds=120)
 
 
 class BotService:
-    def __init__(self, users_collection: Any, *, now_factory: Callable[[], datetime] | None = None):
+    def __init__(
+        self,
+        users_collection: Any,
+        *,
+        usage_collection: Any | None = None,
+        now_factory: Callable[[], datetime] | None = None,
+    ):
         self._users = users_collection
+        self._usage = usage_collection
         self._now_factory = now_factory or (lambda: datetime.now(UTC))
 
     @staticmethod
@@ -142,6 +149,61 @@ class BotService:
             if updated is not None:
                 return updated
         return None
+
+    async def record_usage(self, *, user_id: str, username: str, payload: BotUsageReportRequest) -> bool:
+        if self._usage is None:
+            return False
+
+        now = self._now_factory()
+        response_id = payload.response_id.strip() if isinstance(payload.response_id, str) else None
+        total_tokens = int(payload.total_tokens or 0)
+        if total_tokens <= 0:
+            total_tokens = (
+                int(payload.input_tokens)
+                + int(payload.output_tokens)
+                + int(payload.cache_read_input_tokens)
+                + int(payload.cache_creation_input_tokens)
+            )
+
+        game_code = (
+            payload.game_code.strip().upper()
+            if isinstance(payload.game_code, str) and payload.game_code.strip()
+            else None
+        )
+
+        record = {
+            "game_id": payload.game_id.strip(),
+            "game_code": game_code,
+            "bot_user_id": str(user_id),
+            "bot_username": username.strip(),
+            "provider": payload.provider.strip().lower(),
+            "model": payload.model.strip(),
+            "input_tokens": int(payload.input_tokens),
+            "cached_input_tokens": int(payload.cached_input_tokens),
+            "output_tokens": int(payload.output_tokens),
+            "cache_read_input_tokens": int(payload.cache_read_input_tokens),
+            "cache_creation_input_tokens": int(payload.cache_creation_input_tokens),
+            "total_tokens": total_tokens,
+            "cost_usd": float(payload.cost_usd),
+            "recorded_at": now,
+            "updated_at": now,
+        }
+        if response_id:
+            record["response_id"] = response_id
+
+        if response_id:
+            await self._usage.update_one(
+                {"bot_user_id": str(user_id), "response_id": response_id},
+                {
+                    "$set": record,
+                    "$setOnInsert": {"created_at": now},
+                },
+                upsert=True,
+            )
+        else:
+            record["created_at"] = now
+            await self._usage.insert_one(record)
+        return True
 
     async def sync_supported_rule_variants(
         self,

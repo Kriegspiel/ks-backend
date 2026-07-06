@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.59
+
+- **Bot Usage Records**: added authenticated bot usage reporting and Bot Matrix
+  averages for calls, tokens, and cost over games with known usage records.
+
 ## ks-backend v. 1.3.58
 
 - **Bot Matrix Report API**: added a private live `/tech/bot-matrix-report`
