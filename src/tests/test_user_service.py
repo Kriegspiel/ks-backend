@@ -2417,17 +2417,17 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
     usage_records.docs.extend(
         [
             {
-                "game_id": "TODAY1",
-                "bot_username": "llm_haiku",
+                "game_id": "today1",
+                "bot_username": "haiku",
                 "input_tokens": 100,
                 "output_tokens": 25,
                 "total_tokens": 125,
                 "cost_usd": 0.01,
-                "recorded_at": datetime(2026, 7, 5, 9, 1, tzinfo=UTC),
+                "created_at": datetime(2026, 7, 5, 9, 1, tzinfo=UTC),
             },
             {
                 "game_id": "TODAY1",
-                "bot_username": "llm_haiku",
+                "bot_user_id": "haiku-id",
                 "input_tokens": 50,
                 "output_tokens": 5,
                 "total_tokens": 55,
@@ -2436,16 +2436,16 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
             },
             {
                 "game_id": "TODAY1",
-                "bot_username": "llm_gptnano",
+                "bot_username": "gptnano",
                 "input_tokens": 70,
                 "output_tokens": 5,
                 "total_tokens": 75,
                 "cost_usd": 0.02,
-                "recorded_at": datetime(2026, 7, 5, 9, 3, tzinfo=UTC),
+                "created_at": datetime(2026, 7, 5, 9, 3, tzinfo=UTC),
             },
             {
                 "game_id": "OLD001",
-                "bot_username": "llm_haiku",
+                "bot_username": "haiku",
                 "total_tokens": 999999,
                 "cost_usd": 9.99,
                 "recorded_at": datetime(2026, 7, 4, 12, tzinfo=UTC),
