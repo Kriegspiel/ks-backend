@@ -1802,6 +1802,87 @@ async def test_get_leaderboard_filters_ranks_and_tiebreaks_by_username() -> None
     assert players[0]["ratings"]["overall"]["elo"] == 1500
 
 
+@pytest.mark.asyncio
+async def test_get_leaderboard_sorts_filters_and_returns_filter_options() -> None:
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "username": "alpha",
+                "role": "user",
+                "status": "active",
+                "stats": {
+                    "games_played": 10,
+                    "games_won": 5,
+                    "elo": 1500,
+                    "ratings": {"vs_humans": {"elo": 1600}, "vs_bots": {"elo": 1300}},
+                },
+            },
+            {
+                "_id": ObjectId(),
+                "username": "zeta",
+                "role": "user",
+                "status": "active",
+                "stats": {
+                    "games_played": 12,
+                    "games_won": 8,
+                    "elo": 1500,
+                    "ratings": {"vs_humans": {"elo": 1510}, "vs_bots": {"elo": 1490}},
+                },
+            },
+            {
+                "_id": ObjectId(),
+                "username": "randobot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Random Bot", "listed": True},
+                "stats": {
+                    "games_played": 2,
+                    "games_won": 2,
+                    "elo": 1400,
+                    "ratings": {"vs_humans": {"elo": 1200}, "vs_bots": {"elo": 1420}},
+                },
+            },
+        ]
+    )
+    db = FakeDB(users=users, game_archives=FakeUsersCollection())
+    service = UserService(users)
+
+    players, total = await service.get_leaderboard(
+        db,
+        page=1,
+        per_page=20,
+        filters={"type": ["human"]},
+        sort_key="games",
+        sort_direction="desc",
+    )
+    filtered_bot_players, filtered_bot_total = await service.get_leaderboard(
+        db,
+        page=1,
+        per_page=20,
+        filters={"username": ["randobot"]},
+        sort_key="win_rate",
+        sort_direction="desc",
+    )
+    filter_options = await service.get_leaderboard_filter_options(db)
+
+    assert total == 2
+    assert [player["username"] for player in players] == ["zeta", "alpha"]
+    assert [player["rank"] for player in players] == [2, 1]
+    assert players[0]["ratings"]["vs_humans"]["elo"] == 1510
+
+    assert filtered_bot_total == 1
+    assert filtered_bot_players[0]["username"] == "randobot"
+    assert filtered_bot_players[0]["rank"] == 3
+    assert filtered_bot_players[0]["display_name"] == "Random Bot"
+
+    assert {"value": "human", "label": "Human", "group": "", "count": 2} in filter_options["type"]
+    assert {"value": "bot", "label": "Bot", "group": "", "count": 1} in filter_options["type"]
+    assert {"value": "alpha", "label": "alpha", "group": "Humans", "count": 1} in filter_options["username"]
+    assert {"value": "randobot", "label": "randobot", "group": "Bots", "count": 1} in filter_options["username"]
+
+
 def test_helper_edges_cover_password_parsing_datetime_and_result_reasoning() -> None:
     assert UserService.verify_password("secret", "not-a-bcrypt-hash") is False
     assert UserService.parse_bot_token("not-a-token") is None

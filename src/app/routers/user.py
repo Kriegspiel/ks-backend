@@ -142,14 +142,44 @@ async def patch_user_settings(
 async def get_leaderboard(
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=20, ge=1, le=100),
+    sort: str | None = Query(
+        default=None,
+        pattern="^(rank|username|type|overall|vs_humans|vs_bots|games|win_rate|none)$",
+    ),
+    dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    username: list[str] = Query(default=[]),
+    player_type: list[str] = Query(default=[], alias="type"),
+    include_filter_options: bool = Query(default=True),
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
-    players, total = await user_service.get_leaderboard(db, page, per_page)
+    filters = {
+        "username": _query_values(username),
+        "type": [value.lower() for value in _query_values(player_type)],
+    }
+    players, total = await user_service.get_leaderboard(
+        db,
+        page,
+        per_page,
+        filters=filters,
+        sort_key=sort,
+        sort_direction=dir,
+    )
+    filter_options = await user_service.get_leaderboard_filter_options(db) if include_filter_options else {}
     return {
         "players": players,
         "pagination": _pagination(page=page, per_page=per_page, total=total),
+        "filter_options": filter_options,
     }
+
+
+@router.get("/leaderboard/filter-options")
+async def get_leaderboard_filter_options(
+    user_service: UserService = Depends(get_user_service),
+) -> dict[str, Any]:
+    db = require_db()
+    filter_options = await user_service.get_leaderboard_filter_options(db)
+    return {"filter_options": filter_options}
 
 
 @router.get("/tech/bots-report")
