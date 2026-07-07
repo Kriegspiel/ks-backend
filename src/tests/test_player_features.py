@@ -366,6 +366,29 @@ def test_leaderboard_orders_by_elo_and_filters_min_games() -> None:
     assert players[3]["is_bot"] is True
 
 
+def test_leaderboard_sorts_filters_and_returns_filter_options() -> None:
+    app, db, _ = _build_app_and_db()
+    dependencies.get_db = lambda: db
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        leaderboard = client.get("/api/leaderboard?sort=games&dir=asc&type=bot&include_filter_options=false")
+        filter_options = client.get("/api/leaderboard/filter-options")
+
+    assert leaderboard.status_code == 200
+    body = leaderboard.json()
+    assert body["filter_options"] == {}
+    assert body["pagination"]["total"] == 2
+    assert [player["username"] for player in body["players"]] == ["llm_gptnano", "randobot"]
+    assert [player["rank"] for player in body["players"]] == [4, 2]
+
+    assert filter_options.status_code == 200
+    facets = filter_options.json()["filter_options"]
+    assert {"value": "human", "label": "Human", "group": "", "count": 2} in facets["type"]
+    assert {"value": "bot", "label": "Bot", "group": "", "count": 2} in facets["type"]
+    assert {"value": "randobot", "label": "randobot", "group": "Bots", "count": 1} in facets["username"]
+    assert "guest_adolf_adams" not in {option["value"] for option in facets["username"]}
+
+
 def test_settings_patch_requires_authentication() -> None:
     app, db, _ = _build_app_and_db()
     dependencies.get_db = lambda: db

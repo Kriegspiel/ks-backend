@@ -49,6 +49,11 @@ USER_GAME_HISTORY_PROJECTION = {
     "created_at": 1,
     "rating_snapshot": 1,
 }
+LEADERBOARD_FILTER_KEYS = ("username", "type")
+LEADERBOARD_SORT_KEYS = frozenset(
+    ("rank", "username", "type", "overall", "vs_humans", "vs_bots", "games", "win_rate", "none")
+)
+LEADERBOARD_TYPE_LABELS = {"human": "Human", "bot": "Bot"}
 PASSWORD_HASH_SCHEME_BCRYPT_SHA256 = "bcrypt_sha256$"
 BOT_MATRIX_PERIOD_DAY_WINDOWS = {
     "week": 7,
@@ -1782,11 +1787,125 @@ class UserService:
             raise ValueError("User not found")
         return updated.get("settings", {})
 
-    async def get_leaderboard(self, db: Any, page: int, per_page: int) -> tuple[list[dict[str, Any]], int]:
-        bounded_page = max(page, 1)
-        bounded_per_page = min(max(per_page, 1), 100)
-        offset = (bounded_page - 1) * bounded_per_page
+    @staticmethod
+    def _leaderboard_type_for_user(user: dict[str, Any]) -> str:
+        return "bot" if user.get("role") == "bot" else "human"
 
+    @classmethod
+    def _leaderboard_record_for_user(cls, user: dict[str, Any]) -> dict[str, Any]:
+        stats = normalize_user_stats_payload(user.get("stats"))
+        games_played = int(stats.get("games_played", 0))
+        games_won = int(stats.get("games_won", 0))
+        ratings = stats.get("ratings", {})
+        bot_profile = user.get("bot_profile") or {}
+        role = user.get("role", "user")
+        player_type = cls._leaderboard_type_for_user(user)
+        username = str(user.get("username") or "")
+        win_rate = round((games_won / games_played) if games_played else 0.0, 4)
+        payload = {
+            "rank": 0,
+            "username": user.get("username"),
+            "display_name": bot_profile.get("display_name") or user.get("username_display") or user.get("username"),
+            "role": role,
+            "is_bot": role == "bot",
+            "profile_path": f"/players/{user.get('username')}",
+            "elo": int(stats.get("elo", 1200)),
+            "ratings": ratings,
+            "games_played": games_played,
+            "win_rate": win_rate,
+        }
+        return {
+            "payload": payload,
+            "filters": {
+                "username": username,
+                "type": player_type,
+            },
+            "sorts": {
+                "rank": 0,
+                "username": username,
+                "type": LEADERBOARD_TYPE_LABELS[player_type],
+                "overall": int(ratings.get("overall", {}).get("elo", stats.get("elo", 1200))),
+                "vs_humans": int(ratings.get("vs_humans", {}).get("elo", 1200)),
+                "vs_bots": int(ratings.get("vs_bots", {}).get("elo", 1200)),
+                "games": games_played,
+                "win_rate": win_rate,
+            },
+        }
+
+    @staticmethod
+    def _leaderboard_sort_rank_tuple(record: dict[str, Any]) -> tuple[int, str]:
+        return (-int(record["sorts"].get("overall") or 1200), str(record["sorts"].get("username") or "").lower())
+
+    @classmethod
+    def _rank_leaderboard_records(cls, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ranked_records = sorted(records, key=cls._leaderboard_sort_rank_tuple)
+        for rank, record in enumerate(ranked_records, start=1):
+            record["payload"]["rank"] = rank
+            record["sorts"]["rank"] = rank
+        return ranked_records
+
+    @staticmethod
+    def _leaderboard_record_matches_filters(record: dict[str, Any], filters: dict[str, list[str]]) -> bool:
+        for key, selected in filters.items():
+            if not selected:
+                continue
+            if record["filters"].get(key) not in selected:
+                return False
+        return True
+
+    @classmethod
+    def _leaderboard_filter_options(cls, records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        options: dict[str, dict[str, dict[str, Any]]] = {key: {} for key in LEADERBOARD_FILTER_KEYS}
+        for record in records:
+            player_type = record["filters"]["type"]
+            for key in LEADERBOARD_FILTER_KEYS:
+                value = record["filters"][key]
+                bucket = options[key].setdefault(
+                    value,
+                    {
+                        "value": value,
+                        "label": LEADERBOARD_TYPE_LABELS.get(value, value) if key == "type" else value,
+                        "group": "" if key == "type" else LEADERBOARD_TYPE_LABELS[player_type] + "s",
+                        "count": 0,
+                    },
+                )
+                bucket["count"] += 1
+
+        return {
+            key: sorted(
+                values.values(),
+                key=lambda row: (
+                    0 if row.get("group") == "Humans" else 1 if row.get("group") == "Bots" else 2,
+                    str(row.get("label") or row["value"]).lower(),
+                ),
+            )
+            for key, values in options.items()
+        }
+
+    @classmethod
+    def _sort_leaderboard_records(
+        cls,
+        records: list[dict[str, Any]],
+        *,
+        sort_key: str | None,
+        sort_direction: str,
+    ) -> list[dict[str, Any]]:
+        key = sort_key if sort_key in LEADERBOARD_SORT_KEYS else "rank"
+        if key == "none" or sort_key is None:
+            key = "rank"
+            direction = "asc"
+        else:
+            direction = "asc" if sort_direction == "asc" else "desc"
+
+        def compare(left: dict[str, Any], right: dict[str, Any]) -> int:
+            comparison = cls._history_compare_values(left["sorts"].get(key), right["sorts"].get(key), direction=direction)
+            if comparison != 0:
+                return comparison
+            return cls._history_compare_values(left["sorts"].get("rank"), right["sorts"].get("rank"), direction="asc")
+
+        return sorted(records, key=cmp_to_key(compare))
+
+    async def _leaderboard_records(self, db: Any) -> list[dict[str, Any]]:
         query = {
             "status": "active",
             "$or": [
@@ -1794,34 +1913,46 @@ class UserService:
                 {"role": "bot", "bot_profile.listed": True},
             ],
         }
-        total = await db.users.count_documents(query)
-        cursor = db.users.find(query).sort([("stats.elo", -1), ("username", 1)]).skip(offset).limit(bounded_per_page)
+        records: list[dict[str, Any]] = []
+        async for user in db.users.find(query):
+            records.append(self._leaderboard_record_for_user(user))
+        return self._rank_leaderboard_records(records)
 
-        players: list[dict[str, Any]] = []
-        rank = offset + 1
-        async for user in cursor:
-            stats = normalize_user_stats_payload(user.get("stats"))
-            games_played = int(stats.get("games_played", 0))
-            games_won = int(stats.get("games_won", 0))
-            ratings = stats.get("ratings", {})
-            bot_profile = user.get("bot_profile") or {}
-            players.append(
-                {
-                    "rank": rank,
-                    "username": user.get("username"),
-                    "display_name": bot_profile.get("display_name") or user.get("username_display") or user.get("username"),
-                    "role": user.get("role", "user"),
-                    "is_bot": user.get("role") == "bot",
-                    "profile_path": f"/players/{user.get('username')}",
-                    "elo": int(stats.get("elo", 1200)),
-                    "ratings": ratings,
-                    "games_played": games_played,
-                    "win_rate": round((games_won / games_played) if games_played else 0.0, 4),
-                }
-            )
-            rank += 1
+    async def get_leaderboard(
+        self,
+        db: Any,
+        page: int,
+        per_page: int,
+        *,
+        filters: dict[str, list[str]] | None = None,
+        sort_key: str | None = None,
+        sort_direction: str = "desc",
+    ) -> tuple[list[dict[str, Any]], int]:
+        bounded_page = max(page, 1)
+        bounded_per_page = min(max(per_page, 1), 100)
+        offset = (bounded_page - 1) * bounded_per_page
 
-        return players, total
+        normalized_filters = {
+            key: [value for value in values if isinstance(value, str) and value]
+            for key, values in (filters or {}).items()
+            if key in LEADERBOARD_FILTER_KEYS
+        }
+        records = await self._leaderboard_records(db)
+        filtered_records = [
+            record for record in records if self._leaderboard_record_matches_filters(record, normalized_filters)
+        ]
+        sorted_records = self._sort_leaderboard_records(
+            filtered_records,
+            sort_key=sort_key,
+            sort_direction=sort_direction,
+        )
+        page_records = sorted_records[offset:offset + bounded_per_page]
+
+        return [record["payload"] for record in page_records], len(filtered_records)
+
+    async def get_leaderboard_filter_options(self, db: Any) -> dict[str, list[dict[str, Any]]]:
+        records = await self._leaderboard_records(db)
+        return self._leaderboard_filter_options(records)
 
     async def get_guest_report(self, db: Any) -> dict[str, Any]:
         guest_cursor = self._find(

@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.76
+
+- **Leaderboard API**: add column sort parameters, username/type filters, and
+  filter-option facets for the app leaderboard.
+
 ## ks-backend v. 1.3.75
 
 - **LLM Bot Caps**: remove ply caps from human-vs-LLM-bot games while assigning

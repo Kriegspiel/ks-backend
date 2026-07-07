@@ -80,6 +80,12 @@ class StubService:
                 1,
             )
         )
+        self.get_leaderboard_filter_options = AsyncMock(
+            return_value={
+                "username": [{"value": "alpha", "label": "alpha", "group": "Humans", "count": 1}],
+                "type": [{"value": "human", "label": "Human", "group": "", "count": 1}],
+            }
+        )
         self.get_listed_bot_daily_report = AsyncMock(
             return_value={
                 "timezone": "America/New_York",
@@ -192,8 +198,45 @@ def test_user_routes_profile_games_leaderboard_and_settings_auth_gate() -> None:
 
     assert leaderboard.status_code == 200
     assert leaderboard.json()["players"][0]["rank"] == 1
+    assert leaderboard.json()["filter_options"]["type"][0]["value"] == "human"
 
     assert unauth.status_code == 401
+
+
+def test_leaderboard_route_passes_sort_filters_and_facets() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    service = StubService()
+    app.dependency_overrides[get_user_service] = lambda: service
+
+    class FakeDB:
+        users = object()
+        sessions = object()
+
+    db = FakeDB()
+    dependencies.get_db = lambda: db
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        leaderboard = client.get(
+            "/api/leaderboard"
+            "?page=2&per_page=50&sort=games&dir=asc"
+            "&username=randobot,llm_haiku&type=bot"
+            "&include_filter_options=false"
+        )
+        filter_options = client.get("/api/leaderboard/filter-options")
+
+    assert leaderboard.status_code == 200
+    assert leaderboard.json()["filter_options"] == {}
+    service.get_leaderboard.assert_awaited_once_with(
+        db,
+        2,
+        50,
+        filters={"username": ["randobot", "llm_haiku"], "type": ["bot"]},
+        sort_key="games",
+        sort_direction="asc",
+    )
+    service.get_leaderboard_filter_options.assert_awaited_once_with(db)
+    assert filter_options.status_code == 200
+    assert filter_options.json()["filter_options"]["username"][0]["value"] == "alpha"
 
 
 def test_user_games_route_passes_sort_filters_and_facets() -> None:
