@@ -66,6 +66,22 @@ KNOWN_LLM_BOT_USERNAMES = frozenset(
         "llm_gemini31_lite",
         "bot_deepseekv4_pro",
         "llm_llama31_8b",
+        "llm_llama4_scout",
+        "llm_llama4_maverick",
+        "llm_mistral_nemo",
+        "llm_mistral_small32",
+        "llm_mistral_large3",
+        "llm_gemma3_4b",
+        "llm_gemma3_27b",
+        "llm_gemma4_31b",
+        "llm_glm47_flash",
+        "llm_glm45_air",
+        "llm_nemotron_nano",
+        "llm_nemotron_super",
+        "llm_nemotron_ultra",
+        "llm_kimi_k25",
+        "llm_hermes4_70b",
+        "llm_phi4",
     }
 )
 

@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.77
+
+- **LLM Bot Catalogue**: recognize the full Tier T2 model-bot catalogue as
+  LLM-backed, require fresh provider availability before listing those bots,
+  and order them explicitly in bot matrix reports.
+
 ## ks-backend v. 1.3.76
 
 - **Leaderboard API**: add column sort parameters, username/type filters, and

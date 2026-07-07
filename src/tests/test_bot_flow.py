@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.llm_bot_policy import KNOWN_LLM_BOT_USERNAMES
 from app.main import create_app
 from app.models.bot import BotAvailabilityReportRequest, BotProfileSyncRequest, BotUsageReportRequest
 from app.models.game import CreateGameRequest
@@ -17,6 +18,33 @@ from app.services.bot_service import BotService
 from app.services.game_service import GameConflictError, GameForbiddenError, GameService, GameValidationError
 from app.services.user_service import UserService
 from tests.test_game_service import FakeGamesCollection
+
+T2_LLM_BOT_USERNAMES = (
+    "llm_gptnano",
+    "llm_gpt45nano",
+    "llm_haiku",
+    "llm_deepseekv4_flash",
+    "llm_gemini25_lite",
+    "llm_gemini31_lite",
+    "llm_gptoss120b",
+    "llm_llama31_8b",
+    "llm_llama4_scout",
+    "llm_llama4_maverick",
+    "llm_mistral_nemo",
+    "llm_mistral_small32",
+    "llm_mistral_large3",
+    "llm_gemma3_4b",
+    "llm_gemma3_27b",
+    "llm_gemma4_31b",
+    "llm_glm47_flash",
+    "llm_glm45_air",
+    "llm_nemotron_nano",
+    "llm_nemotron_super",
+    "llm_nemotron_ultra",
+    "llm_kimi_k25",
+    "llm_hermes4_70b",
+    "llm_phi4",
+)
 
 
 class FakeUsersCollection:
@@ -385,6 +413,32 @@ def test_model_bot_availability_rejects_missing_wrong_stale_or_unready_reports()
         )
         is False
     )
+
+
+def test_t2_llm_catalog_bots_are_known_and_availability_gated() -> None:
+    now = datetime(2026, 7, 7, tzinfo=UTC)
+
+    for username in T2_LLM_BOT_USERNAMES:
+        provider = "anthropic" if username == "llm_haiku" else "openai"
+        assert username in KNOWN_LLM_BOT_USERNAMES
+        assert BotService.model_availability_required_provider({"username": username}) == provider
+        assert BotService.bot_can_start_games({"username": username}, now=now) is False
+        assert (
+            BotService.bot_can_start_games(
+                {
+                    "username": username,
+                    "bot_profile": {
+                        "model_availability": {
+                            "provider": provider,
+                            "ready": True,
+                            "checked_at": now,
+                        }
+                    },
+                },
+                now=now,
+            )
+            is True
+        )
 
 
 @pytest.mark.asyncio
