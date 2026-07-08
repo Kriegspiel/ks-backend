@@ -644,11 +644,15 @@ async def test_create_bot_stores_hmac_digest_and_authenticates_without_bcrypt_ha
     stored = users.docs[0]
     assert stored["bot_profile"]["api_token_hash"] is None
     assert stored["bot_profile"]["api_token_digest"]
+    stored["bot_profile"]["disabled_at"] = datetime(2026, 7, 8, tzinfo=UTC)
+    stored["bot_profile"]["disabled_reason"] = "disabled by ks-deploy bot-instance-disable"
 
     authenticated = await service.authenticate_bot_token(token)
 
     assert authenticated is not None
     assert authenticated.id == bot.id
+    assert authenticated.bot_profile is not None
+    assert authenticated.bot_profile.disabled_reason == "disabled by ks-deploy bot-instance-disable"
 
 
 @pytest.mark.asyncio
