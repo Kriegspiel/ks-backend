@@ -2337,6 +2337,10 @@ class GameService:
         game = await self._get_live_or_archived_game_document(game_id=game_id)
         return await self._to_metadata(game)
 
+    async def get_game_public_status(self, *, game_id: str) -> dict[str, str]:
+        game = await self._get_live_or_archived_game_document(game_id=game_id)
+        return {"game_code": str(game.get("game_code", "")).strip().upper(), "state": game["state"]}
+
     def _to_transcript_response(self, *, game: dict[str, Any], user_id: str) -> GameTranscriptResponse:
         if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
             raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access an active game transcript")

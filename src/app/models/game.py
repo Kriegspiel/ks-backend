@@ -256,6 +256,13 @@ class GameStateResponse(BaseModel):
     clock: ClockState
 
 
+class GamePublicStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    game_code: str = Field(min_length=6, max_length=6, pattern=r"^[2-9A-HJ-KM-NP-Z]{6}$")
+    state: GameState
+
+
 class OpenGameItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
