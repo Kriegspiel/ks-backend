@@ -14,7 +14,15 @@ from app.dependencies import get_current_user
 from app.main import create_app
 from app.models.user import UserModel
 from app.routers.analytics import maybe_get_analytics_service
-from app.routers.game import _sse_frame, game_events, get_game_review, get_game_service, get_lobby_stats, get_recent_games
+from app.routers.game import (
+    _sse_frame,
+    game_events,
+    get_game_public_status,
+    get_game_review,
+    get_game_service,
+    get_lobby_stats,
+    get_recent_games,
+)
 from app.services.game_service import (
     GameConflictError,
     GameForbiddenError,
@@ -149,6 +157,7 @@ def app_with_game_service() -> tuple:
                 "updated_at": datetime.now(UTC),
             }
         ),
+        get_game_public_status=AsyncMock(return_value={"game_code": "A7K2M9", "state": "completed"}),
         get_game_review=AsyncMock(return_value={"game_id": "gid1", "moves": [], "result": None}),
         get_recent_completed_games=AsyncMock(return_value={"games": []}),
         resign_game=AsyncMock(return_value={"result": {"winner": "black", "reason": "resignation"}}),
@@ -376,6 +385,7 @@ async def test_stats_review_and_recent_routes_cover_success_and_error_paths() ->
                 "completed_total": 21012,
             }
         ),
+        get_game_public_status=AsyncMock(return_value={"game_code": "A7K2M9", "state": "completed"}),
         get_game_review=AsyncMock(return_value={"game_id": "gid1", "moves": []}),
         get_recent_completed_games=AsyncMock(return_value={"games": []}),
     )
@@ -386,18 +396,22 @@ async def test_stats_review_and_recent_routes_cover_success_and_error_paths() ->
         "completed_last_24_hours": 2,
         "completed_total": 21012,
     }
+    assert await get_game_public_status("gid1", game_service=service) == {"game_code": "A7K2M9", "state": "completed"}
     assert await get_game_review("gid1", user=user, game_service=service) == {"game_id": "gid1", "moves": []}
     assert await get_recent_games(limit=5, game_service=service) == {"games": []}
 
     service.get_lobby_stats = AsyncMock(side_effect=GameValidationError(code="BAD_STATS", message="bad stats"))
+    service.get_game_public_status = AsyncMock(side_effect=GameNotFoundError("missing"))
     service.get_game_review = AsyncMock(side_effect=GameForbiddenError(code="FORBIDDEN", message="forbidden"))
     service.get_recent_completed_games = AsyncMock(side_effect=GameConflictError(code="CONFLICT", message="conflict"))
 
     stats_error = await get_lobby_stats(game_service=service)
+    public_status_error = await get_game_public_status("gid1", game_service=service)
     review_error = await get_game_review("gid1", user=user, game_service=service)
     recent_error = await get_recent_games(limit=5, game_service=service)
 
     assert stats_error.status_code == 400
+    assert public_status_error.status_code == 404
     assert review_error.status_code == 403
     assert recent_error.status_code == 409
 
@@ -418,6 +432,24 @@ def test_lobby_stats_endpoint_is_public(app_with_game_service) -> None:
     assert stats.json()["completed_total"] == 21012
     assert open_games.status_code == 401
     service.get_lobby_stats.assert_awaited()
+
+
+def test_game_public_status_endpoint_is_public_and_narrow(app_with_game_service) -> None:
+    app, service = app_with_game_service
+
+    def raise_unauth():
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    app.dependency_overrides[get_current_user] = raise_unauth
+
+    with TestClient(app) as client:
+        public_status = client.get("/api/game/A7K2M9/public-status")
+        private_state = client.get("/api/game/A7K2M9/state")
+
+    assert public_status.status_code == 200
+    assert public_status.json() == {"game_code": "A7K2M9", "state": "completed"}
+    assert private_state.status_code == 401
+    service.get_game_public_status.assert_awaited_once_with(game_id="A7K2M9")
 
 
 @pytest.mark.parametrize(

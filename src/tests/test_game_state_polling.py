@@ -658,6 +658,21 @@ async def test_get_game_state_completed_reveals_archived_game_by_code(active_gam
     assert games.docs == []
 
 
+@pytest.mark.asyncio
+async def test_get_game_public_status_returns_archived_status_by_code(active_game_doc: dict) -> None:
+    games = FakeGamesCollection()
+    archives = FakeGamesCollection()
+    completed = dict(active_game_doc)
+    completed["state"] = "completed"
+    archives.docs.append(completed)
+    service = GameService(games, archives_collection=archives)
+
+    public_status = await service.get_game_public_status(game_id=completed["game_code"].lower())
+
+    assert public_status == {"game_code": completed["game_code"], "state": "completed"}
+    assert set(public_status) == {"game_code", "state"}
+
+
 def test_build_referee_log_filters_private_announcements_but_keeps_all_public_announcements() -> None:
     now = datetime.now(UTC)
     log = build_referee_log(

@@ -12,6 +12,7 @@ from app.models.game import (
     CreateGameRequest,
     CreateGameResponse,
     GameMetadataResponse,
+    GamePublicStatusResponse,
     GameReviewResponse,
     GameStateResponse,
     GameTranscriptResponse,
@@ -135,6 +136,14 @@ async def get_game_state(
 ) -> Any:
     try:
         return await game_service.get_game_state(game_id=game_id, user_id=user.id)
+    except GameServiceError as exc:
+        return _map_game_error(exc)
+
+
+@router.get("/{game_id}/public-status", response_model=GamePublicStatusResponse)
+async def get_game_public_status(game_id: str, game_service: GameService = Depends(get_game_service)) -> Any:
+    try:
+        return await game_service.get_game_public_status(game_id=game_id)
     except GameServiceError as exc:
         return _map_game_error(exc)
 
