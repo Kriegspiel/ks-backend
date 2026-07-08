@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.78
+
+- **LLM Bot Caps**: bot-vs-bot LLM games now sample 128-256 turn limits at
+  activation and count only completed board turns, so illegal attempts and
+  ask-any entries no longer trigger early resignations.
+
 ## ks-backend v. 1.3.77
 
 - **LLM Bot Catalogue**: recognize the full Tier T2 model-bot catalogue as
