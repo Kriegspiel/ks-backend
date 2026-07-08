@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.models.auth import BotRegisterRequest, BotRegisterResponse, RegisterRequest
 from app.models.bot import BotProfileSyncRequest
+from app.models.user import UserModel
 
 
 def test_register_request_rejects_invalid_email_format() -> None:
@@ -80,6 +83,37 @@ def test_bot_register_request_allows_supported_rule_variants_to_be_omitted() -> 
     )
 
     assert payload.supported_rule_variants is None
+
+
+def test_user_model_accepts_disabled_bot_profile_metadata() -> None:
+    now = datetime(2026, 7, 8, tzinfo=UTC)
+    user = UserModel.from_mongo(
+        {
+            "_id": "507f1f77bcf86cd799439011",
+            "username": "llm_llama31_8b",
+            "username_display": "LLM Llama 3.1 8B (bot)",
+            "email": "llm_llama31_8b@kriegspiel.org",
+            "password_hash": "",
+            "role": "bot",
+            "status": "active",
+            "last_active_at": now,
+            "created_at": now,
+            "updated_at": now,
+            "bot_profile": {
+                "display_name": "LLM Llama 3.1 8B (bot)",
+                "listed": False,
+                "api_token_id": "token-id",
+                "api_token_digest": "token-digest",
+                "registered_at": now,
+                "disabled_at": now,
+                "disabled_reason": "disabled by ks-deploy bot-instance-disable",
+            },
+        }
+    )
+
+    assert user.bot_profile is not None
+    assert user.bot_profile.disabled_at == now
+    assert user.bot_profile.disabled_reason == "disabled by ks-deploy bot-instance-disable"
 
 
 def test_bot_profile_sync_request_validates_supported_rule_variants() -> None:

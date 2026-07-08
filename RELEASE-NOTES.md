@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.82
+
+- **Bot Auth**: accept persisted bot disable metadata on bot profiles so
+  previously disabled bot accounts can authenticate cleanly after their
+  services are restored.
+
 ## ks-backend v. 1.3.81
 
 - **Bot Matrix Report API**: add outcome filters so matrix cells, bot totals,

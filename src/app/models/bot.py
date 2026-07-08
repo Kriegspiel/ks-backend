@@ -65,6 +65,8 @@ class BotProfile(BaseModel):
     api_token_hash: str | None = None
     api_token_digest: str | None = None
     registered_at: datetime | None = None
+    disabled_at: datetime | None = None
+    disabled_reason: str = ""
     last_bot_game_joined_at: datetime | None = None
     supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: DEFAULT_SUPPORTED_RULE_VARIANTS.copy())
     model_availability: BotModelAvailability | None = None
