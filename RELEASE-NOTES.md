@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.80
+
+- **Game List API**: allow authenticated `/game/mine/active` callers to request
+  a bounded `limit` up to 100 so high-concurrency bot tournaments can discover
+  all assigned active games instead of only the default 20 most recent games.
+
 ## ks-backend v. 1.3.79
 
 - **Game Status API**: add a public game status endpoint that exposes only game
