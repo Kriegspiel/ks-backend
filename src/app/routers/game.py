@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from app.db import get_db
 from app.dependencies import get_current_user
@@ -36,6 +36,8 @@ from app.services.game_service import (
 )
 
 router = APIRouter(prefix="/game", tags=["game"])
+MY_GAMES_DEFAULT_LIMIT = 20
+MY_GAMES_MAX_LIMIT = 100
 
 
 class MyGamesResponse(OpenGamesResponse):
@@ -218,10 +220,12 @@ async def get_lobby_stats(
 @router.get("/mine/active", response_model=MyGamesResponse)
 @router.get("/mine-active", response_model=MyGamesResponse, include_in_schema=False)
 async def get_my_active_games(
-    user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)
+    limit: int = Query(MY_GAMES_DEFAULT_LIMIT, ge=1, le=MY_GAMES_MAX_LIMIT),
+    user: UserModel = Depends(get_current_user),
+    game_service: GameService = Depends(get_game_service),
 ) -> Any:
     try:
-        return MyGamesResponse(games=await game_service.get_my_active_games(user_id=user.id))
+        return MyGamesResponse(games=await game_service.get_my_active_games(user_id=user.id, limit=limit))
     except GameServiceError as exc:
         return _map_game_error(exc)
 

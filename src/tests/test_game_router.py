@@ -238,6 +238,16 @@ def test_game_router_happy_path_shapes(app_with_game_service) -> None:
     assert archived_alias.status_code == 200
 
 
+def test_game_router_active_mine_passes_limit(app_with_game_service) -> None:
+    app, service = app_with_game_service
+
+    with TestClient(app) as client:
+        response = client.get("/api/game/mine/active?limit=75")
+
+    assert response.status_code == 200
+    service.get_my_active_games.assert_awaited_once_with(user_id="507f1f77bcf86cd799439011", limit=75)
+
+
 def test_create_game_passes_attribution_snapshot(app_with_game_service) -> None:
     app, service = app_with_game_service
     attribution = {
