@@ -2899,6 +2899,22 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
     assert report["usage_available"] is True
     assert report["usage_start_date"] == "2026-07-04"
 
+    filtered_report = await UserService(users).get_bot_matrix_report(
+        FakeDB(users=users, game_archives=archives),
+        period="today",
+        outcomes=["insufficient"],
+        now=now,
+    )
+
+    assert filtered_report["outcomes"] == ["insufficient"]
+    assert filtered_report["unique_game_count"] == 1
+    assert filtered_report["row_record_count"] == 2
+    assert filtered_report["end_condition_rows"] == [{"condition": "insufficient", "label": "Insufficient material", "games": 1}]
+    assert filtered_report["matrix_rows"][0]["cells"][1]["summary"]["record"] == "0-1-0"
+    assert filtered_report["total_rows"]["all"][0]["games"] == 1
+    assert filtered_report["total_rows"]["all"][0]["record"] == "0-1-0"
+    assert filtered_report["total_rows"]["humans"][0]["games"] == 0
+
 
 @pytest.mark.asyncio
 async def test_get_bot_matrix_report_maps_generic_openrouter_usage_by_model() -> None:

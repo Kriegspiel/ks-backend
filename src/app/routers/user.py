@@ -195,11 +195,12 @@ async def get_bots_report(
 @router.get("/tech/bot-matrix-report")
 async def get_bot_matrix_report(
     period: str = Query(default="lifetime", pattern="^(today|week|month|year|lifetime)$"),
+    outcomes: list[str] = Query(default=[]),
     _tech_user: UserModel = Depends(require_tech_report_access),
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
-    return await user_service.get_bot_matrix_report(db, period=period)
+    return await user_service.get_bot_matrix_report(db, period=period, outcomes=_query_values(outcomes))
 
 
 @router.get("/tech/guests-report")
