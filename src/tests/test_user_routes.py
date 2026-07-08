@@ -309,7 +309,8 @@ def test_user_game_filter_options_route_returns_facets() -> None:
 
 def test_tech_report_routes_require_operator_access() -> None:
     app = create_app(Settings(ENVIRONMENT="testing", TECH_REPORT_USERNAMES="playerone"))
-    app.dependency_overrides[get_user_service] = lambda: StubService()
+    service = StubService()
+    app.dependency_overrides[get_user_service] = lambda: service
 
     class FakeDB:
         sessions = object()
@@ -319,7 +320,9 @@ def test_tech_report_routes_require_operator_access() -> None:
 
     with TestClient(app, raise_server_exceptions=False) as client:
         bots_report = client.get("/api/tech/bots-report?days=10")
-        bot_matrix_report = client.get("/api/tech/bot-matrix-report?period=lifetime")
+        bot_matrix_report = client.get(
+            "/api/tech/bot-matrix-report?period=lifetime&outcomes=checkmate,insufficient&outcomes=time"
+        )
         guests_report = client.get("/api/tech/guests-report")
         users_report = client.get("/api/tech/users-report")
 
@@ -328,6 +331,11 @@ def test_tech_report_routes_require_operator_access() -> None:
 
     assert bot_matrix_report.status_code == 200
     assert bot_matrix_report.json()["unique_game_count"] == 27348
+    service.get_bot_matrix_report.assert_awaited_once_with(
+        ANY,
+        period="lifetime",
+        outcomes=["checkmate", "insufficient", "time"],
+    )
 
     assert guests_report.status_code == 200
     assert guests_report.json()["guests"][0]["username"] == "guest_mikhail_tal"

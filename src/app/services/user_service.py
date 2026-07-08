@@ -101,6 +101,9 @@ BOT_MATRIX_END_CONDITION_ORDER = (
     "too_many_reversible_moves",
     "unknown",
 )
+BOT_MATRIX_END_CONDITION_ALIASES = {
+    "time": "timeout",
+}
 
 
 class UserConflictError(Exception):
@@ -761,6 +764,25 @@ class UserService:
         except (TypeError, ValueError):
             return 0
         return max(0, turn_count * 2)
+
+    @staticmethod
+    def _bot_matrix_normalized_condition(condition: Any) -> str:
+        text = str(condition or "").strip().lower()
+        if not text:
+            return "unknown"
+        return BOT_MATRIX_END_CONDITION_ALIASES.get(text, text)
+
+    @classmethod
+    def _bot_matrix_outcome_filter_set(cls, outcomes: list[str] | tuple[str, ...] | None) -> set[str]:
+        if not outcomes:
+            return set()
+        normalized: set[str] = set()
+        for outcome in outcomes:
+            for part in str(outcome or "").split(","):
+                condition = cls._bot_matrix_normalized_condition(part)
+                if condition and condition != "all":
+                    normalized.add(condition)
+        return normalized
 
     @staticmethod
     def _bot_matrix_empty_summary() -> dict[str, Any]:
@@ -2406,9 +2428,11 @@ class UserService:
         db: Any,
         *,
         period: str = "lifetime",
+        outcomes: list[str] | tuple[str, ...] | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         normalized_period = period if period in BOT_MATRIX_PERIODS else "lifetime"
+        outcome_filter = self._bot_matrix_outcome_filter_set(outcomes)
         generated_at = (now or datetime.now(UTC)).astimezone(UTC)
         cutoff = self._bot_matrix_period_cutoff(period=normalized_period, now=generated_at)
 
@@ -2480,6 +2504,7 @@ class UserService:
                 "row_record_count": 0,
                 "usage_available": False,
                 "usage_start_date": BOT_MATRIX_USAGE_RECORD_START_LABEL,
+                "outcomes": sorted(outcome_filter),
             }
 
         query: dict[str, Any] = {
@@ -2538,6 +2563,9 @@ class UserService:
             plies = self._bot_matrix_ply_count(game)
             result = game.get("result") if isinstance(game.get("result"), dict) else {}
             winner = result.get("winner")
+            condition = self._bot_matrix_normalized_condition(self._normalized_result_reason(game))
+            if outcome_filter and condition not in outcome_filter:
+                continue
 
             participants = (
                 ("white", white, white_username, black, black_username),
@@ -2600,7 +2628,6 @@ class UserService:
 
             if white_username in listed_username_set and black_username in listed_username_set:
                 matrix_game_count += 1
-                condition = self._normalized_result_reason(game) or "unknown"
                 end_conditions[condition] = end_conditions.get(condition, 0) + 1
 
         player_by_username = {player["username"]: player for player in players}
@@ -2661,6 +2688,7 @@ class UserService:
             "row_record_count": matrix_row_record_count,
             "usage_available": usage_available,
             "usage_start_date": BOT_MATRIX_USAGE_RECORD_START_LABEL,
+            "outcomes": sorted(outcome_filter),
         }
 
     async def get_listed_bot_daily_report(
