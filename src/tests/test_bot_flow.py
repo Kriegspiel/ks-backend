@@ -802,13 +802,16 @@ async def test_bot_vs_bot_join_assigns_distinct_random_llm_caps() -> None:
     )
 
     assert joined.state == "active"
-    assert games.docs[0]["llm_bot_ply_limits"] == {"white": 140, "black": 220}
+    assert games.docs[0]["llm_bot_turn_limits"] == {"white": 140, "black": 220}
+    assert "llm_bot_ply_limits" not in games.docs[0]
 
     white_state = await service.get_game_state(game_id=str(games.docs[0]["_id"]), user_id=str(creator_id))
     black_state = await service.get_game_state(game_id=str(games.docs[0]["_id"]), user_id=str(joiner_id))
 
-    assert white_state.llm_bot_ply_limit == 140
-    assert black_state.llm_bot_ply_limit == 220
+    assert white_state.llm_bot_ply_limit is None
+    assert black_state.llm_bot_ply_limit is None
+    assert white_state.llm_bot_turn_limit == 140
+    assert black_state.llm_bot_turn_limit == 220
 
 
 @pytest.mark.asyncio

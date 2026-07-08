@@ -75,8 +75,8 @@ ELO_K_FACTOR = 32
 WAITING_GAME_TTL = timedelta(minutes=10)
 PRE_START_ACTIVE_GAME_TTL = timedelta(hours=1)
 BOT_GAME_FLUSH_PLIES = 20
-BOT_VS_BOT_LLM_PLY_LIMIT_MIN = 128
-BOT_VS_BOT_LLM_PLY_LIMIT_MAX = 256
+BOT_VS_BOT_LLM_TURN_LIMIT_MIN = 128
+BOT_VS_BOT_LLM_TURN_LIMIT_MAX = 256
 BOT_GAME_IDLE_FLUSH = timedelta(seconds=30)
 FLUSH_LOOP_INTERVAL_SECONDS = 1.0
 TIMEOUT_SWEEP_INTERVAL = timedelta(minutes=25)
@@ -96,6 +96,8 @@ GAME_METADATA_PROJECTION = {
     "llm_bot_tier": 1,
     "llm_bot_ply_limit": 1,
     "llm_bot_ply_limits": 1,
+    "llm_bot_turn_limit": 1,
+    "llm_bot_turn_limits": 1,
     "llm_bot_user_id": 1,
     "created_at": 1,
     "updated_at": 1,
@@ -615,6 +617,29 @@ class GameService:
     @staticmethod
     def _ply_count(game: dict[str, Any]) -> int:
         return len(game.get("moves", []))
+
+    @staticmethod
+    def _successful_board_ply_count(game: dict[str, Any]) -> int:
+        engine_state = game.get("engine_state")
+        if isinstance(engine_state, dict):
+            game_state = engine_state.get("game_state")
+            if isinstance(game_state, dict) and isinstance(game_state.get("move_stack"), list):
+                return len(game_state["move_stack"])
+
+        moves = game.get("moves")
+        if not isinstance(moves, list):
+            return 0
+        return sum(
+            1
+            for move in moves
+            if isinstance(move, dict)
+            and bool(move.get("move_done"))
+            and str(move.get("question_type") or "COMMON") == "COMMON"
+        )
+
+    @classmethod
+    def _completed_turn_count(cls, game: dict[str, Any]) -> int:
+        return cls._successful_board_ply_count(game) // 2
 
     @staticmethod
     def _find_with_projection(collection: Any, query: dict[str, Any], projection: dict[str, int]):
@@ -1757,12 +1782,37 @@ class GameService:
         return cls._stored_llm_bot_ply_limit(game)
 
     @staticmethod
-    def _has_per_color_llm_bot_ply_limits(game: dict[str, Any]) -> bool:
-        limits = game.get("llm_bot_ply_limits")
+    def _stored_llm_bot_turn_limit(game: dict[str, Any]) -> int | None:
+        raw = game.get("llm_bot_turn_limit")
+        if raw is None:
+            return None
+        try:
+            limit = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return limit if limit > 0 else None
+
+    @classmethod
+    def _stored_llm_bot_turn_limit_for_color(cls, game: dict[str, Any], color: str) -> int | None:
+        limits = game.get("llm_bot_turn_limits")
+        if isinstance(limits, dict):
+            raw = limits.get(color)
+            if raw is not None:
+                try:
+                    limit = int(raw)
+                except (TypeError, ValueError):
+                    return None
+                return limit if limit > 0 else None
+
+        return cls._stored_llm_bot_turn_limit(game)
+
+    @staticmethod
+    def _has_per_color_llm_bot_turn_limits(game: dict[str, Any]) -> bool:
+        limits = game.get("llm_bot_turn_limits")
         return isinstance(limits, dict) and bool(limits)
 
     def _visible_llm_bot_ply_limit(self, *, game: dict[str, Any], viewer_color: str) -> int | None:
-        if self._is_human_involved_game(game):
+        if self._is_human_involved_game(game) or self._has_per_color_llm_bot_turn_limits(game):
             return None
 
         player = game.get(viewer_color) if isinstance(game.get(viewer_color), dict) else None
@@ -1770,16 +1820,25 @@ class GameService:
             return None
         return self._stored_llm_bot_ply_limit_for_color(game, viewer_color)
 
-    def _sample_bot_vs_bot_llm_ply_limit(self) -> int:
-        if self._rng is not None and hasattr(self._rng, "randint"):
-            return int(self._rng.randint(BOT_VS_BOT_LLM_PLY_LIMIT_MIN, BOT_VS_BOT_LLM_PLY_LIMIT_MAX))
-        return random.randint(BOT_VS_BOT_LLM_PLY_LIMIT_MIN, BOT_VS_BOT_LLM_PLY_LIMIT_MAX)
+    def _visible_llm_bot_turn_limit(self, *, game: dict[str, Any], viewer_color: str) -> int | None:
+        if self._is_human_involved_game(game):
+            return None
 
-    def _sample_distinct_bot_vs_bot_llm_ply_limits(self, count: int) -> list[int]:
+        player = game.get(viewer_color) if isinstance(game.get(viewer_color), dict) else None
+        if not player or player.get("role") != "bot":
+            return None
+        return self._stored_llm_bot_turn_limit_for_color(game, viewer_color)
+
+    def _sample_bot_vs_bot_llm_turn_limit(self) -> int:
+        if self._rng is not None and hasattr(self._rng, "randint"):
+            return int(self._rng.randint(BOT_VS_BOT_LLM_TURN_LIMIT_MIN, BOT_VS_BOT_LLM_TURN_LIMIT_MAX))
+        return random.randint(BOT_VS_BOT_LLM_TURN_LIMIT_MIN, BOT_VS_BOT_LLM_TURN_LIMIT_MAX)
+
+    def _sample_distinct_bot_vs_bot_llm_turn_limits(self, count: int) -> list[int]:
         limits: list[int] = []
         attempts = 0
         while len(limits) < count:
-            limit = self._sample_bot_vs_bot_llm_ply_limit()
+            limit = self._sample_bot_vs_bot_llm_turn_limit()
             attempts += 1
             if count <= 1 or limit not in limits:
                 limits.append(limit)
@@ -1787,10 +1846,10 @@ class GameService:
             if attempts < 16:
                 continue
 
-            span = BOT_VS_BOT_LLM_PLY_LIMIT_MAX - BOT_VS_BOT_LLM_PLY_LIMIT_MIN + 1
-            fallback = BOT_VS_BOT_LLM_PLY_LIMIT_MIN + ((limit - BOT_VS_BOT_LLM_PLY_LIMIT_MIN + 1) % span)
+            span = BOT_VS_BOT_LLM_TURN_LIMIT_MAX - BOT_VS_BOT_LLM_TURN_LIMIT_MIN + 1
+            fallback = BOT_VS_BOT_LLM_TURN_LIMIT_MIN + ((limit - BOT_VS_BOT_LLM_TURN_LIMIT_MIN + 1) % span)
             while fallback in limits:
-                fallback = BOT_VS_BOT_LLM_PLY_LIMIT_MIN + ((fallback - BOT_VS_BOT_LLM_PLY_LIMIT_MIN + 1) % span)
+                fallback = BOT_VS_BOT_LLM_TURN_LIMIT_MIN + ((fallback - BOT_VS_BOT_LLM_TURN_LIMIT_MIN + 1) % span)
             limits.append(fallback)
         return limits
 
@@ -1810,10 +1869,10 @@ class GameService:
         if not llm_bot_colors:
             return {}
 
-        sampled_limits = self._sample_distinct_bot_vs_bot_llm_ply_limits(len(llm_bot_colors))
-        return {"llm_bot_ply_limits": dict(zip(llm_bot_colors, sampled_limits, strict=True))}
+        sampled_limits = self._sample_distinct_bot_vs_bot_llm_turn_limits(len(llm_bot_colors))
+        return {"llm_bot_turn_limits": dict(zip(llm_bot_colors, sampled_limits, strict=True))}
 
-    def _apply_llm_bot_ply_limit_locked(self, *, game: dict[str, Any], now: datetime) -> bool:
+    def _apply_llm_bot_turn_limit_locked(self, *, game: dict[str, Any], now: datetime) -> bool:
         if game.get("state") != "active":
             return False
 
@@ -1824,8 +1883,8 @@ class GameService:
         if turn not in ("white", "black"):
             return False
 
-        limit = self._stored_llm_bot_ply_limit_for_color(game, turn)
-        if limit is None or self._ply_count(game) < limit:
+        limit = self._stored_llm_bot_turn_limit_for_color(game, turn)
+        if limit is None or self._completed_turn_count(game) < limit:
             return False
 
         player = game.get(turn) if isinstance(game.get(turn), dict) else None
@@ -1834,7 +1893,7 @@ class GameService:
 
         llm_bot_user_id = str(game.get("llm_bot_user_id") or "")
         if (
-            not self._has_per_color_llm_bot_ply_limits(game)
+            not self._has_per_color_llm_bot_turn_limits(game)
             and llm_bot_user_id
             and str(player.get("user_id") or "") != llm_bot_user_id
         ):
@@ -2316,7 +2375,7 @@ class GameService:
                     self._mark_entry_dirty_locked(entry, now=now)
                     self._schedule_flush(entry, reason="timeout")
                     timed_out = True
-                elif self._apply_llm_bot_ply_limit_locked(game=game, now=now):
+                elif self._apply_llm_bot_turn_limit_locked(game=game, now=now):
                     self._mark_entry_dirty_locked(entry, now=now)
                     completed_by_llm_bot_limit = True
         elif not archived:
@@ -2329,7 +2388,7 @@ class GameService:
             if self._is_human_involved_game(game):
                 game = await self._persist_terminal_entry(entry, expected_previous_state="active")
             else:
-                self._schedule_flush(entry, reason="llm-bot-ply-limit")
+                self._schedule_flush(entry, reason="llm-bot-turn-limit")
 
         if timed_out or completed_by_llm_bot_limit:
             await self._publish_game_event(game, event_type="game_changed")
@@ -2350,6 +2409,7 @@ class GameService:
             ply_count=self._ply_count(game),
             llm_bot_tier=game.get("llm_bot_tier"),
             llm_bot_ply_limit=self._visible_llm_bot_ply_limit(game=game, viewer_color=color),
+            llm_bot_turn_limit=self._visible_llm_bot_turn_limit(game=game, viewer_color=color),
             your_color=color,
             your_fen=project_player_fen(engine=engine, viewer_color=color, game_state=game["state"]),
             allowed_moves=allowed_moves_for_player(

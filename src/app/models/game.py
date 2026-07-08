@@ -41,6 +41,8 @@ class GameDocument(BaseModel):
     llm_bot_tier: LlmBotTier | None = None
     llm_bot_ply_limit: int | None = Field(default=None, ge=0)
     llm_bot_ply_limits: dict[str, int] | None = None
+    llm_bot_turn_limit: int | None = Field(default=None, ge=0)
+    llm_bot_turn_limits: dict[str, int] | None = None
     llm_bot_user_id: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -240,6 +242,7 @@ class GameStateResponse(BaseModel):
     ply_count: int = Field(default=0, ge=0)
     llm_bot_tier: LlmBotTier | None = None
     llm_bot_ply_limit: int | None = Field(default=None, ge=0)
+    llm_bot_turn_limit: int | None = Field(default=None, ge=0)
     your_color: PlayerColor
     your_fen: str
     allowed_moves: list[str] = Field(default_factory=list)
