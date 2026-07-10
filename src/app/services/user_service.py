@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from functools import cmp_to_key
 import hashlib
@@ -116,6 +117,8 @@ class UserConflictError(Exception):
 class UserService:
     _bot_token_cache: dict[str, tuple[float, UserModel]] = {}
     _bot_token_cache_ttl_seconds = get_settings().BOT_TOKEN_CACHE_TTL_SECONDS
+    _profile_metrics_cache: dict[str, tuple[int, dict[str, Any]]] = {}
+    _profile_metrics_cache_max_entries = 2048
 
     def __init__(self, users_collection: Any):
         self._users = users_collection
@@ -125,6 +128,16 @@ class UserService:
         for token, (_, user) in list(cls._bot_token_cache.items()):
             if user.id == user_id:
                 cls._bot_token_cache.pop(token, None)
+
+    @classmethod
+    def clear_profile_metrics_cache(cls) -> None:
+        cls._profile_metrics_cache.clear()
+
+    @classmethod
+    def evict_profile_metrics_cache_for_user_ids(cls, user_ids: list[str | None] | tuple[str | None, ...]) -> None:
+        for user_id in user_ids:
+            if user_id:
+                cls._profile_metrics_cache.pop(str(user_id), None)
 
     @staticmethod
     def canonical_username(username: str) -> str:
@@ -238,13 +251,53 @@ class UserService:
         return created_at.date().isoformat() if created_at is not None else None
 
     @staticmethod
-    def _find(collection: Any, query: dict[str, Any], projection: dict[str, Any] | None = None):
-        if projection is None:
-            return collection.find(query)
+    def _comment_cursor(cursor: Any, comment: str | None):
+        if not comment:
+            return cursor
+        comment_cursor = getattr(cursor, "comment", None)
+        if not callable(comment_cursor):
+            return cursor
         try:
-            return collection.find(query, projection)
+            return comment_cursor(comment)
         except TypeError:
-            return collection.find(query)
+            return cursor
+
+    @classmethod
+    def _find(
+        cls,
+        collection: Any,
+        query: dict[str, Any],
+        projection: dict[str, Any] | None = None,
+        *,
+        comment: str | None = None,
+    ):
+        if projection is None:
+            return cls._comment_cursor(collection.find(query), comment)
+        try:
+            return cls._comment_cursor(collection.find(query, projection), comment)
+        except TypeError:
+            return cls._comment_cursor(collection.find(query), comment)
+
+    @classmethod
+    async def _count_documents(cls, collection: Any, query: dict[str, Any], *, comment: str | None = None) -> int:
+        if comment:
+            try:
+                return await collection.count_documents(query, comment=comment)
+            except TypeError:
+                pass
+        return await collection.count_documents(query)
+
+    @classmethod
+    def _aggregate(cls, collection: Any, pipeline: list[dict[str, Any]], *, comment: str | None = None):
+        aggregate = getattr(collection, "aggregate", None)
+        if not callable(aggregate):
+            return None
+        if comment:
+            try:
+                return aggregate(pipeline, comment=comment)
+            except TypeError:
+                pass
+        return cls._comment_cursor(aggregate(pipeline), comment)
 
     @staticmethod
     def _to_object_id(user_id: str) -> ObjectId:
@@ -548,6 +601,7 @@ class UserService:
             db.game_archives,
             {f"{side}.user_id": user_id},
             USER_GAME_HISTORY_PROJECTION,
+            comment=f"user.game_history.default.{side}",
         ).sort([("updated_at", -1), ("created_at", -1)]).limit(limit)
         records: list[dict[str, Any]] = []
         async for game in cursor:
@@ -564,8 +618,16 @@ class UserService:
         per_page: int,
     ) -> tuple[list[dict[str, Any]], int]:
         scan_limit = offset + per_page
-        white_total = await db.game_archives.count_documents({"white.user_id": user_id})
-        black_total = await db.game_archives.count_documents({"black.user_id": user_id})
+        white_total = await cls._count_documents(
+            db.game_archives,
+            {"white.user_id": user_id},
+            comment="user.game_history.default_count.white",
+        )
+        black_total = await cls._count_documents(
+            db.game_archives,
+            {"black.user_id": user_id},
+            comment="user.game_history.default_count.black",
+        )
         records = []
         records.extend(await cls._history_records_for_side(db, user_id=user_id, side="white", limit=scan_limit))
         records.extend(await cls._history_records_for_side(db, user_id=user_id, side="black", limit=scan_limit))
@@ -719,7 +781,9 @@ class UserService:
             }
         )
 
-        cursor = aggregate(pipeline)
+        cursor = cls._aggregate(db.game_archives, pipeline, comment="user.game_history.aggregate_page")
+        if cursor is None:
+            return None
         async for result in cursor:
             rows = result.get("rows") if isinstance(result, dict) else []
             total_rows = result.get("total") if isinstance(result, dict) else []
@@ -1075,6 +1139,31 @@ class UserService:
                 return value
         return 0
 
+    @staticmethod
+    def _profile_metrics_cache_version(user: dict[str, Any]) -> int:
+        stats = normalize_user_stats_payload(user.get("stats"))
+        try:
+            return int(stats.get("games_played", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _cache_profile_metrics(cls, user_id: str, version: int, metrics: dict[str, Any]) -> None:
+        cls._profile_metrics_cache[user_id] = (version, deepcopy(metrics))
+        while len(cls._profile_metrics_cache) > cls._profile_metrics_cache_max_entries:
+            cls._profile_metrics_cache.pop(next(iter(cls._profile_metrics_cache)), None)
+
+    async def _cached_profile_metrics(self, db: Any, user: dict[str, Any]) -> dict[str, Any]:
+        user_id = str(user["_id"])
+        version = self._profile_metrics_cache_version(user)
+        cached = self._profile_metrics_cache.get(user_id)
+        if cached is not None and cached[0] == version:
+            return deepcopy(cached[1])
+
+        metrics = await self._profile_metrics(db, user)
+        self._cache_profile_metrics(user_id, version, metrics)
+        return metrics
+
     async def _profile_metrics(self, db: Any, user: dict[str, Any]) -> dict[str, Any]:
         user_id = str(user["_id"])
         username = str(user.get("username") or "")
@@ -1098,6 +1187,7 @@ class UserService:
                 "created_at": 1,
                 "updated_at": 1,
             },
+            comment="user.profile_metrics",
         )
 
         totals = {
@@ -1229,6 +1319,7 @@ class UserService:
                 "black": 1,
                 "result": 1,
             },
+            comment="user.result_tracks",
         )
         results = self._result_track_template()
         async for game in cursor:
@@ -1325,6 +1416,7 @@ class UserService:
                 "created_at": 1,
                 "rating_snapshot": 1,
             },
+            comment="user.rating_history",
         ).sort("created_at", 1)
 
         base_points: list[dict[str, Any]] = []
@@ -1711,7 +1803,7 @@ class UserService:
             "stats": normalize_user_stats_payload(user.get("stats")),
             "member_since": self._safe_datetime(user.get("created_at")),
         }
-        user_metrics = await self._profile_metrics(db, user)
+        user_metrics = await self._cached_profile_metrics(db, user)
         profile["user_metrics"] = user_metrics
         if role == "bot":
             profile["bot_metrics"] = user_metrics
@@ -1778,7 +1870,12 @@ class UserService:
                 return games, total, {}
 
         records: list[dict[str, Any]] = []
-        cursor = self._find(db.game_archives, query, USER_GAME_HISTORY_PROJECTION)
+        cursor = self._find(
+            db.game_archives,
+            query,
+            USER_GAME_HISTORY_PROJECTION,
+            comment="user.game_history.fallback",
+        )
         async for game in cursor:
             records.append(self._history_record_for_player(game, user_id=user_id))
 
@@ -1807,7 +1904,12 @@ class UserService:
             ]
         }
         records: list[dict[str, Any]] = []
-        cursor = self._find(db.game_archives, query, USER_GAME_HISTORY_PROJECTION)
+        cursor = self._find(
+            db.game_archives,
+            query,
+            USER_GAME_HISTORY_PROJECTION,
+            comment="user.game_history.filter_options",
+        )
         async for game in cursor:
             records.append(self._history_record_for_player(game, user_id=user_id))
         return self._history_filter_options(records)
@@ -2448,12 +2550,18 @@ class UserService:
                     "bot_profile.display_name": 1,
                     "bot_profile.listed": 1,
                 },
+                comment="user.bot_matrix_report.listed_bots",
             )
             if isinstance(user.get("username"), str) and user["username"].strip()
         ]
         all_bot_docs = [
             user
-            async for user in self._find(db.users, {"role": "bot"}, {"username": 1, "_id": 1})
+            async for user in self._find(
+                db.users,
+                {"role": "bot"},
+                {"username": 1, "_id": 1},
+                comment="user.bot_matrix_report.all_bots",
+            )
             if isinstance(user.get("username"), str) and user["username"].strip()
         ]
         all_bot_usernames = {user["username"].strip() for user in all_bot_docs}
@@ -2538,7 +2646,7 @@ class UserService:
             username = str(player.get("username") or "").strip()
             return listed_username_by_name.get(username)
 
-        cursor = self._find(db.game_archives, query, projection)
+        cursor = self._find(db.game_archives, query, projection, comment="user.bot_matrix_report.archives")
         if hasattr(cursor, "batch_size"):
             cursor = cursor.batch_size(1000)
 
@@ -2706,15 +2814,23 @@ class UserService:
         start_utc = start_local.astimezone(UTC)
         end_utc = end_local.astimezone(UTC)
 
-        listed_bots = sorted([
-            user.get("username")
-            async for user in self._find(
-                db.users,
-                {"role": "bot", "bot_profile.listed": True},
-                {"username": 1, "_id": 0},
-            )
-            if isinstance(user.get("username"), str) and user["username"].strip()
-        ])
+        listed_bot_docs = sorted(
+            [
+                user
+                async for user in self._find(
+                    db.users,
+                    {"role": "bot", "bot_profile.listed": True},
+                    {"username": 1, "_id": 1},
+                    comment="user.listed_bot_daily_report.listed_bots",
+                )
+                if isinstance(user.get("username"), str) and user["username"].strip()
+            ],
+            key=lambda user: user["username"].strip(),
+        )
+        listed_bots = [user["username"].strip() for user in listed_bot_docs]
+        listed_bot_ids = [str(user.get("_id") or "") for user in listed_bot_docs if user.get("_id") is not None]
+        listed_username_by_id = {str(user.get("_id") or ""): user["username"].strip() for user in listed_bot_docs}
+        listed_username_by_name = {username: username for username in listed_bots}
 
         def empty_bucket() -> dict[str, dict[str, int | float]]:
             return {
@@ -2744,8 +2860,8 @@ class UserService:
                 "state": "completed",
                 "updated_at": {"$gte": start_utc, "$lt": end_utc},
                 "$or": [
-                    {"white.username": {"$in": listed_bots}},
-                    {"black.username": {"$in": listed_bots}},
+                    {"white.user_id": {"$in": listed_bot_ids}},
+                    {"black.user_id": {"$in": listed_bot_ids}},
                 ],
             },
             {
@@ -2754,7 +2870,16 @@ class UserService:
                 "black": 1,
                 "result": 1,
             },
+            comment="user.listed_bot_daily_report.archives",
         )
+
+        def listed_username_for(player: dict[str, Any]) -> str | None:
+            user_id = str(player.get("user_id") or "").strip()
+            if user_id in listed_username_by_id:
+                return listed_username_by_id[user_id]
+            username = str(player.get("username") or "").strip()
+            return listed_username_by_name.get(username)
+
         async for game in cursor:
             updated_at = game.get("updated_at")
             if not isinstance(updated_at, datetime):
@@ -2766,7 +2891,7 @@ class UserService:
 
             for color, opponent_color in (("white", "black"), ("black", "white")):
                 player = game.get(color) or {}
-                username = player.get("username")
+                username = listed_username_for(player)
                 if username not in bot_days:
                     continue
                 day_stats = bot_days[username].get(day)

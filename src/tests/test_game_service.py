@@ -25,6 +25,7 @@ from app.services.game_service import (
     PRE_START_ACTIVE_GAME_TTL,
 )
 from app.services.game_usage_stats import LlmUsageReport
+from app.services.user_service import UserService
 
 
 class FakeCursor:
@@ -1544,6 +1545,40 @@ async def test_finalize_completed_game_updates_stats_and_archive_for_all_outcome
     assert black_stats["results"]["overall"][black_bucket] == 1
     assert white_stats["results"]["vs_bots"][white_bucket] == 1
     assert black_stats["results"]["vs_humans"][black_bucket] == 1
+
+
+@pytest.mark.asyncio
+async def test_archive_completed_game_evicts_profile_metric_caches_for_players() -> None:
+    UserService.clear_profile_metrics_cache()
+    try:
+        UserService._cache_profile_metrics("white-user", 1, {"completed_games": 1})
+        UserService._cache_profile_metrics("black-bot", 1, {"completed_games": 1})
+        UserService._cache_profile_metrics("spectator", 1, {"completed_games": 1})
+        games = FakeGamesCollection()
+        archives = FakeGamesCollection()
+        now = datetime(2026, 4, 7, tzinfo=UTC)
+        game = {
+            "_id": ObjectId(),
+            "game_code": "DONE44",
+            "rule_variant": "berkeley_any",
+            "white": {"user_id": "white-user", "username": "white", "role": "user"},
+            "black": {"user_id": "black-bot", "username": "blackbot", "role": "bot"},
+            "state": "completed",
+            "result": {"winner": "white", "reason": "checkmate"},
+            "moves": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+        games.docs.append(game)
+        service = GameService(games, archives_collection=archives)
+
+        await service._archive_completed_game_and_delete_live(game)
+
+        assert "white-user" not in UserService._profile_metrics_cache
+        assert "black-bot" not in UserService._profile_metrics_cache
+        assert "spectator" in UserService._profile_metrics_cache
+    finally:
+        UserService.clear_profile_metrics_cache()
 
 
 @pytest.mark.asyncio

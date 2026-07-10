@@ -24,6 +24,11 @@ class InsertResult:
 class FakeCursor:
     def __init__(self, docs: list[dict]):
         self._docs = list(docs)
+        self.comment_value: str | None = None
+
+    def comment(self, value: str):
+        self.comment_value = value
+        return self
 
     def sort(self, fields, direction: int | None = None):
         if isinstance(fields, str):
@@ -217,6 +222,16 @@ def test_find_uses_single_argument_call_when_projection_is_omitted() -> None:
 
     assert UserService._find(collection, {"role": "bot"}) == "cursor"
     assert collection.calls == [({"role": "bot"},)]
+
+
+def test_find_applies_cursor_comment_when_supported() -> None:
+    class TrackingCollection:
+        def find(self, query: dict, projection: dict | None = None):  # noqa: ARG002
+            return FakeCursor([])
+
+    cursor = UserService._find(TrackingCollection(), {"role": "bot"}, comment="user.test.query")
+
+    assert cursor.comment_value == "user.test.query"
 
 
 @pytest.mark.asyncio
@@ -837,6 +852,100 @@ async def test_get_public_profile_includes_user_metrics_for_regular_users() -> N
     assert metrics["as_black"] == {"total_games": 1, "wins": 1, "losses": 0, "draws": 0, "win_rate": 1.0}
     assert metrics["opponents"][0]["username"] == "amy"
     assert metrics["rulesets"][0]["rule_variant"] == "berkeley"
+
+
+@pytest.mark.asyncio
+async def test_get_public_profile_caches_metrics_until_completed_game_count_changes() -> None:
+    def synced_stats(*, games_played: int, games_won: int, games_lost: int = 0, games_drawn: int = 0) -> dict:
+        stats = default_user_stats_payload()
+        summary = {
+            "games_played": games_played,
+            "games_won": games_won,
+            "games_lost": games_lost,
+            "games_drawn": games_drawn,
+        }
+        stats.update(summary)
+        stats["results"]["overall"] = dict(summary)
+        stats["results"]["vs_humans"] = dict(summary)
+        stats["results"]["vs_bots"] = {
+            "games_played": 0,
+            "games_won": 0,
+            "games_lost": 0,
+            "games_drawn": 0,
+        }
+        stats["results_synced_at"] = datetime(2026, 5, 18, tzinfo=UTC)
+        return stats
+
+    UserService.clear_profile_metrics_cache()
+    try:
+        users = FakeUsersCollection()
+        archives = FakeUsersCollection()
+        user_id = ObjectId()
+        users.docs.append(
+            {
+                "_id": user_id,
+                "username": "fil",
+                "username_display": "fil",
+                "email": "fil@example.com",
+                "email_verified": True,
+                "password_hash": "hash",
+                "auth_providers": ["local"],
+                "profile": {"bio": "", "avatar_url": None, "country": None},
+                "stats": synced_stats(games_played=1, games_won=1),
+                "settings": {},
+                "role": "user",
+                "status": "active",
+                "created_at": datetime(2026, 5, 18, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 18, tzinfo=UTC),
+            }
+        )
+        archives.docs.append(
+            {
+                "_id": ObjectId(),
+                "game_code": "CACHE1",
+                "white": {"user_id": str(user_id), "username": "fil", "role": "user"},
+                "black": {"user_id": "human-1", "username": "amy", "role": "user"},
+                "rule_variant": "berkeley",
+                "turn_count": 4,
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 5, 18, 10, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 18, 10, 5, tzinfo=UTC),
+            }
+        )
+        db = FakeDB(users=users, game_archives=archives)
+        service = UserService(users)
+
+        first = await service.get_public_profile(db, "fil")
+        second = await service.get_public_profile(db, "fil")
+
+        assert first is not None
+        assert second is not None
+        assert first["user_metrics"]["completed_games"] == 1
+        assert second["user_metrics"]["completed_games"] == 1
+        assert len(archives.find_calls) == 1
+
+        users.docs[0]["stats"] = synced_stats(games_played=2, games_won=2)
+        archives.docs.append(
+            {
+                "_id": ObjectId(),
+                "game_code": "CACHE2",
+                "white": {"user_id": str(user_id), "username": "fil", "role": "user"},
+                "black": {"user_id": "human-2", "username": "ben", "role": "user"},
+                "rule_variant": "english",
+                "turn_count": 6,
+                "result": {"winner": "white"},
+                "created_at": datetime(2026, 5, 19, 10, 0, tzinfo=UTC),
+                "updated_at": datetime(2026, 5, 19, 10, 5, tzinfo=UTC),
+            }
+        )
+
+        third = await service.get_public_profile(db, "fil")
+
+        assert third is not None
+        assert third["user_metrics"]["completed_games"] == 2
+        assert len(archives.find_calls) == 2
+    finally:
+        UserService.clear_profile_metrics_cache()
 
 
 @pytest.mark.asyncio
@@ -2029,7 +2138,11 @@ async def test_profile_metrics_skips_unmatched_games_and_uses_username_match(
         },
     ]
     service = UserService(FakeUsersCollection())
-    monkeypatch.setattr(service, "_find", lambda collection, query, projection=None: FakeCursor(archive_docs))  # noqa: ARG005
+    monkeypatch.setattr(
+        service,
+        "_find",
+        lambda collection, query, projection=None, *, comment=None: FakeCursor(archive_docs),  # noqa: ARG005
+    )
 
     metrics = await service._profile_metrics(
         FakeDB(users=FakeUsersCollection(), game_archives=FakeUsersCollection()),
@@ -2734,7 +2847,7 @@ async def test_get_user_activity_report_skips_edge_rows_and_caps_recent_games(
     )
     recent_docs.append({"_id": ObjectId(), "game_code": "RECENT-NODATE", "white": {}, "black": {}})
 
-    def fake_find(collection, query, projection=None):  # noqa: ANN001
+    def fake_find(collection, query, projection=None, *, comment=None):  # noqa: ANN001
         if collection is users:
             return TolerantCursor([])
         assert collection is archives
@@ -3019,43 +3132,52 @@ async def test_get_listed_bot_daily_report_aggregates_daily_win_rates(monkeypatc
         midday_local -= timedelta(days=1)
     previous_midday_local = midday_local - timedelta(days=1)
 
+    haiku_id = ObjectId()
+    gptnano_id = ObjectId()
     listed_bot_docs = [
-        {"username": "llm_haiku"},
-        {"username": "llm_gptnano"},
-        {"username": "   "},
+        {"_id": haiku_id, "username": "llm_haiku"},
+        {"_id": gptnano_id, "username": "llm_gptnano"},
+        {"_id": ObjectId(), "username": "   "},
     ]
     archive_docs = [
         {
             "updated_at": previous_midday_local.astimezone(UTC),
-            "white": {"username": "llm_gptnano", "role": "bot"},
+            "white": {"user_id": str(gptnano_id), "username": "llm_gptnano", "role": "bot"},
             "black": {"username": "humanone", "role": "user"},
             "result": {"winner": "white"},
         },
         {
             "updated_at": midday_local.astimezone(UTC).replace(tzinfo=None),
-            "white": {"username": "llm_gptnano", "role": "bot"},
-            "black": {"username": "llm_haiku", "role": "bot"},
+            "white": {"user_id": str(gptnano_id), "username": "llm_gptnano", "role": "bot"},
+            "black": {"user_id": str(haiku_id), "username": "llm_haiku", "role": "bot"},
             "result": {"winner": "black"},
         },
         {
             "updated_at": "bad-timestamp",
-            "white": {"username": "llm_gptnano", "role": "bot"},
-            "black": {"username": "llm_haiku", "role": "bot"},
+            "white": {"user_id": str(gptnano_id), "username": "llm_gptnano", "role": "bot"},
+            "black": {"user_id": str(haiku_id), "username": "llm_haiku", "role": "bot"},
             "result": {"winner": "white"},
         },
         {
             "updated_at": (previous_midday_local - timedelta(days=30)).astimezone(UTC),
-            "white": {"username": "llm_gptnano", "role": "bot"},
+            "white": {"user_id": str(gptnano_id), "username": "llm_gptnano", "role": "bot"},
             "black": {"username": "human", "role": "user"},
             "result": {"winner": "white"},
         },
     ]
 
-    def fake_find(collection, query, projection=None):  # noqa: ANN001
+    def fake_find(collection, query, projection=None, *, comment=None):  # noqa: ANN001
         if collection is users:
             assert query == {"role": "bot", "bot_profile.listed": True}
             return FakeCursor(listed_bot_docs)
         assert collection is archives
+        archive_or = query["$or"]
+        assert archive_or == [
+            {"white.user_id": {"$in": [str(gptnano_id), str(haiku_id)]}},
+            {"black.user_id": {"$in": [str(gptnano_id), str(haiku_id)]}},
+        ]
+        assert "white.username" not in str(query)
+        assert "black.username" not in str(query)
         return FakeCursor(archive_docs)
 
     monkeypatch.setattr(service, "_find", fake_find)

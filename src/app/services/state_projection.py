@@ -429,8 +429,7 @@ def build_viewer_referee_turns(*, viewer_color: PlayerColor, stored_scoresheet: 
     return build_viewer_scoresheet(viewer_color=viewer_color, stored_scoresheet=stored_scoresheet)['turns']
 
 
-def build_viewer_referee_log(*, viewer_color: PlayerColor, stored_scoresheet: dict[str, Any] | None) -> list[dict[str, Any]]:
-    turns = build_viewer_referee_turns(viewer_color=viewer_color, stored_scoresheet=stored_scoresheet)
+def build_viewer_referee_log_from_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
 
     for turn in turns:
@@ -455,6 +454,11 @@ def build_viewer_referee_log(*, viewer_color: PlayerColor, stored_scoresheet: di
                 )
 
     return out
+
+
+def build_viewer_referee_log(*, viewer_color: PlayerColor, stored_scoresheet: dict[str, Any] | None) -> list[dict[str, Any]]:
+    turns = build_viewer_referee_turns(viewer_color=viewer_color, stored_scoresheet=stored_scoresheet)
+    return build_viewer_referee_log_from_turns(turns)
 
 
 def serialize_engine_scoresheets(engine: Any) -> dict[str, dict[str, Any]]:
