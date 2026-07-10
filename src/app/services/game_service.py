@@ -13,6 +13,7 @@ import chess
 from pymongo import ReturnDocument
 import structlog
 
+from app.config import get_settings
 from app.models.bot import supported_rule_variants_for_bot
 from app.models.game import (
     CreateGameRequest,
@@ -23,6 +24,7 @@ from app.models.game import (
     GameMetadataResponse,
     GameReviewResponse,
     GameStateResponse,
+    GameT3ReviewResponse,
     GameTranscriptResponse,
     JoinGameResponse,
     OpenGameItem,
@@ -30,6 +32,7 @@ from app.models.game import (
     RecentGameItem,
     RecentGamesResponse,
 )
+from app.services.t3_review_analysis import T3_CACHE_PATH, build_t3_review_analysis, cache_is_fresh
 from app.services.archive_turn_counts import archive_count_fields
 from app.services.bot_service import BotService
 from app.services.clock_service import ClockService
@@ -2717,6 +2720,48 @@ class GameService:
             game=await self._to_metadata(game),
             transcript=self._to_transcript_response(game=game, user_id=user_id),
         )
+
+    async def get_game_t3_review(self, *, game_id: str, user_id: str) -> GameT3ReviewResponse:
+        game = await self._get_live_or_archived_game_document(game_id=game_id)
+        if game.get("state") != "completed":
+            raise GameValidationError(code="T3_REVIEW_ACTIVE_GAME", message="T3 review is available after a game is completed")
+
+        settings = get_settings()
+        transcript = self._to_transcript_response(game=game, user_id=user_id)
+        cached = self._nested_value(game, T3_CACHE_PATH)
+        if cache_is_fresh(cached, model=settings.OPENAI_ANALYSIS_MODEL, ruleset=game.get("rule_variant", "berkeley_any")):
+            analysis = deepcopy(cached)
+            if isinstance(analysis.get("meta"), dict):
+                analysis["meta"]["openai_status"] = "cached"
+        else:
+            analysis = await build_t3_review_analysis(game=game, transcript=transcript, settings=settings)
+            await self._store_t3_review_analysis(game=game, analysis=analysis)
+
+        return GameT3ReviewResponse(
+            game=await self._to_metadata(game),
+            transcript=transcript,
+            analysis=analysis,
+        )
+
+    @staticmethod
+    def _nested_value(source: dict[str, Any], path: str) -> Any:
+        current: Any = source
+        for part in path.split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+        return current
+
+    async def _store_t3_review_analysis(self, *, game: dict[str, Any], analysis: dict[str, Any]) -> None:
+        review_analysis = game.setdefault("review_analysis", {})
+        if isinstance(review_analysis, dict):
+            review_analysis["t3"] = analysis
+        if self._archives is None:
+            return
+        update_one = getattr(self._archives, "update_one", None)
+        if not callable(update_one):
+            return
+        await update_one({"_id": game.get("_id")}, {"$set": {T3_CACHE_PATH: analysis}})
 
     async def delete_waiting_game(self, *, game_id: str, user_id: str) -> None:
         oid = await self._resolve_live_game_object_id(game_id)

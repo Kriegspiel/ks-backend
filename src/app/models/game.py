@@ -377,3 +377,81 @@ class GameReviewResponse(BaseModel):
 
     game: GameMetadataResponse
     transcript: GameTranscriptResponse
+
+
+class T3ReviewAlternative(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uci: str
+    score: float
+
+
+class T3ReviewReason(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    value: float
+    direction: Literal["positive", "negative", "neutral"]
+    description: str
+
+
+class T3ReviewMoveAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ply: int = Field(ge=1)
+    color: PlayerColor
+    uci: str
+    move_done: bool
+    label: str
+    confidence: Literal["low", "medium", "high"]
+    score: float
+    best_uci: str | None = None
+    best_score: float | None = None
+    move_delta: float | None = None
+    side_to_move_label: str
+    explanation: str
+    deterministic_explanation: str
+    top_alternatives: list[T3ReviewAlternative] = Field(default_factory=list)
+    reasons: list[T3ReviewReason] = Field(default_factory=list)
+    components: dict[str, float] = Field(default_factory=dict)
+    probabilities: dict[str, float] = Field(default_factory=dict)
+    mcts_iterations: int = Field(default=0, ge=0)
+
+
+class T3ReviewSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    analyzed_moves: int = Field(ge=0)
+    best_moves: int = Field(ge=0)
+    inaccuracies: int = Field(ge=0)
+    mistakes: int = Field(ge=0)
+    blunders: int = Field(ge=0)
+
+
+class T3ReviewAnalysisMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_version: str
+    analyzer: str
+    ruleset: RuleVariant
+    supported: bool
+    generated_at: datetime
+    model: str | None = None
+    openai_status: Literal["generated", "disabled", "failed", "cached"]
+    openai_error: str | None = None
+
+
+class T3ReviewAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    meta: T3ReviewAnalysisMeta
+    summary: T3ReviewSummary
+    moves: list[T3ReviewMoveAnalysis] = Field(default_factory=list)
+
+
+class GameT3ReviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    game: GameMetadataResponse
+    transcript: GameTranscriptResponse
+    analysis: T3ReviewAnalysis

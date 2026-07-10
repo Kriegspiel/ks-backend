@@ -19,6 +19,7 @@ from app.routers.game import (
     game_events,
     get_game_public_status,
     get_game_review,
+    get_game_t3_review,
     get_game_service,
     get_lobby_stats,
     get_recent_games,
@@ -397,6 +398,7 @@ async def test_stats_review_and_recent_routes_cover_success_and_error_paths() ->
         ),
         get_game_public_status=AsyncMock(return_value={"game_code": "A7K2M9", "state": "completed"}),
         get_game_review=AsyncMock(return_value={"game_id": "gid1", "moves": []}),
+        get_game_t3_review=AsyncMock(return_value={"game_id": "gid1", "analysis": {"moves": []}}),
         get_recent_completed_games=AsyncMock(return_value={"games": []}),
     )
 
@@ -408,21 +410,28 @@ async def test_stats_review_and_recent_routes_cover_success_and_error_paths() ->
     }
     assert await get_game_public_status("gid1", game_service=service) == {"game_code": "A7K2M9", "state": "completed"}
     assert await get_game_review("gid1", user=user, game_service=service) == {"game_id": "gid1", "moves": []}
+    assert await get_game_t3_review("gid1", user=user, game_service=service) == {
+        "game_id": "gid1",
+        "analysis": {"moves": []},
+    }
     assert await get_recent_games(limit=5, game_service=service) == {"games": []}
 
     service.get_lobby_stats = AsyncMock(side_effect=GameValidationError(code="BAD_STATS", message="bad stats"))
     service.get_game_public_status = AsyncMock(side_effect=GameNotFoundError("missing"))
     service.get_game_review = AsyncMock(side_effect=GameForbiddenError(code="FORBIDDEN", message="forbidden"))
+    service.get_game_t3_review = AsyncMock(side_effect=GameValidationError(code="T3_REVIEW_ACTIVE_GAME", message="done only"))
     service.get_recent_completed_games = AsyncMock(side_effect=GameConflictError(code="CONFLICT", message="conflict"))
 
     stats_error = await get_lobby_stats(game_service=service)
     public_status_error = await get_game_public_status("gid1", game_service=service)
     review_error = await get_game_review("gid1", user=user, game_service=service)
+    t3_error = await get_game_t3_review("gid1", user=user, game_service=service)
     recent_error = await get_recent_games(limit=5, game_service=service)
 
     assert stats_error.status_code == 400
     assert public_status_error.status_code == 404
     assert review_error.status_code == 403
+    assert t3_error.status_code == 400
     assert recent_error.status_code == 409
 
 
