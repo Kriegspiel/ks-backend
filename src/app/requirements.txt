@@ -6,6 +6,7 @@ pydantic-settings==2.3.4
 bcrypt==4.3.0
 python-jose[cryptography]==3.4.0
 kriegspiel @ git+https://github.com/Kriegspiel/ks-game.git@ceceb9b0905d50f087429d1fac16db724f9d7bf3
+bot-darkboard-mcts @ git+https://github.com/Kriegspiel/bot-darkboard-mcts.git@0945736a38db396a22203dbccb530d9efc840b25
 structlog==24.2.0
 sentry-sdk[fastapi]>=2.0.0
 python-multipart==0.0.22

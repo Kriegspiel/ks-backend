@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.83
+
+- **T3 Review API**: add completed-game `/game/{code}/review/t3` analysis for
+  Wild 16 games, using the Darkboard MCTS public-outcome scorer with optional
+  GPT explanations from backend-held OpenAI credentials.
+
 ## ks-backend v. 1.3.82
 
 - **Bot Auth**: accept persisted bot disable metadata on bot profiles so
