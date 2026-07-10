@@ -16,6 +16,7 @@ import structlog
 from app.config import get_settings
 from app.models.bot import supported_rule_variants_for_bot
 from app.models.game import (
+    ClockState,
     CreateGameRequest,
     CreateGameResponse,
     GameDocument,
@@ -2430,7 +2431,10 @@ class GameService:
         time_control: dict[str, Any] | None,
         now: datetime,
     ) -> GameStateResponse:
-        return response.model_copy(update={"clock": self._clock.response_clock(time_control=time_control, now=now)})
+        clock = self._clock.response_clock(time_control=time_control, now=now)
+        if not isinstance(clock, ClockState):
+            clock = ClockState.model_validate(clock)
+        return response.model_copy(update={"clock": clock})
 
     async def _project_game_state_response(
         self,
