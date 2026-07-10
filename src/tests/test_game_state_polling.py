@@ -242,6 +242,42 @@ async def test_get_game_state_returns_projected_view_and_actions(active_game_doc
 
 
 @pytest.mark.asyncio
+async def test_get_game_state_reuses_projection_cache_until_entry_changes(
+    active_game_doc: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    games = FakeGamesCollection()
+    games.docs.append(active_game_doc)
+    service = GameService(games)
+    load_calls = 0
+    original_load = service._load_or_bootstrap_engine
+
+    def spy_load(game: dict):  # noqa: ANN202
+        nonlocal load_calls
+        load_calls += 1
+        return original_load(game)
+
+    monkeypatch.setattr(service, "_load_or_bootstrap_engine", spy_load)
+
+    first = await service.get_game_state(game_id=str(active_game_doc["_id"]), user_id="u1")
+    second = await service.get_game_state(game_id=str(active_game_doc["_id"]), user_id="u1")
+    black = await service.get_game_state(game_id=str(active_game_doc["_id"]), user_id="u2")
+
+    assert first.your_color == second.your_color == "white"
+    assert black.your_color == "black"
+    assert load_calls == 2
+
+    entry = await service._get_cached_entry(active_game_doc["_id"])
+    assert entry is not None
+    async with entry.lock:
+        service._mark_entry_dirty_locked(entry, now=service.utcnow())
+
+    await service.get_game_state(game_id=str(active_game_doc["_id"]), user_id="u1")
+
+    assert load_calls == 3
+
+
+@pytest.mark.asyncio
 async def test_get_game_state_accepts_intermediate_canonical_engine_state(active_game_doc: dict) -> None:
     games = FakeGamesCollection()
     active_game_doc["engine_state"]["schema_version"] = INTERMEDIATE_CANONICAL_ENGINE_STATE_SCHEMA_VERSION

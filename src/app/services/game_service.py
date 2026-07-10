@@ -16,6 +16,7 @@ import structlog
 from app.config import get_settings
 from app.models.bot import supported_rule_variants_for_bot
 from app.models.game import (
+    ClockState,
     CreateGameRequest,
     CreateGameResponse,
     GameDocument,
@@ -62,8 +63,7 @@ from app.llm_bot_policy import (
 from app.services.mongo_document_compare import mongo_documents_equal
 from app.services.state_projection import (
     allowed_moves_for_player,
-    build_viewer_referee_log,
-    build_viewer_referee_turns,
+    build_viewer_referee_log_from_turns,
     build_viewer_scoresheet,
     compute_possible_actions,
     project_player_fen,
@@ -147,6 +147,7 @@ class CachedGameEntry:
     last_activity_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_persisted_ply: int = 0
     flush_task: asyncio.Task[None] | None = None
+    state_projection_cache: dict[tuple[int, PlayerColor], GameStateResponse] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -889,6 +890,7 @@ class GameService:
         entry.dirty = True
         entry.version += 1
         entry.last_activity_at = now
+        entry.state_projection_cache.clear()
 
     @staticmethod
     def _apply_timeout_to_game(*, game: dict[str, Any], timeout: dict[str, Any], now: datetime) -> dict[str, Any]:
@@ -1040,6 +1042,14 @@ class GameService:
                 message="Completed game archive write did not match the live game document",
             )
         await self._delete_completed_live_game_document(game_id=archive_doc["_id"])
+        from app.services.user_service import UserService
+
+        UserService.evict_profile_metrics_cache_for_user_ids(
+            [
+                str((archive_doc.get("white") or {}).get("user_id") or ""),
+                str((archive_doc.get("black") or {}).get("user_id") or ""),
+            ]
+        )
 
     def _stats_recording_is_claimable(self, game: dict[str, Any], *, now: datetime) -> bool:
         if game.get("stats_recorded_at"):
@@ -2366,6 +2376,97 @@ class GameService:
             moves=transcript_moves,
         )
 
+    def _build_game_state_projection_response(
+        self,
+        *,
+        game: dict[str, Any],
+        viewer_color: PlayerColor,
+        time_control: dict[str, Any] | None,
+        now: datetime,
+    ) -> GameStateResponse:
+        engine = self._load_or_bootstrap_engine(game)
+        stored_scoresheets = self._stored_scoresheets(game, engine)
+        viewer_scoresheet = build_viewer_scoresheet(
+            viewer_color=viewer_color,
+            stored_scoresheet=stored_scoresheets[viewer_color],
+        )
+        referee_turns = viewer_scoresheet["turns"]
+        return GameStateResponse(
+            game_id=str(game["_id"]),
+            state=game["state"],
+            turn=game.get("turn"),
+            move_number=game.get("move_number", 1),
+            ply_count=self._ply_count(game),
+            llm_bot_tier=game.get("llm_bot_tier"),
+            llm_bot_ply_limit=self._visible_llm_bot_ply_limit(game=game, viewer_color=viewer_color),
+            llm_bot_turn_limit=self._visible_llm_bot_turn_limit(game=game, viewer_color=viewer_color),
+            your_color=viewer_color,
+            your_fen=project_player_fen(engine=engine, viewer_color=viewer_color, game_state=game["state"]),
+            allowed_moves=allowed_moves_for_player(
+                engine=engine,
+                game_state=game["state"],
+                viewer_color=viewer_color,
+                turn=game.get("turn"),
+            ),
+            material_summary=public_material_summary(engine),
+            reserve_summary=public_reserve_summary(engine),
+            scoresheet=viewer_scoresheet,
+            referee_log=build_viewer_referee_log_from_turns(referee_turns),
+            referee_turns=referee_turns,
+            possible_actions=compute_possible_actions(
+                engine=engine,
+                game_state=game["state"],
+                viewer_color=viewer_color,
+                turn=game.get("turn"),
+                rule_variant=game.get("rule_variant"),
+            ),
+            result=game.get("result"),
+            clock=self._clock.response_clock(time_control=time_control, now=now),
+        )
+
+    def _game_state_response_with_current_clock(
+        self,
+        response: GameStateResponse,
+        *,
+        time_control: dict[str, Any] | None,
+        now: datetime,
+    ) -> GameStateResponse:
+        clock = self._clock.response_clock(time_control=time_control, now=now)
+        if not isinstance(clock, ClockState):
+            clock = ClockState.model_validate(clock)
+        return response.model_copy(update={"clock": clock})
+
+    async def _project_game_state_response(
+        self,
+        *,
+        game: dict[str, Any],
+        entry: CachedGameEntry | None,
+        viewer_color: PlayerColor,
+        now: datetime,
+    ) -> GameStateResponse:
+        if entry is None:
+            time_control = self._active_time_control(game=game, now=now)
+            return self._build_game_state_projection_response(
+                game=game,
+                viewer_color=viewer_color,
+                time_control=time_control,
+                now=now,
+            )
+
+        async with entry.lock:
+            time_control = self._active_time_control(game=game, now=now)
+            cache_key = (entry.version, viewer_color)
+            cached = entry.state_projection_cache.get(cache_key)
+            if cached is None:
+                cached = self._build_game_state_projection_response(
+                    game=game,
+                    viewer_color=viewer_color,
+                    time_control=time_control,
+                    now=now,
+                )
+                entry.state_projection_cache[cache_key] = cached
+            return self._game_state_response_with_current_clock(cached, time_control=time_control, now=now)
+
     async def get_game_state(self, *, game_id: str, user_id: str) -> GameStateResponse:
         game, entry, archived = await self._get_game_for_state(game_id=game_id)
         now = self.utcnow()
@@ -2404,42 +2505,7 @@ class GameService:
         if color is None:
             raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access this game state")
 
-        engine = self._load_or_bootstrap_engine(game)
-        time_control = self._active_time_control(game=game, now=now)
-        stored_scoresheets = self._stored_scoresheets(game, engine)
-        viewer_scoresheet = build_viewer_scoresheet(viewer_color=color, stored_scoresheet=stored_scoresheets[color])
-        return GameStateResponse(
-            game_id=str(game["_id"]),
-            state=game["state"],
-            turn=game.get("turn"),
-            move_number=game.get("move_number", 1),
-            ply_count=self._ply_count(game),
-            llm_bot_tier=game.get("llm_bot_tier"),
-            llm_bot_ply_limit=self._visible_llm_bot_ply_limit(game=game, viewer_color=color),
-            llm_bot_turn_limit=self._visible_llm_bot_turn_limit(game=game, viewer_color=color),
-            your_color=color,
-            your_fen=project_player_fen(engine=engine, viewer_color=color, game_state=game["state"]),
-            allowed_moves=allowed_moves_for_player(
-                engine=engine,
-                game_state=game["state"],
-                viewer_color=color,
-                turn=game.get("turn"),
-            ),
-            material_summary=public_material_summary(engine),
-            reserve_summary=public_reserve_summary(engine),
-            scoresheet=viewer_scoresheet,
-            referee_log=build_viewer_referee_log(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
-            referee_turns=build_viewer_referee_turns(viewer_color=color, stored_scoresheet=stored_scoresheets[color]),
-            possible_actions=compute_possible_actions(
-                engine=engine,
-                game_state=game["state"],
-                viewer_color=color,
-                turn=game.get("turn"),
-                rule_variant=game.get("rule_variant"),
-            ),
-            result=game.get("result"),
-            clock=self._clock.response_clock(time_control=time_control, now=now),
-        )
+        return await self._project_game_state_response(game=game, entry=entry, viewer_color=color, now=now)
 
     async def execute_move(self, *, game_id: str, user_id: str, uci: str) -> dict[str, Any]:
         game, entry = await self._get_game_for_runtime(game_id=game_id)
