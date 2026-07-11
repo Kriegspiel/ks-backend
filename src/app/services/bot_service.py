@@ -66,9 +66,13 @@ CATALOG_HIDDEN_BOT_USERNAMES = frozenset(
     {
         "llm_gemma3_4b",
         "llm_gemma3_27b",
+        "llm_gemini25_flash",
+        "llm_gemini25_lite",
         "llm_llama31_8b",
         "llm_llama4_scout",
         "llm_mistral_nemo",
+        "openrouter_gemini25_lite",
+        "openrouter_gemini31_lite",
         "openrouter_llama31_8b",
     }
 )
