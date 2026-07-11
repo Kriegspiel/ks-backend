@@ -14,7 +14,6 @@ dependencies = [
     "httpx>=0.27.0",
     "peewee>=3.18.1",
     "kriegspiel @ git+https://github.com/Kriegspiel/ks-game.git@ceceb9b0905d50f087429d1fac16db724f9d7bf3",
-    "bot-darkboard-mcts @ git+https://github.com/Kriegspiel/bot-darkboard-mcts.git@0945736a38db396a22203dbccb530d9efc840b25",
     "bcrypt>=4.3.0",
     "pydantic-settings>=2.3.4",
     "motor>=3.6.0",

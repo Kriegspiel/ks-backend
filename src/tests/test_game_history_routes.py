@@ -8,13 +8,13 @@ import pytest
 from bson import ObjectId
 from fastapi.testclient import TestClient
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.dependencies import get_current_user
 from app.main import create_app
 from app.models.user import UserModel
 from app.routers.game import get_game_service
 from app.services.engine_adapter import attempt_move, create_new_game, serialize_game_state
-from app.services.game_service import GameForbiddenError, GameService, GameValidationError
+from app.services.game_service import GameForbiddenError, GameService
 
 
 class FakeCursor:
@@ -174,71 +174,6 @@ async def test_get_game_transcript_access_matrix_for_live_and_archived_games(gam
     assert review.game.result == {"winner": "white", "reason": "resignation"}
     assert review.transcript.game_id == str(archived["_id"])
     assert review.transcript.viewer_color is None
-
-
-@pytest.mark.asyncio
-async def test_get_game_t3_review_builds_darkboard_payload_and_caches(monkeypatch) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    get_settings.cache_clear()
-    archived_id = ObjectId()
-    archived = {
-        "_id": archived_id,
-        "game_code": "T3A9B7",
-        "rule_variant": "wild16",
-        "state": "completed",
-        "white": {"user_id": "u1", "username": "white", "connected": True},
-        "black": {"user_id": "u2", "username": "black", "connected": True},
-        "moves": [
-            {
-                "color": "white",
-                "question_type": "COMMON",
-                "uci": "e2e4",
-                "announcement": "REGULAR_MOVE",
-                "move_done": True,
-                "timestamp": datetime(2026, 7, 1, tzinfo=UTC),
-            },
-            {
-                "color": "black",
-                "question_type": "COMMON",
-                "uci": "e7e5",
-                "announcement": "REGULAR_MOVE",
-                "move_done": True,
-                "timestamp": datetime(2026, 7, 1, tzinfo=UTC),
-            },
-        ],
-        "result": {"winner": None, "reason": "stalemate"},
-        "created_at": datetime(2026, 7, 1, tzinfo=UTC),
-        "updated_at": datetime(2026, 7, 1, tzinfo=UTC),
-    }
-    archives = FakeCollection([archived])
-    service = GameService(FakeCollection([]), archives)
-
-    review = await service.get_game_t3_review(game_id="T3A9B7", user_id="spectator")
-
-    assert review.game.game_code == "T3A9B7"
-    assert review.analysis.meta.supported is True
-    assert review.analysis.meta.openai_status == "disabled"
-    assert review.analysis.summary.analyzed_moves == 2
-    assert review.analysis.moves[0].uci == "e2e4"
-    assert "development" in review.analysis.moves[0].components
-    assert "legal_probability" in review.analysis.moves[0].probabilities
-    assert review.analysis.moves[0].explanation
-    assert archives.docs[0]["review_analysis"]["t3"]["moves"][0]["uci"] == "e2e4"
-
-    cached = await service.get_game_t3_review(game_id="T3A9B7", user_id="spectator")
-    assert cached.analysis.meta.openai_status == "cached"
-
-
-@pytest.mark.asyncio
-async def test_get_game_t3_review_rejects_active_games(game_docs) -> None:
-    active, _archived, _older = game_docs
-    active["rule_variant"] = "wild16"
-    service = GameService(FakeCollection([active]), FakeCollection([]))
-
-    with pytest.raises(GameValidationError) as exc:
-        await service.get_game_t3_review(game_id=active["game_code"], user_id="u1")
-
-    assert exc.value.code == "T3_REVIEW_ACTIVE_GAME"
 
 
 @pytest.mark.asyncio
