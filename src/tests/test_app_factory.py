@@ -106,12 +106,16 @@ def test_openapi_uses_prefixless_canonical_paths_and_hides_legacy_api_prefix():
 
     assert schema["info"]["version"] == APP_VERSION
     assert "/auth/login" in paths
+    assert "/billing/subscription" in paths
+    assert "/billing/checkout-session" in paths
+    assert "/billing/portal-session" in paths
     assert "/game/stats" in paths
     assert "/bots" in paths
     assert "/user/{username}" in paths
     assert "/tech/users-report" in paths
     assert "/health" in paths
     assert "/api/auth/login" not in paths
+    assert "/api/billing/subscription" not in paths
     assert "/api/game/stats" not in paths
     assert "/api/bots" not in paths
     assert "/api/user/{username}" not in paths
@@ -131,6 +135,9 @@ def test_openapi_marks_bearer_authenticated_routes_and_leaves_registration_publi
         "description": "Use the bot bearer token returned by POST /auth/bots/register.",
     }
     assert schema["paths"]["/bots"]["get"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/billing/subscription"]["get"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/billing/checkout-session"]["post"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/billing/portal-session"]["post"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/game/open"]["get"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/auth/me"]["get"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/tech/users-report"]["get"]["security"] == [{"BearerAuth": []}]
@@ -166,6 +173,8 @@ def test_canonical_and_legacy_api_routes_are_both_available():
         legacy_health = client.get("/api/health", headers={"host": "app.kriegspiel.org"})
         canonical_me = client.get("/auth/me")
         legacy_me = client.get("/api/auth/me", headers={"host": "app.kriegspiel.org"})
+        canonical_billing = client.get("/billing/subscription")
+        legacy_billing = client.get("/api/billing/subscription", headers={"host": "app.kriegspiel.org"})
         canonical_game = client.get("/game/open")
         legacy_game = client.get("/api/game/open", headers={"host": "app.kriegspiel.org"})
         canonical_bots = client.get("/bots")
@@ -176,6 +185,8 @@ def test_canonical_and_legacy_api_routes_are_both_available():
     assert legacy_health.json() == canonical_health.json()
     assert canonical_me.status_code in (401, 503)
     assert legacy_me.status_code == canonical_me.status_code
+    assert canonical_billing.status_code in (401, 503)
+    assert legacy_billing.status_code == canonical_billing.status_code
     assert canonical_game.status_code in (401, 503)
     assert legacy_game.status_code == canonical_game.status_code
     assert canonical_bots.status_code in (401, 503)
@@ -189,12 +200,14 @@ def test_public_api_host_rejects_api_prefixed_ingress_paths():
         canonical_health = client.get("/health", headers={"host": "api.kriegspiel.org"})
         api_health = client.get("/api/health", headers={"host": "api.kriegspiel.org"})
         api_me = client.get("/api/auth/me", headers={"host": "api.kriegspiel.org"})
+        api_billing = client.get("/api/billing/subscription", headers={"host": "api.kriegspiel.org"})
         api_game = client.get("/api/game/open", headers={"host": "api.kriegspiel.org"})
         api_bots = client.get("/api/bots", headers={"host": "api.kriegspiel.org"})
 
     assert canonical_health.status_code in (200, 503)
     assert api_health.status_code == 404
     assert api_me.status_code == 404
+    assert api_billing.status_code == 404
     assert api_game.status_code == 404
     assert api_bots.status_code == 404
 

@@ -11,6 +11,9 @@ def test_settings_defaults(monkeypatch):
         "SENTRY_DSN",
         "SENTRY_TRACES_SAMPLE_RATE",
         "SENTRY_SEND_DEFAULT_PII",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_PUBLISHABLE_KEY",
+        "STRIPE_WEBHOOK_SECRET",
     ]:
         monkeypatch.delenv(key, raising=False)
 
@@ -24,6 +27,11 @@ def test_settings_defaults(monkeypatch):
     assert settings.SENTRY_DSN is None
     assert settings.SENTRY_TRACES_SAMPLE_RATE == 0.0
     assert settings.SENTRY_SEND_DEFAULT_PII is False
+    assert settings.STRIPE_SECRET_KEY is None
+    assert settings.STRIPE_PUBLISHABLE_KEY is None
+    assert settings.STRIPE_WEBHOOK_SECRET is None
+    assert settings.STRIPE_API_BASE == "https://api.stripe.com/v1"
+    assert settings.STRIPE_PRICE_T2_MONTHLY is None
 
 
 def test_settings_reads_environment_overrides(monkeypatch):
@@ -35,6 +43,10 @@ def test_settings_reads_environment_overrides(monkeypatch):
     monkeypatch.setenv("SENTRY_DSN", "https://public@example.com/1")
     monkeypatch.setenv("SENTRY_TRACES_SAMPLE_RATE", "0.25")
     monkeypatch.setenv("SENTRY_SEND_DEFAULT_PII", "true")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_123")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_123")
+    monkeypatch.setenv("STRIPE_PRICE_T2_MONTHLY", "price_t2_monthly")
 
     settings = Settings()
 
@@ -46,6 +58,10 @@ def test_settings_reads_environment_overrides(monkeypatch):
     assert settings.SENTRY_DSN == "https://public@example.com/1"
     assert settings.SENTRY_TRACES_SAMPLE_RATE == 0.25
     assert settings.SENTRY_SEND_DEFAULT_PII is True
+    assert settings.STRIPE_SECRET_KEY == "sk_test_123"
+    assert settings.STRIPE_PUBLISHABLE_KEY == "pk_test_123"
+    assert settings.STRIPE_WEBHOOK_SECRET == "whsec_123"
+    assert settings.STRIPE_PRICE_T2_MONTHLY == "price_t2_monthly"
 
 
 def test_get_settings_cache_can_be_cleared_between_tests(monkeypatch):

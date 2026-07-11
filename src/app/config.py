@@ -25,6 +25,16 @@ class Settings(BaseSettings):
     T3_REVIEW_OPENAI_MAX_OUTPUT_TOKENS: int = 12000
     T3_REVIEW_MCTS_MAX_ITERATIONS: int = 96
     T3_REVIEW_MCTS_TIME_BUDGET_SECONDS: float = 0.02
+    STRIPE_SECRET_KEY: str | None = None
+    STRIPE_PUBLISHABLE_KEY: str | None = None
+    STRIPE_WEBHOOK_SECRET: str | None = None
+    STRIPE_API_BASE: str = "https://api.stripe.com/v1"
+    STRIPE_PRICE_T2_MONTHLY: str | None = None
+    STRIPE_PRICE_T2_YEARLY: str | None = None
+    STRIPE_PRICE_T3_MONTHLY: str | None = None
+    STRIPE_PRICE_T3_YEARLY: str | None = None
+    STRIPE_PRICE_T4_MONTHLY: str | None = None
+    STRIPE_PRICE_T4_YEARLY: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
