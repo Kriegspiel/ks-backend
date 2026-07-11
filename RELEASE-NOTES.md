@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.87
+
+- **Bot Profiles**: migrate the legacy `randobot` owner contact away from the
+  placeholder example email so its public profile shows the Kriegspiel bot
+  contact address.
+
 ## ks-backend v. 1.3.86
 
 - **Bot Catalog API**: list visible bots with `required_tier` and
