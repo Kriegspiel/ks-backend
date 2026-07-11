@@ -15,7 +15,6 @@ from app.models.game import (
     GamePublicStatusResponse,
     GameReviewResponse,
     GameStateResponse,
-    GameT3ReviewResponse,
     GameTranscriptResponse,
     JoinGameResponse,
     LobbyStatsResponse,
@@ -270,18 +269,6 @@ async def get_game_review(
 ) -> Any:
     try:
         return await game_service.get_game_review(game_id=game_id, user_id=user.id)
-    except GameServiceError as exc:
-        return _map_game_error(exc)
-
-
-@router.get("/{game_id}/review/t3", response_model=GameT3ReviewResponse)
-async def get_game_t3_review(
-    game_id: str,
-    user: UserModel = Depends(get_current_user),
-    game_service: GameService = Depends(get_game_service),
-) -> Any:
-    try:
-        return await game_service.get_game_t3_review(game_id=game_id, user_id=user.id)
     except GameServiceError as exc:
         return _map_game_error(exc)
 

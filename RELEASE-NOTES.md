@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.89
+
+- **Game Review API**: remove the unsupported alternate completed-game review
+  analysis route and its backend scoring dependencies.
+
 ## ks-backend v. 1.3.88
 
 - **T4 Model Bots**: require fresh provider availability for the T4 LLM bot
@@ -29,12 +34,6 @@ version changes.
   the in-memory game version is unchanged, query listed bot archive reports by
   indexed user IDs, and attach Mongo comments to profile/history/rating report
   queries for easier production profiling.
-
-## ks-backend v. 1.3.83
-
-- **T3 Review API**: add completed-game `/game/{code}/review/t3` analysis for
-  Wild 16 games, using the Darkboard MCTS public-outcome scorer with optional
-  GPT explanations from backend-held OpenAI credentials.
 
 ## ks-backend v. 1.3.82
 
