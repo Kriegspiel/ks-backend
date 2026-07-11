@@ -62,7 +62,16 @@ MODEL_AVAILABILITY_REQUIRED_BOTS = {
     "llm_hermes4_405b": "openai",
 }
 MODEL_AVAILABILITY_STALE_AFTER = timedelta(seconds=120)
-CATALOG_HIDDEN_BOT_USERNAMES = frozenset({"llm_mistral_nemo"})
+CATALOG_HIDDEN_BOT_USERNAMES = frozenset(
+    {
+        "llm_gemma3_4b",
+        "llm_gemma3_27b",
+        "llm_llama31_8b",
+        "llm_llama4_scout",
+        "llm_mistral_nemo",
+        "openrouter_llama31_8b",
+    }
+)
 
 
 class BotProfileConflictError(Exception):
