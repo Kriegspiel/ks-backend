@@ -53,6 +53,18 @@ T4_LLM_BOT_PROVIDERS = {
     "llm_hermes4_405b": "openai",
 }
 
+T3_LLM_BOT_PROVIDERS = {
+    "llm_gpt55": "openai",
+    "llm_sonnet5": "anthropic",
+    "llm_gemini25_flash": "openai",
+    "llm_mistral_large3": "openai",
+    "llm_nemotron_ultra": "openai",
+    "llm_qwen36_flash": "openai",
+    "llm_qwen_plus": "openai",
+    "llm_kimi_k2_thinking": "openai",
+    "llm_hermes3_70b": "openai",
+}
+
 
 class FakeUsersCollection:
     def __init__(self):
@@ -533,6 +545,32 @@ def test_t2_llm_catalog_bots_are_known_and_availability_gated() -> None:
         )
 
 
+def test_t3_llm_catalog_bots_are_known_and_availability_gated() -> None:
+    now = datetime(2026, 7, 11, tzinfo=UTC)
+
+    for username, provider in T3_LLM_BOT_PROVIDERS.items():
+        assert username in KNOWN_LLM_BOT_USERNAMES
+        assert bot_required_tier_for_username(username) == "tier3"
+        assert BotService.model_availability_required_provider({"username": username}) == provider
+        assert BotService.bot_can_start_games({"username": username}, now=now) is False
+        assert (
+            BotService.bot_can_start_games(
+                {
+                    "username": username,
+                    "bot_profile": {
+                        "model_availability": {
+                            "provider": provider,
+                            "ready": True,
+                            "checked_at": now,
+                        }
+                    },
+                },
+                now=now,
+            )
+            is True
+        )
+
+
 def test_t4_llm_catalog_bots_are_known_and_availability_gated() -> None:
     now = datetime(2026, 7, 11, tzinfo=UTC)
 
@@ -556,32 +594,6 @@ def test_t4_llm_catalog_bots_are_known_and_availability_gated() -> None:
             )
             is True
         )
-
-
-def test_mistral_large3_is_tier_three_and_availability_gated() -> None:
-    now = datetime(2026, 7, 11, tzinfo=UTC)
-    username = "llm_mistral_large3"
-
-    assert username in KNOWN_LLM_BOT_USERNAMES
-    assert bot_required_tier_for_username(username) == "tier3"
-    assert BotService.model_availability_required_provider({"username": username}) == "openai"
-    assert BotService.bot_can_start_games({"username": username}, now=now) is False
-    assert (
-        BotService.bot_can_start_games(
-            {
-                "username": username,
-                "bot_profile": {
-                    "model_availability": {
-                        "provider": "openai",
-                        "ready": True,
-                        "checked_at": now,
-                    }
-                },
-            },
-            now=now,
-        )
-        is True
-    )
 
 
 @pytest.mark.asyncio
