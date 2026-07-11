@@ -55,10 +55,11 @@ from app.services.engine_adapter import (
 )
 from app.llm_bot_policy import (
     LlmBotTier,
+    bot_required_tier_for_document,
     is_llm_bot_document,
     llm_bot_ply_limit_for_tier,
     normalize_llm_bot_tier,
-    tier_allows_llm_bots,
+    tier_allows_bot,
 )
 from app.services.mongo_document_compare import mongo_documents_equal
 from app.services.state_projection import (
@@ -1757,12 +1758,14 @@ class GameService:
         viewer_role: str,
         viewer_llm_bot_tier: str | None,
     ) -> dict[str, Any]:
+        tier = normalize_llm_bot_tier(viewer_llm_bot_tier, role=viewer_role)
+        required_tier = bot_required_tier_for_document(bot)
+        if not tier_allows_bot(tier, required_tier):
+            code = "LLM_BOT_TIER_REQUIRED" if is_llm_bot_document(bot) else "BOT_TIER_REQUIRED"
+            raise GameForbiddenError(code=code, message="Your current tier does not include this bot")
+
         if not is_llm_bot_document(bot):
             return {}
-
-        tier = normalize_llm_bot_tier(viewer_llm_bot_tier, role=viewer_role)
-        if not tier_allows_llm_bots(tier):
-            raise GameForbiddenError(code="LLM_BOT_TIER_REQUIRED", message="Your current tier does not include LLM bots")
 
         return {
             "llm_bot_tier": tier,

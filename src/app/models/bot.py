@@ -83,6 +83,8 @@ class BotListItem(BaseModel):
     ratings: dict[str, dict[str, int]] = Field(default_factory=dict)
     supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: DEFAULT_SUPPORTED_RULE_VARIANTS.copy())
     llm_backed: bool = False
+    required_tier: LlmBotTier = "guest"
+    available_for_viewer: bool = True
     llm_bot_tier: LlmBotTier | None = None
     llm_bot_ply_limit: int | None = None
     llm_bot_limit_label: str | None = None

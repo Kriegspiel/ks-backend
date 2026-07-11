@@ -315,7 +315,74 @@ async def test_guest_cannot_create_llm_bot_game() -> None:
 
 
 @pytest.mark.asyncio
-async def test_guest_bot_list_filters_llm_bots_and_user_list_shows_limit() -> None:
+async def test_tier_one_cannot_create_higher_tier_bot_game() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "llm_gptnano",
+            "username_display": "LLM GPT-4.5 Nano (bot)",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "LLM GPT-4.5 Nano (bot)",
+                "owner_email": "owner@example.com",
+                "description": "Model bot",
+                "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+            },
+        }
+    )
+    service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    with pytest.raises(GameForbiddenError) as exc:
+        await service.create_game(
+            user_id="u1",
+            username="player",
+            request=CreateGameRequest(opponent_type="bot", bot_id=str(bot_id), play_as="white", time_control="rapid"),
+        )
+
+    assert exc.value.code == "LLM_BOT_TIER_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_guest_cannot_create_tier_one_bot_game() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": "simpleheuristics",
+            "username_display": "Simple Heuristics Bot",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": "Simple Heuristics Bot",
+                "owner_email": "owner@example.com",
+                "description": "Casual bot",
+                "supported_rule_variants": ["berkeley", "berkeley_any"],
+            },
+        }
+    )
+    service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
+
+    with pytest.raises(GameForbiddenError) as exc:
+        await service.create_game(
+            user_id="guest1",
+            username="guest_player",
+            request=CreateGameRequest(opponent_type="bot", bot_id=str(bot_id), play_as="white", time_control="rapid"),
+            role="guest",
+        )
+
+    assert exc.value.code == "BOT_TIER_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_guest_bot_list_shows_unavailable_higher_tier_bots_and_user_list_shows_limit() -> None:
     users = FakeUsersCollection()
     now = datetime(2026, 6, 1, tzinfo=UTC)
     users.docs.extend(
@@ -340,6 +407,14 @@ async def test_guest_bot_list_filters_llm_bots_and_user_list_shows_limit() -> No
                 "status": "active",
                 "bot_profile": {"display_name": "Random Bot", "description": "Random bot"},
             },
+            {
+                "_id": ObjectId(),
+                "username": "simpleheuristics",
+                "username_display": "Simple Heuristics Bot",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {"display_name": "Simple Heuristics Bot", "description": "Casual bot"},
+            },
         ]
     )
     service = BotService(users, now_factory=lambda: now)
@@ -347,9 +422,18 @@ async def test_guest_bot_list_filters_llm_bots_and_user_list_shows_limit() -> No
     guest_listing = await service.list_bots(viewer_role="guest")
     user_listing = await service.list_bots(viewer_role="user", viewer_llm_bot_tier="tier2")
 
-    assert [bot.username for bot in guest_listing.bots] == ["randobot"]
+    assert [bot.username for bot in guest_listing.bots] == ["llm_gptnano", "randobot", "simpleheuristics"]
+    guest_bots = {bot.username: bot for bot in guest_listing.bots}
+    assert guest_bots["llm_gptnano"].required_tier == "tier2"
+    assert guest_bots["llm_gptnano"].available_for_viewer is False
+    assert guest_bots["randobot"].required_tier == "guest"
+    assert guest_bots["randobot"].available_for_viewer is True
+    assert guest_bots["simpleheuristics"].required_tier == "tier1"
+    assert guest_bots["simpleheuristics"].available_for_viewer is False
     llm_gptnano = next(bot for bot in user_listing.bots if bot.username == "llm_gptnano")
     assert llm_gptnano.llm_backed is True
+    assert llm_gptnano.required_tier == "tier2"
+    assert llm_gptnano.available_for_viewer is True
     assert llm_gptnano.llm_bot_tier == "tier2"
     assert llm_gptnano.llm_bot_ply_limit is None
     assert llm_gptnano.llm_bot_limit_label == "No ply limit"
