@@ -280,7 +280,30 @@ async def test_archive_turn_count_migration_logs_success_and_propagates_cancel(
         await main_module._run_archive_turn_count_migration(app)
 
 
-def test_lifespan_cancels_pending_archive_turn_count_migration_task(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_randobot_owner_email_migration_logs_success_and_propagates_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.main as main_module
+
+    app = FastAPI()
+    app.state.db = object()
+    runner = AsyncMock(return_value={"updated": 1, "matched": 1})
+    monkeypatch.setattr(main_module, "run_randobot_owner_email_migration_once", runner)
+
+    await main_module._run_randobot_owner_email_migration(app)
+
+    runner.assert_awaited_once_with(app.state.db)
+
+    async def cancelled(_db):  # noqa: ANN001
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(main_module, "run_randobot_owner_email_migration_once", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await main_module._run_randobot_owner_email_migration(app)
+
+
+def test_lifespan_cancels_pending_migration_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
     import app.main as main_module
 
     fake_db = type(
@@ -297,11 +320,14 @@ def test_lifespan_cancels_pending_archive_turn_count_migration_task(monkeypatch:
     calls: list[str] = []
 
     class PendingTask:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
         def done(self) -> bool:
             return False
 
         def cancel(self) -> None:
-            calls.append("cancel")
+            calls.append(f"cancel:{self.name}")
 
         def __await__(self):
             async def raise_cancelled():
@@ -314,12 +340,14 @@ def test_lifespan_cancels_pending_archive_turn_count_migration_task(monkeypatch:
             self.start = AsyncMock(side_effect=lambda: calls.append("start"))
             self.shutdown = AsyncMock(side_effect=lambda: calls.append("shutdown"))
 
-    pending_task = PendingTask()
+    pending_tasks: dict[str, PendingTask] = {}
 
     def fake_create_task(coro, *, name: str):  # noqa: ANN001
         coro.close()
         calls.append(f"task:{name}")
-        return pending_task
+        task = PendingTask(name)
+        pending_tasks[name] = task
+        return task
 
     monkeypatch.setattr(main_module, "init_db", AsyncMock(return_value=fake_db))
     monkeypatch.setattr(main_module, "close_db", AsyncMock(side_effect=lambda: calls.append("close_db")))
@@ -334,12 +362,15 @@ def test_lifespan_cancels_pending_archive_turn_count_migration_task(monkeypatch:
     app = create_app(Settings(ENVIRONMENT="testing"))
 
     with TestClient(app):
-        assert app.state.archive_turn_count_migration_task is pending_task
+        assert app.state.archive_turn_count_migration_task is pending_tasks["archive-turn-count-migration"]
+        assert app.state.randobot_owner_email_migration_task is pending_tasks["randobot-owner-email-migration"]
 
     assert calls == [
         "start",
         "task:archive-turn-count-migration",
+        "task:randobot-owner-email-migration",
         "shutdown",
-        "cancel",
+        "cancel:archive-turn-count-migration",
+        "cancel:randobot-owner-email-migration",
         "close_db",
     ]
