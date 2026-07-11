@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.88
+
+- **T4 Model Bots**: require fresh provider availability for the T4 LLM bot
+  catalogue and include those bots in matrix and usage attribution aliases.
+
 ## ks-backend v. 1.3.87
 
 - **Bot Profiles**: migrate the legacy `randobot` owner contact away from the

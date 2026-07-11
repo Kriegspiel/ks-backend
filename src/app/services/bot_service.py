@@ -46,6 +46,13 @@ MODEL_AVAILABILITY_REQUIRED_BOTS = {
     "llm_kimi_k25": "openai",
     "llm_hermes4_70b": "openai",
     "llm_phi4": "openai",
+    "openrouter_deepseekv4_pro": "openai",
+    "bot_deepseekv4_pro": "openai",
+    "llm_opus48": "anthropic",
+    "llm_gemini31_pro_preview": "openai",
+    "llm_glm52": "openai",
+    "llm_kimi_k27_code": "openai",
+    "llm_hermes4_405b": "openai",
 }
 MODEL_AVAILABILITY_STALE_AFTER = timedelta(seconds=120)
 

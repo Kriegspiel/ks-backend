@@ -22,6 +22,7 @@ BOT_USAGE_USERNAME_ALIASES = {
     "bot_gemini31_lite": "llm_gemini31_lite",
     "bot_llama31_8b": "llm_llama31_8b",
     "openrouter_deepseekv4_flash": "llm_deepseekv4_flash",
+    "openrouter_deepseekv4_pro": "bot_deepseekv4_pro",
     "openrouter_llama31_8b": "llm_llama31_8b",
 }
 BOT_USAGE_GENERIC_USERNAMES = frozenset({"openrouterbot"})
@@ -36,6 +37,18 @@ BOT_USAGE_MODEL_ALIASES = {
     "qwen/qwen3-6b": "llm_qwen36_flash",
     "meta-llama/llama-3.1-8b-instruct": "llm_llama31_8b",
     "llama-3.1-8b-instant": "llm_llama31_8b",
+    "claude-opus-4-8": "llm_opus48",
+    "claude-opus-4-8-20260701": "llm_opus48",
+    "deepseek/deepseek-v4-pro": "bot_deepseekv4_pro",
+    "deepseek-v4-pro": "bot_deepseekv4_pro",
+    "google/gemini-3.1-pro-preview": "llm_gemini31_pro_preview",
+    "gemini-3.1-pro-preview": "llm_gemini31_pro_preview",
+    "z-ai/glm-5.2": "llm_glm52",
+    "glm-5.2": "llm_glm52",
+    "moonshotai/kimi-k2.7-code": "llm_kimi_k27_code",
+    "kimi-k2.7-code": "llm_kimi_k27_code",
+    "nousresearch/hermes-4-405b": "llm_hermes4_405b",
+    "hermes-4-405b": "llm_hermes4_405b",
 }
 
 

@@ -46,6 +46,15 @@ T2_LLM_BOT_USERNAMES = (
     "llm_phi4",
 )
 
+T4_LLM_BOT_PROVIDERS = {
+    "llm_opus48": "anthropic",
+    "bot_deepseekv4_pro": "openai",
+    "llm_gemini31_pro_preview": "openai",
+    "llm_glm52": "openai",
+    "llm_kimi_k27_code": "openai",
+    "llm_hermes4_405b": "openai",
+}
+
 
 class FakeUsersCollection:
     def __init__(self):
@@ -504,6 +513,31 @@ def test_t2_llm_catalog_bots_are_known_and_availability_gated() -> None:
 
     for username in T2_LLM_BOT_USERNAMES:
         provider = "anthropic" if username == "llm_haiku" else "openai"
+        assert username in KNOWN_LLM_BOT_USERNAMES
+        assert BotService.model_availability_required_provider({"username": username}) == provider
+        assert BotService.bot_can_start_games({"username": username}, now=now) is False
+        assert (
+            BotService.bot_can_start_games(
+                {
+                    "username": username,
+                    "bot_profile": {
+                        "model_availability": {
+                            "provider": provider,
+                            "ready": True,
+                            "checked_at": now,
+                        }
+                    },
+                },
+                now=now,
+            )
+            is True
+        )
+
+
+def test_t4_llm_catalog_bots_are_known_and_availability_gated() -> None:
+    now = datetime(2026, 7, 11, tzinfo=UTC)
+
+    for username, provider in T4_LLM_BOT_PROVIDERS.items():
         assert username in KNOWN_LLM_BOT_USERNAMES
         assert BotService.model_availability_required_provider({"username": username}) == provider
         assert BotService.bot_can_start_games({"username": username}, now=now) is False
