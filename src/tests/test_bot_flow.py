@@ -1252,22 +1252,33 @@ async def test_bot_service_lists_active_bots() -> None:
 async def test_bot_service_hides_catalog_suppressed_bots_but_keeps_direct_lookup() -> None:
     now = datetime(2026, 7, 11, tzinfo=UTC)
     users = FakeUsersCollection()
-    nemo_id = ObjectId()
+    hidden_bot_specs = [
+        ("llm_gemma3_4b", "LLM Gemma 3 4B (bot)", "Gemma 3 4B model bot"),
+        ("llm_gemma3_27b", "LLM Gemma 3 27B (bot)", "Gemma 3 27B model bot"),
+        ("llm_llama31_8b", "LLM Llama 3.1 8B (bot)", "Llama 3.1 8B model bot"),
+        ("llm_llama4_scout", "LLM Llama 4 Scout (bot)", "Llama 4 Scout model bot"),
+        ("llm_mistral_nemo", "LLM Mistral Nemo (bot)", "Mistral Nemo model bot"),
+        ("openrouter_llama31_8b", "OpenRouter Llama 3.1 8B (bot)", "Legacy Llama 3.1 8B model bot"),
+    ]
+    hidden_bot_ids = {username: ObjectId() for username, _, _ in hidden_bot_specs}
     users.docs.extend(
         [
-            {
-                "_id": nemo_id,
-                "username": "llm_mistral_nemo",
-                "username_display": "LLM Mistral Nemo (bot)",
-                "role": "bot",
-                "status": "active",
-                "bot_profile": {
-                    "display_name": "LLM Mistral Nemo (bot)",
-                    "description": "Mistral Nemo model bot",
-                    "listed": True,
-                    "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
-                },
-            },
+            *[
+                {
+                    "_id": hidden_bot_ids[username],
+                    "username": username,
+                    "username_display": display_name,
+                    "role": "bot",
+                    "status": "active",
+                    "bot_profile": {
+                        "display_name": display_name,
+                        "description": description,
+                        "listed": True,
+                        "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+                    },
+                }
+                for username, display_name, description in hidden_bot_specs
+            ],
             {
                 "_id": ObjectId(),
                 "username": "llm_mistral_small32",
@@ -1289,14 +1300,14 @@ async def test_bot_service_hides_catalog_suppressed_bots_but_keeps_direct_lookup
     profile_listed = await service.list_bots(
         viewer_role="user",
         viewer_llm_bot_tier="tier2",
-        profile_username=" llm_mistral_nemo ",
+        profile_username=" llm_gemma3_27b ",
     )
-    direct = await service.get_bot_by_id(str(nemo_id))
+    direct = await service.get_bot_by_id(str(hidden_bot_ids["llm_gemma3_27b"]))
 
     assert [bot.username for bot in listed.bots] == ["llm_mistral_small32"]
-    assert [bot.username for bot in profile_listed.bots] == ["llm_mistral_nemo", "llm_mistral_small32"]
+    assert [bot.username for bot in profile_listed.bots] == ["llm_gemma3_27b", "llm_mistral_small32"]
     assert direct is not None
-    assert direct["username"] == "llm_mistral_nemo"
+    assert direct["username"] == "llm_gemma3_27b"
     assert BotService.bot_can_start_games(direct, now=now) is True
 
 

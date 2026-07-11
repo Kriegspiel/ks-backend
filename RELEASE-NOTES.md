@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.91
+
+- **Bot Catalog API**: hide older Gemma 3 and Llama 3.1/Scout variants,
+  including the legacy OpenRouter Llama alias, from the general bot catalog
+  while preserving direct profile-specific lookup.
+
 ## ks-backend v. 1.3.90
 
 - **T3 Model Bots**: require fresh provider availability for the full T3 LLM
