@@ -25,7 +25,6 @@ T2_LLM_BOT_USERNAMES = (
     "llm_haiku",
     "llm_deepseekv4_flash",
     "llm_gemini25_lite",
-    "llm_gemini31_lite",
     "llm_gptoss120b",
     "llm_llama31_8b",
     "llm_llama4_scout",
@@ -57,6 +56,7 @@ T3_LLM_BOT_PROVIDERS = {
     "llm_gpt55": "openai",
     "llm_sonnet5": "anthropic",
     "llm_gemini25_flash": "openai",
+    "llm_gemini31_lite": "openai",
     "llm_mistral_large3": "openai",
     "llm_nemotron_ultra": "openai",
     "llm_qwen36_flash": "openai",
@@ -1255,9 +1255,13 @@ async def test_bot_service_hides_catalog_suppressed_bots_but_keeps_direct_lookup
     hidden_bot_specs = [
         ("llm_gemma3_4b", "LLM Gemma 3 4B (bot)", "Gemma 3 4B model bot"),
         ("llm_gemma3_27b", "LLM Gemma 3 27B (bot)", "Gemma 3 27B model bot"),
+        ("llm_gemini25_flash", "LLM Gemini 2.5 Flash (bot)", "Gemini 2.5 Flash model bot"),
+        ("llm_gemini25_lite", "LLM Gemini 2.5 Flash-Lite (bot)", "Gemini 2.5 Flash-Lite model bot"),
         ("llm_llama31_8b", "LLM Llama 3.1 8B (bot)", "Llama 3.1 8B model bot"),
         ("llm_llama4_scout", "LLM Llama 4 Scout (bot)", "Llama 4 Scout model bot"),
         ("llm_mistral_nemo", "LLM Mistral Nemo (bot)", "Mistral Nemo model bot"),
+        ("openrouter_gemini25_lite", "OpenRouter Gemini 2.5 Flash-Lite (bot)", "Legacy Gemini 2.5 Flash-Lite model bot"),
+        ("openrouter_gemini31_lite", "OpenRouter Gemini 3.1 Flash-Lite (bot)", "Legacy Gemini 3.1 Flash-Lite model bot"),
         ("openrouter_llama31_8b", "OpenRouter Llama 3.1 8B (bot)", "Legacy Llama 3.1 8B model bot"),
     ]
     hidden_bot_ids = {username: ObjectId() for username, _, _ in hidden_bot_specs}
@@ -1281,6 +1285,19 @@ async def test_bot_service_hides_catalog_suppressed_bots_but_keeps_direct_lookup
             ],
             {
                 "_id": ObjectId(),
+                "username": "llm_gemini31_lite",
+                "username_display": "LLM Gemini 3.1 Flash-Lite (bot)",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {
+                    "display_name": "LLM Gemini 3.1 Flash-Lite (bot)",
+                    "description": "Gemini 3.1 Flash-Lite model bot",
+                    "listed": True,
+                    "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+                },
+            },
+            {
+                "_id": ObjectId(),
                 "username": "llm_mistral_small32",
                 "username_display": "LLM Mistral Small 3.2 (bot)",
                 "role": "bot",
@@ -1300,14 +1317,18 @@ async def test_bot_service_hides_catalog_suppressed_bots_but_keeps_direct_lookup
     profile_listed = await service.list_bots(
         viewer_role="user",
         viewer_llm_bot_tier="tier2",
-        profile_username=" llm_gemma3_27b ",
+        profile_username=" llm_gemini25_flash ",
     )
-    direct = await service.get_bot_by_id(str(hidden_bot_ids["llm_gemma3_27b"]))
+    direct = await service.get_bot_by_id(str(hidden_bot_ids["llm_gemini25_flash"]))
 
-    assert [bot.username for bot in listed.bots] == ["llm_mistral_small32"]
-    assert [bot.username for bot in profile_listed.bots] == ["llm_gemma3_27b", "llm_mistral_small32"]
+    assert [bot.username for bot in listed.bots] == ["llm_gemini31_lite", "llm_mistral_small32"]
+    assert [bot.username for bot in profile_listed.bots] == [
+        "llm_gemini25_flash",
+        "llm_gemini31_lite",
+        "llm_mistral_small32",
+    ]
     assert direct is not None
-    assert direct["username"] == "llm_gemma3_27b"
+    assert direct["username"] == "llm_gemini25_flash"
     assert BotService.bot_can_start_games(direct, now=now) is True
 
 
