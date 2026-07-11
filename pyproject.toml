@@ -1,6 +1,6 @@
 [project]
 name = "backend"
-version = "1.3.85"
+version = "1.3.86"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"

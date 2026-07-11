@@ -11,11 +11,12 @@ from pymongo.errors import DuplicateKeyError
 from app.models.bot import BotListItem, BotListResponse, BotUsageReportRequest, supported_rule_variants_for_bot
 from app.models.user import normalize_user_stats_payload
 from app.llm_bot_policy import (
+    bot_required_tier_for_document,
     is_llm_bot_document,
     llm_bot_limit_label_for_tier,
     llm_bot_ply_limit_for_tier,
     normalize_llm_bot_tier,
-    tier_allows_llm_bots,
+    tier_allows_bot,
 )
 from app.services.game_usage_stats import LlmUsageReport, store_llm_usage_in_game_stats
 
@@ -128,8 +129,8 @@ class BotService:
             if not self.bot_can_start_games(doc, now=now):
                 continue
             llm_backed = is_llm_bot_document(doc)
-            if llm_backed and not tier_allows_llm_bots(tier):
-                continue
+            required_tier = bot_required_tier_for_document(doc)
+            available_for_viewer = tier_allows_bot(tier, required_tier)
             stats = normalize_user_stats_payload(doc.get("stats"))
             bots.append(
                 BotListItem(
@@ -141,6 +142,8 @@ class BotService:
                     ratings=stats.get("ratings", {}),
                     supported_rule_variants=self._supported_rule_variants(doc),
                     llm_backed=llm_backed,
+                    required_tier=required_tier,
+                    available_for_viewer=available_for_viewer,
                     llm_bot_tier=tier if llm_backed else None,
                     llm_bot_ply_limit=llm_bot_ply_limit_for_tier(tier) if llm_backed else None,
                     llm_bot_limit_label=llm_bot_limit_label_for_tier(tier) if llm_backed else None,

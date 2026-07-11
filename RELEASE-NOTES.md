@@ -4,6 +4,13 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.86
+
+- **Bot Catalog API**: list visible bots with `required_tier` and
+  `available_for_viewer` metadata so clients can show higher-tier bots as
+  upgrade options, and enforce the same per-bot tier gate when creating or
+  joining games against bots.
+
 ## ks-backend v. 1.3.84
 
 - **Performance**: cache public profile archive metrics until a user completes
