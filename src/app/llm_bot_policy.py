@@ -80,7 +80,7 @@ BOT_ACCESS_TIER_BY_USERNAME: dict[str, LlmBotTier] = {
     "llm_llama4_maverick": "tier2",
     "llm_mistral_nemo": "tier2",
     "llm_mistral_small32": "tier2",
-    "llm_mistral_large3": "tier2",
+    "llm_mistral_large3": "tier3",
     "llm_gemma3_4b": "tier2",
     "llm_gemma3_27b": "tier2",
     "llm_gemma4_31b": "tier2",

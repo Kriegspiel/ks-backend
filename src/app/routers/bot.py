@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.db import get_db
 from app.dependencies import get_current_user
@@ -33,10 +33,15 @@ def get_bot_service(request: Request = None) -> BotService:
 
 
 @router.get("", response_model=BotListResponse)
-async def list_bots(user: UserModel = Depends(get_current_user), bot_service: BotService = Depends(get_bot_service)) -> Any:
+async def list_bots(
+    profile_username: str | None = Query(default=None),
+    user: UserModel = Depends(get_current_user),
+    bot_service: BotService = Depends(get_bot_service),
+) -> Any:
     return await bot_service.list_bots(
         viewer_role=getattr(user, "role", "user"),
         viewer_llm_bot_tier=getattr(user, "llm_bot_tier", None),
+        profile_username=profile_username,
     )
 
 
