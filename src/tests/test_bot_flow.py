@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.llm_bot_policy import KNOWN_LLM_BOT_USERNAMES
+from app.llm_bot_policy import KNOWN_LLM_BOT_USERNAMES, bot_required_tier_for_username
 from app.main import create_app
 from app.models.bot import BotAvailabilityReportRequest, BotProfileSyncRequest, BotUsageReportRequest
 from app.models.game import CreateGameRequest
@@ -32,7 +32,6 @@ T2_LLM_BOT_USERNAMES = (
     "llm_llama4_maverick",
     "llm_mistral_nemo",
     "llm_mistral_small32",
-    "llm_mistral_large3",
     "llm_gemma3_4b",
     "llm_gemma3_27b",
     "llm_gemma4_31b",
@@ -40,7 +39,6 @@ T2_LLM_BOT_USERNAMES = (
     "llm_glm45_air",
     "llm_nemotron_nano",
     "llm_nemotron_super",
-    "llm_nemotron_ultra",
     "llm_kimi_k25",
     "llm_hermes4_70b",
     "llm_phi4",
@@ -514,6 +512,7 @@ def test_t2_llm_catalog_bots_are_known_and_availability_gated() -> None:
     for username in T2_LLM_BOT_USERNAMES:
         provider = "anthropic" if username == "llm_haiku" else "openai"
         assert username in KNOWN_LLM_BOT_USERNAMES
+        assert bot_required_tier_for_username(username) == "tier2"
         assert BotService.model_availability_required_provider({"username": username}) == provider
         assert BotService.bot_can_start_games({"username": username}, now=now) is False
         assert (
@@ -557,6 +556,32 @@ def test_t4_llm_catalog_bots_are_known_and_availability_gated() -> None:
             )
             is True
         )
+
+
+def test_mistral_large3_is_tier_three_and_availability_gated() -> None:
+    now = datetime(2026, 7, 11, tzinfo=UTC)
+    username = "llm_mistral_large3"
+
+    assert username in KNOWN_LLM_BOT_USERNAMES
+    assert bot_required_tier_for_username(username) == "tier3"
+    assert BotService.model_availability_required_provider({"username": username}) == "openai"
+    assert BotService.bot_can_start_games({"username": username}, now=now) is False
+    assert (
+        BotService.bot_can_start_games(
+            {
+                "username": username,
+                "bot_profile": {
+                    "model_availability": {
+                        "provider": "openai",
+                        "ready": True,
+                        "checked_at": now,
+                    }
+                },
+            },
+            now=now,
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1209,6 +1234,58 @@ async def test_bot_service_lists_active_bots() -> None:
     assert [bot.username for bot in listed.bots] == ["randobot"]
     assert listed.bots[0].elo == 1200
     assert listed.bots[0].supported_rule_variants == ["berkeley", "berkeley_any"]
+
+
+@pytest.mark.asyncio
+async def test_bot_service_hides_catalog_suppressed_bots_but_keeps_direct_lookup() -> None:
+    now = datetime(2026, 7, 11, tzinfo=UTC)
+    users = FakeUsersCollection()
+    nemo_id = ObjectId()
+    users.docs.extend(
+        [
+            {
+                "_id": nemo_id,
+                "username": "llm_mistral_nemo",
+                "username_display": "LLM Mistral Nemo (bot)",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {
+                    "display_name": "LLM Mistral Nemo (bot)",
+                    "description": "Mistral Nemo model bot",
+                    "listed": True,
+                    "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+                },
+            },
+            {
+                "_id": ObjectId(),
+                "username": "llm_mistral_small32",
+                "username_display": "LLM Mistral Small 3.2 (bot)",
+                "role": "bot",
+                "status": "active",
+                "bot_profile": {
+                    "display_name": "LLM Mistral Small 3.2 (bot)",
+                    "description": "Mistral Small 3.2 model bot",
+                    "listed": True,
+                    "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
+                },
+            },
+        ]
+    )
+    service = BotService(users, now_factory=lambda: now)
+
+    listed = await service.list_bots(viewer_role="user", viewer_llm_bot_tier="tier2")
+    profile_listed = await service.list_bots(
+        viewer_role="user",
+        viewer_llm_bot_tier="tier2",
+        profile_username=" llm_mistral_nemo ",
+    )
+    direct = await service.get_bot_by_id(str(nemo_id))
+
+    assert [bot.username for bot in listed.bots] == ["llm_mistral_small32"]
+    assert [bot.username for bot in profile_listed.bots] == ["llm_mistral_nemo", "llm_mistral_small32"]
+    assert direct is not None
+    assert direct["username"] == "llm_mistral_nemo"
+    assert BotService.bot_can_start_games(direct, now=now) is True
 
 
 @pytest.mark.asyncio

@@ -55,6 +55,7 @@ MODEL_AVAILABILITY_REQUIRED_BOTS = {
     "llm_hermes4_405b": "openai",
 }
 MODEL_AVAILABILITY_STALE_AFTER = timedelta(seconds=120)
+CATALOG_HIDDEN_BOT_USERNAMES = frozenset({"llm_mistral_nemo"})
 
 
 class BotProfileConflictError(Exception):
@@ -124,12 +125,22 @@ class BotService:
         current = cls._normalize_utc_datetime(now) or datetime.now(UTC)
         return current - checked_at <= MODEL_AVAILABILITY_STALE_AFTER
 
-    async def list_bots(self, *, viewer_role: str = "user", viewer_llm_bot_tier: str | None = None) -> BotListResponse:
+    async def list_bots(
+        self,
+        *,
+        viewer_role: str = "user",
+        viewer_llm_bot_tier: str | None = None,
+        profile_username: str | None = None,
+    ) -> BotListResponse:
         cursor = self._users.find({"role": "bot", "status": "active"}).sort("username", 1)
         bots: list[BotListItem] = []
         now = self._now_factory()
         tier = normalize_llm_bot_tier(viewer_llm_bot_tier, role=viewer_role)
+        profile_username_normalized = str(profile_username or "").strip().lower()
         async for doc in cursor:
+            username = str(doc.get("username") or "").strip().lower()
+            if username in CATALOG_HIDDEN_BOT_USERNAMES and username != profile_username_normalized:
+                continue
             profile = doc.get("bot_profile") or {}
             if profile.get("listed", True) is False:
                 continue
