@@ -4,6 +4,13 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.4.1
+
+- **LLM Bot Catalog API**: add GPT-5.6 Sol/Terra/Luna, Grok 4.5,
+  Gemini 3.5 Flash, Qwen 3.7 Plus, DeepSeek V3.2, MiniMax M3, and
+  Mistral Medium 3.5 to backend tier gates, provider freshness checks,
+  bot matrix ordering, and usage attribution aliases.
+
 ## ks-backend v. 1.4.0
 
 - **LLM Bot Platform**: promote model-backed bots into a tiered backend
