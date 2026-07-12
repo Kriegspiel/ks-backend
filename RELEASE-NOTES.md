@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.3.93
+
+- **Bot Catalog API**: move Qwen Plus from T3 Strong to T2 Club access across
+  entitlement checks and bot matrix ordering.
+
 ## ks-backend v. 1.3.92
 
 - **Bot Catalog API**: promote Gemini 3.1 Flash-Lite to T3 access and hide

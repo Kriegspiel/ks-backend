@@ -38,6 +38,7 @@ T2_LLM_BOT_USERNAMES = (
     "llm_glm45_air",
     "llm_nemotron_nano",
     "llm_nemotron_super",
+    "llm_qwen_plus",
     "llm_kimi_k25",
     "llm_hermes4_70b",
     "llm_phi4",
@@ -60,7 +61,6 @@ T3_LLM_BOT_PROVIDERS = {
     "llm_mistral_large3": "openai",
     "llm_nemotron_ultra": "openai",
     "llm_qwen36_flash": "openai",
-    "llm_qwen_plus": "openai",
     "llm_kimi_k2_thinking": "openai",
     "llm_hermes3_70b": "openai",
 }
