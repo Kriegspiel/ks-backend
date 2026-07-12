@@ -110,6 +110,8 @@ BOT_MATRIX_PLAYER_ORDER = (
     "llm_kimi_k27_code",
     "llm_hermes4_405b",
     "llm_gpt56_sol",
+    "llm_gpt55_pro",
+    "llm_qwen37_max",
     "randobot",
     "randobotany",
     "simpleheuristics",

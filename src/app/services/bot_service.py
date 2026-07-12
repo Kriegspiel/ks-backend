@@ -50,6 +50,7 @@ MODEL_AVAILABILITY_REQUIRED_BOTS = {
     "llm_deepseek_v32": "openai",
     "llm_minimax_m3": "openai",
     "llm_gpt55": "openai",
+    "llm_gpt55_pro": "openai",
     "llm_gpt56_luna": "openai",
     "llm_sonnet5": "anthropic",
     "llm_gemini25_flash": "openai",
@@ -69,6 +70,7 @@ MODEL_AVAILABILITY_REQUIRED_BOTS = {
     "llm_kimi_k27_code": "openai",
     "llm_hermes4_405b": "openai",
     "llm_gpt56_sol": "openai",
+    "llm_qwen37_max": "openai",
 }
 MODEL_AVAILABILITY_STALE_AFTER = timedelta(seconds=120)
 CATALOG_HIDDEN_BOT_USERNAMES = frozenset(
