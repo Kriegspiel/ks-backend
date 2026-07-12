@@ -42,11 +42,15 @@ T2_LLM_BOT_USERNAMES = (
     "llm_kimi_k25",
     "llm_hermes4_70b",
     "llm_phi4",
+    "llm_qwen37_plus",
+    "llm_deepseek_v32",
+    "llm_minimax_m3",
 )
 
 T4_LLM_BOT_PROVIDERS = {
     "llm_opus48": "anthropic",
     "bot_deepseekv4_pro": "openai",
+    "llm_gpt56_terra": "openai",
     "llm_gemini31_pro_preview": "openai",
     "llm_glm52": "openai",
     "llm_kimi_k27_code": "openai",
@@ -55,14 +59,22 @@ T4_LLM_BOT_PROVIDERS = {
 
 T3_LLM_BOT_PROVIDERS = {
     "llm_gpt55": "openai",
+    "llm_gpt56_luna": "openai",
     "llm_sonnet5": "anthropic",
     "llm_gemini25_flash": "openai",
     "llm_gemini31_lite": "openai",
+    "llm_grok45": "openai",
+    "llm_gemini35_flash": "openai",
     "llm_mistral_large3": "openai",
+    "llm_mistral_medium35": "openai",
     "llm_nemotron_ultra": "openai",
     "llm_qwen36_flash": "openai",
     "llm_kimi_k2_thinking": "openai",
     "llm_hermes3_70b": "openai",
+}
+
+T5_LLM_BOT_PROVIDERS = {
+    "llm_gpt56_sol": "openai",
 }
 
 
@@ -576,6 +588,33 @@ def test_t4_llm_catalog_bots_are_known_and_availability_gated() -> None:
 
     for username, provider in T4_LLM_BOT_PROVIDERS.items():
         assert username in KNOWN_LLM_BOT_USERNAMES
+        assert bot_required_tier_for_username(username) == "tier4"
+        assert BotService.model_availability_required_provider({"username": username}) == provider
+        assert BotService.bot_can_start_games({"username": username}, now=now) is False
+        assert (
+            BotService.bot_can_start_games(
+                {
+                    "username": username,
+                    "bot_profile": {
+                        "model_availability": {
+                            "provider": provider,
+                            "ready": True,
+                            "checked_at": now,
+                        }
+                    },
+                },
+                now=now,
+            )
+            is True
+        )
+
+
+def test_t5_llm_catalog_bots_are_known_and_availability_gated() -> None:
+    now = datetime(2026, 7, 12, tzinfo=UTC)
+
+    for username, provider in T5_LLM_BOT_PROVIDERS.items():
+        assert username in KNOWN_LLM_BOT_USERNAMES
+        assert bot_required_tier_for_username(username) == "tier5"
         assert BotService.model_availability_required_provider({"username": username}) == provider
         assert BotService.bot_can_start_games({"username": username}, now=now) is False
         assert (
