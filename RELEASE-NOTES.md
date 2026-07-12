@@ -4,6 +4,28 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.4.0
+
+- **LLM Bot Platform**: promote model-backed bots into a tiered backend
+  catalog with provider freshness checks, persisted model availability, bot
+  profile self-reporting, and explicit T2/T3/T4 access gates.
+- **Subscription Bot Access**: enforce per-bot entitlement checks when users
+  create or join games against stronger LLM bots while keeping unavailable or
+  stale provider-backed bots out of ordinary selection paths.
+- **Usage and Cost Reporting**: store bot-reported model usage on game
+  documents and expose operator Bot Matrix aggregates for calls, input/cache/
+  output tokens, recorded-game averages, spend, period filters, and outcome
+  filters.
+- **History and Profile Scale**: move expensive history, profile, leaderboard,
+  and bot-report reads onto server-side filters, archive-aware queries,
+  profile metrics, and targeted caches so larger game histories stay usable.
+- **Live and Review APIs**: add server-sent active-game invalidation, public
+  completed-game status redirects, combined review loading, and safer
+  archived-game reads for old live links.
+- **Rules and Operations**: extend backend play/review coverage for RAND,
+  English, and CrazyKrieg details, expose prefix-free bot-facing API docs,
+  keep tech reports private, and harden API ingress and production diagnostics.
+
 ## ks-backend v. 1.3.93
 
 - **Bot Catalog API**: move Qwen Plus from T3 Strong to T2 Club access across
