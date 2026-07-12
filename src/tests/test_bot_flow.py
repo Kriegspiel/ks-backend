@@ -73,8 +73,10 @@ T3_LLM_BOT_PROVIDERS = {
 
 T5_LLM_BOT_PROVIDERS = {
     "llm_gpt55": "openai",
+    "llm_gpt55_pro": "openai",
     "llm_gpt56_sol": "openai",
     "llm_grok45": "openai",
+    "llm_qwen37_max": "openai",
 }
 
 
@@ -737,6 +739,49 @@ async def test_bot_usage_report_stores_idempotent_game_stats() -> None:
     assert stored["response_ids"] == ["resp1"]
     assert stored["first_recorded_at"] == datetime(2026, 7, 5, tzinfo=UTC)
     assert games.docs[0]["stats"]["llm_usage"]["updated_at"] == datetime(2026, 7, 5, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "username"),
+    [
+        ("gpt-5.5-pro", "llm_gpt55_pro"),
+        ("qwen/qwen3.7-max", "llm_qwen37_max"),
+    ],
+)
+async def test_bot_usage_report_maps_new_t5_model_aliases(model: str, username: str) -> None:
+    game_id = ObjectId()
+    games = FakeReferenceCollection(
+        [
+            {
+                "_id": game_id,
+                "game_code": "T5NEW1",
+                "white": {"user_id": "human1", "username": "playerone", "role": "user"},
+                "black": {"user_id": "model-bot", "username": username, "role": "bot"},
+            }
+        ]
+    )
+    service = BotService(
+        FakeUsersCollection(),
+        game_collections=(games,),
+        now_factory=lambda: datetime(2026, 7, 12, tzinfo=UTC),
+    )
+    payload = BotUsageReportRequest(
+        game_id=str(game_id),
+        game_code="t5new1",
+        provider="openai",
+        model=model,
+        response_id="resp-new",
+        input_tokens=100,
+        output_tokens=50,
+        total_tokens=150,
+        cost_usd=0.01,
+    )
+
+    assert await service.record_usage(user_id="wrong-id", username="openrouterbot", payload=payload) is True
+
+    assert games.docs[0]["stats"]["llm_usage"]["black"]["username"] == username
+    assert games.docs[0]["stats"]["llm_usage"]["black"]["models"] == [model]
 
 
 @pytest.mark.asyncio

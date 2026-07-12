@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.4.3
+
+- **LLM Bot Catalog API**: finish GPT-5.5 Pro and Qwen 3.7 Max as T5 bots in
+  provider freshness checks, bot matrix ordering, and usage attribution aliases.
+
 ## ks-backend v. 1.4.2
 
 - **LLM Bot Catalog API**: move OpenAI GPT-5.5 and xAI Grok 4.5 from T3
