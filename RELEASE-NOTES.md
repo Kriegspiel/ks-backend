@@ -4,6 +4,11 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.4.2
+
+- **LLM Bot Catalog API**: move OpenAI GPT-5.5 and xAI Grok 4.5 from T3
+  Strong to T5 Master access in backend entitlement checks.
+
 ## ks-backend v. 1.4.1
 
 - **LLM Bot Catalog API**: add GPT-5.6 Sol/Terra/Luna, Grok 4.5,
