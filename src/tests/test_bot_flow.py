@@ -58,12 +58,10 @@ T4_LLM_BOT_PROVIDERS = {
 }
 
 T3_LLM_BOT_PROVIDERS = {
-    "llm_gpt55": "openai",
     "llm_gpt56_luna": "openai",
     "llm_sonnet5": "anthropic",
     "llm_gemini25_flash": "openai",
     "llm_gemini31_lite": "openai",
-    "llm_grok45": "openai",
     "llm_gemini35_flash": "openai",
     "llm_mistral_large3": "openai",
     "llm_mistral_medium35": "openai",
@@ -74,7 +72,9 @@ T3_LLM_BOT_PROVIDERS = {
 }
 
 T5_LLM_BOT_PROVIDERS = {
+    "llm_gpt55": "openai",
     "llm_gpt56_sol": "openai",
+    "llm_grok45": "openai",
 }
 
 
