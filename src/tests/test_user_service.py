@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import bcrypt
@@ -232,6 +233,82 @@ def test_find_applies_cursor_comment_when_supported() -> None:
     cursor = UserService._find(TrackingCollection(), {"role": "bot"}, comment="user.test.query")
 
     assert cursor.comment_value == "user.test.query"
+
+
+@pytest.mark.asyncio
+async def test_user_service_cache_datetime_and_collection_fallback_helpers() -> None:
+    UserService._bot_token_cache = {
+        "keep": (999999.0, SimpleNamespace(id="u2")),
+        "drop": (999999.0, SimpleNamespace(id="u1")),
+    }
+    UserService.evict_bot_token_cache_for_user_id("u1")
+    assert set(UserService._bot_token_cache) == {"keep"}
+    UserService.clear_bot_token_cache()
+
+    UserService._profile_metrics_cache = {"u1": (1, {}), "u2": (1, {})}
+    UserService.evict_profile_metrics_cache_for_user_ids([None, "u1"])
+    assert set(UserService._profile_metrics_cache) == {"u2"}
+    UserService.clear_profile_metrics_cache()
+
+    naive = datetime(2026, 7, 1, 12)
+    eastern = datetime(2026, 7, 1, 8, tzinfo=ZoneInfo("America/New_York"))
+    assert UserService._utc_datetime("bad") is None
+    assert UserService._utc_datetime(naive) == datetime(2026, 7, 1, 12, tzinfo=UTC)
+    assert UserService._utc_datetime(eastern) == datetime(2026, 7, 1, 12, tzinfo=UTC)
+
+    class TypeErrorCommentCursor:
+        def comment(self, value: str):  # noqa: ARG002
+            raise TypeError("comments unsupported")
+
+    cursor = TypeErrorCommentCursor()
+    assert UserService._comment_cursor(cursor, "user.test") is cursor
+
+    class CountCollection:
+        async def count_documents(self, query: dict, **kwargs):  # noqa: ARG002
+            if kwargs:
+                raise TypeError("comment unsupported")
+            return 7
+
+    assert await UserService._count_documents(CountCollection(), {"role": "bot"}) == 7
+    assert await UserService._count_documents(CountCollection(), {"role": "bot"}, comment="user.count") == 7
+
+    class CommentCountCollection:
+        def __init__(self) -> None:
+            self.comment: str | None = None
+
+        async def count_documents(self, query: dict, **kwargs):  # noqa: ARG002
+            self.comment = kwargs.get("comment")
+            return 3
+
+    comment_count = CommentCountCollection()
+    assert await UserService._count_documents(comment_count, {"role": "bot"}, comment="user.count") == 3
+    assert comment_count.comment == "user.count"
+
+    class NoAggregateCollection:
+        pass
+
+    assert UserService._aggregate(NoAggregateCollection(), [], comment="user.aggregate") is None
+
+    class AggregateTypeErrorCollection:
+        def aggregate(self, pipeline: list[dict], **kwargs):  # noqa: ARG002
+            if kwargs:
+                raise TypeError("comment unsupported")
+            return "cursor"
+
+    assert UserService._aggregate(AggregateTypeErrorCollection(), [{"$match": {}}], comment="user.aggregate") == "cursor"
+
+    class CommentAggregateCollection:
+        def __init__(self) -> None:
+            self.calls: list[tuple[list[dict], dict]] = []
+
+        def aggregate(self, pipeline: list[dict], **kwargs):
+            self.calls.append((pipeline, kwargs))
+            return FakeCursor([])
+
+    comment_aggregate = CommentAggregateCollection()
+    assert UserService._aggregate(comment_aggregate, [{"$match": {}}]) is not None
+    assert UserService._aggregate(comment_aggregate, [{"$match": {}}], comment="user.aggregate") is not None
+    assert comment_aggregate.calls[1][1] == {"comment": "user.aggregate"}
 
 
 @pytest.mark.asyncio
@@ -1764,6 +1841,133 @@ async def test_get_game_history_aggregation_filters_by_result_after_materializin
 
 
 @pytest.mark.asyncio
+async def test_get_game_history_falls_back_when_aggregation_is_unavailable() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    archives.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "FALL01",
+            "white": {"user_id": str(user_id), "username": "playerone", "role": "user"},
+            "black": {"user_id": "bot-random", "username": "randobot", "role": "bot"},
+            "result": {"winner": "white", "reason": "checkmate"},
+            "move_count": 8,
+            "turn_count": 4,
+            "created_at": datetime(2026, 7, 1, tzinfo=UTC),
+            "updated_at": datetime(2026, 7, 1, tzinfo=UTC),
+        }
+    )
+    db = FakeDB(users=users, game_archives=archives)
+
+    page, total, filter_options = await UserService(users).get_game_history(
+        db,
+        str(user_id),
+        page=1,
+        per_page=100,
+        filters={"opponent": ["randobot"]},
+        sort_key="turns",
+        include_filter_options=False,
+    )
+
+    assert total == 1
+    assert filter_options == {}
+    assert [game["game_code"] for game in page] == ["FALL01"]
+
+
+@pytest.mark.asyncio
+async def test_history_aggregate_page_handles_empty_cursor_and_compound_opponent_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EmptyAggregateCollection(FakeUsersCollection):
+        def __init__(self) -> None:
+            super().__init__()
+            self.aggregate_calls: list[list[dict]] = []
+
+        def aggregate(self, pipeline: list[dict]):
+            self.aggregate_calls.append(pipeline)
+            return FakeCursor([])
+
+    users = FakeUsersCollection()
+    archives = EmptyAggregateCollection()
+    result = await UserService._history_aggregate_page(
+        FakeDB(users=users, game_archives=archives),
+        user_id="user1",
+        offset=0,
+        per_page=10,
+        filters={"opponent": ["randobot", "bot:*"], "rule_set": ["berkeley"], "color": [], "unused": ["x"]},
+        sort_key="none",
+        sort_direction="asc",
+    )
+
+    assert result == ([], 0)
+    assert {
+        "$match": {
+            "$and": [
+                {"history_filter_rule_set": {"$in": ["berkeley"]}},
+                {
+                    "$or": [
+                        {"history_filter_opponent": {"$in": ["randobot", "human:randobot", "bot:randobot"]}},
+                        {"history_opponent_group": {"$in": ["bot"]}},
+                    ]
+                },
+            ]
+        }
+    } in archives.aggregate_calls[0]
+    assert archives.aggregate_calls[0][-1]["$facet"]["rows"][0]["$sort"]["history_played_at"] == -1
+
+    group_only_archives = EmptyAggregateCollection()
+    assert await UserService._history_aggregate_page(
+        FakeDB(users=users, game_archives=group_only_archives),
+        user_id="user1",
+        offset=0,
+        per_page=10,
+        filters={"opponent": ["bot:*"]},
+        sort_key="turns",
+        sort_direction="desc",
+    ) == ([], 0)
+    assert {"$match": {"history_opponent_group": {"$in": ["bot"]}}} in group_only_archives.aggregate_calls[0]
+
+    no_filter_archives = EmptyAggregateCollection()
+    assert await UserService._history_aggregate_page(
+        FakeDB(users=users, game_archives=no_filter_archives),
+        user_id="user1",
+        offset=0,
+        per_page=10,
+        filters={"opponent": [], "unused": ["x"]},
+        sort_key="turns",
+        sort_direction="desc",
+    ) == ([], 0)
+    assert no_filter_archives.aggregate_calls[0][-1]["$facet"]["rows"][0]["$sort"]["history_turns"] == -1
+
+    empty_opponent_archives = EmptyAggregateCollection()
+    monkeypatch.setattr(UserService, "_history_opponent_exact_match_values", classmethod(lambda cls, value: []))
+    assert await UserService._history_aggregate_page(
+        FakeDB(users=users, game_archives=empty_opponent_archives),
+        user_id="user1",
+        offset=0,
+        per_page=10,
+        filters={"opponent": ["custom"]},
+        sort_key="turns",
+        sort_direction="desc",
+    ) == ([], 0)
+
+    class NoneAggregateCollection(FakeUsersCollection):
+        def aggregate(self, pipeline: list[dict]):  # noqa: ARG002
+            return None
+
+    assert await UserService._history_aggregate_page(
+        FakeDB(users=users, game_archives=NoneAggregateCollection()),
+        user_id="user1",
+        offset=0,
+        per_page=10,
+        filters={},
+        sort_key="turns",
+        sort_direction="desc",
+    ) is None
+
+
+@pytest.mark.asyncio
 async def test_get_game_history_handles_null_result_documents() -> None:
     users = FakeUsersCollection()
     archives = FakeUsersCollection()
@@ -1845,6 +2049,35 @@ async def test_get_game_history_exposes_named_track_snapshots_for_selected_track
     assert page[0]["rating_snapshot"]["vs_bots"]["elo_after"] == 1273
     assert page[0]["rating_snapshot"]["vs_bots"]["elo_delta"] == -21
     assert page[0]["rating_snapshot"]["vs_humans"]["elo_after"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_game_history_filter_options_builds_options_from_archives() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+    user_id = ObjectId()
+    archives.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "OPT001",
+            "white": {"user_id": str(user_id), "username": "playerone", "role": "user"},
+            "black": {"user_id": "bot-random", "username": "randobot", "role": "bot"},
+            "rule_variant": "berkeley",
+            "result": {"winner": "white", "reason": "checkmate"},
+            "move_count": 8,
+            "turn_count": 4,
+            "created_at": datetime(2026, 7, 1, tzinfo=UTC),
+            "updated_at": datetime(2026, 7, 1, tzinfo=UTC),
+        }
+    )
+
+    options = await UserService(users).get_game_history_filter_options(
+        FakeDB(users=users, game_archives=archives),
+        str(user_id),
+    )
+
+    assert {"value": "randobot", "group": "Bots", "count": 1} in options["opponent"]
+    assert {"value": "berkeley", "group": "", "count": 1} in options["rule_set"]
 
 
 @pytest.mark.asyncio
@@ -2014,8 +2247,40 @@ def test_helper_edges_cover_password_parsing_datetime_and_result_reasoning() -> 
     )
     assert UserService._normalized_result_reason({"moves": [{"special_announcement": "STALEMATE_BLACK_WINS"}]}) == "stalemate"
     assert UserService._normalized_result_reason({"moves": [{"special_announcement": "CHECKMATE_BLACK_WINS"}]}) == "checkmate"
+    assert UserService._normalized_result_reason({"moves": [{"special_announcement": "OTHER"}]}) is None
+    assert UserService._history_opponent_exact_match_values("human:notifil") == ["human:notifil"]
+    assert UserService._history_opponent_filter_matches("human:notifil", ["human:notifil"]) is True
     assert UserService._history_opponent_filter_matches("human:notifil", ["notifil"]) is True
     assert UserService._history_opponent_filter_matches("human:notifil", ["bot:*"]) is False
+    assert UserService._history_uses_default_date_sort(sort_key="none", sort_direction="asc") is True
+    assert (
+        UserService._history_aggregation_supported(
+            filters={"reason": ["checkmate"]},
+            sort_key="turns",
+            include_filter_options=False,
+        )
+        is False
+    )
+    assert UserService._history_compare_values(None, "alpha", direction="asc") == 1
+    assert UserService._history_compare_values("bravo", "alpha", direction="asc") == 1
+    assert UserService._history_count_field({"move_count": "bad"}, "move_count") is None
+    assert UserService._history_move_count({"moves": [1, 2, 3]}) == 3
+    assert UserService._history_turn_count({"moves": [{"move_done": True}, {"move_done": True}, {"move_done": False}]}) == 1
+    assert UserService._history_record_matches_filters({"filters": {}}, {"result": []}) is True
+    assert UserService._history_record_matches_filters({"filters": {"result": "win"}}, {"result": ["win"]}) is True
+    assert (
+        UserService._history_record_matches_filters({"filters": {"result": "win"}}, {"result": ["loss"]})
+        is False
+    )
+    sorted_history = UserService._sort_history_records(
+        [
+            {"payload": {"game_code": "OLD"}, "sorts": {"turns": 4, "played_at": datetime(2026, 1, 1, tzinfo=UTC)}},
+            {"payload": {"game_code": "NEW"}, "sorts": {"turns": 4, "played_at": datetime(2026, 1, 2, tzinfo=UTC)}},
+        ],
+        sort_key="turns",
+        sort_direction="asc",
+    )
+    assert [record["payload"]["game_code"] for record in sorted_history] == ["NEW", "OLD"]
 
 
 def test_remaining_user_service_helper_edges(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2051,6 +2316,52 @@ def test_remaining_user_service_helper_edges(monkeypatch: pytest.MonkeyPatch) ->
     assert UserService._positive_float(-1, default=3.0) == 3.0
     assert UserService._activity_player_key({"username": " PlayerOne "}) == "username:playerone"
     assert UserService._activity_player_key({"username": " "}) is None
+    assert UserService._completed_turn_count({"moves": [{"move_done": True}, {"move_done": False}, "legacy"]}) == 1
+
+    monkeypatch.setattr(user_service_module, "normalize_user_stats_payload", lambda raw_stats: {"games_played": "bad"})
+    assert UserService._profile_metrics_cache_version({"stats": {}}) == 0
+
+    assert (
+        UserService._bot_matrix_display_name(
+            {"bot_profile": {"display_name": " "}, "username_display": "", "username": ""}
+        )
+        == "Unknown bot"
+    )
+    assert UserService._bot_matrix_ply_count({"move_count": "bad", "ply_count": 6}) == 6
+    assert UserService._bot_matrix_ply_count({"move_count": "bad", "ply_count": "bad", "moves": ["a", "b"]}) == 2
+    assert UserService._bot_matrix_ply_count({"move_count": 0, "ply_count": 0, "turn_count": "4"}) == 8
+    assert UserService._bot_matrix_ply_count({"move_count": "bad", "ply_count": "bad", "turn_count": "bad"}) == 0
+    assert UserService._bot_matrix_normalized_condition("") == "unknown"
+    assert UserService._bot_matrix_period_cutoff(period="unknown", now=datetime(2026, 7, 5, tzinfo=UTC)) is None
+
+    matrix_summary = UserService._bot_matrix_empty_summary()
+    UserService._bot_matrix_record_result(
+        matrix_summary,
+        outcome="win",
+        plies=4,
+        game_id="",
+        usage_eligible=True,
+        usage={"calls": 1, "tokens": 10},
+    )
+    assert matrix_summary["usage_game_ids"] == set()
+
+    leaderboard_sorted = UserService._sort_leaderboard_records(
+        [
+            {"payload": {"username": "rank-two"}, "sorts": {"games": 10, "rank": 2}},
+            {"payload": {"username": "rank-one"}, "sorts": {"games": 10, "rank": 1}},
+        ],
+        sort_key="games",
+        sort_direction="desc",
+    )
+    assert [record["payload"]["username"] for record in leaderboard_sorted] == ["rank-one", "rank-two"]
+    assert UserService._leaderboard_record_matches_filters({"filters": {}}, {"type": []}) is True
+
+    monkeypatch.setattr(UserService, "_profile_metrics_cache_max_entries", 1)
+    UserService.clear_profile_metrics_cache()
+    UserService._cache_profile_metrics("u1", 1, {"games": 1})
+    UserService._cache_profile_metrics("u2", 1, {"games": 2})
+    assert set(UserService._profile_metrics_cache) == {"u2"}
+    UserService.clear_profile_metrics_cache()
 
     original_optional_datetime = UserService._optional_datetime
     flaky_timestamp_calls = iter([datetime(2026, 5, 9, tzinfo=UTC), None])
@@ -3026,11 +3337,127 @@ async def test_get_bot_matrix_report_aggregates_all_listed_bot_archives_for_peri
     assert filtered_report["outcomes"] == ["insufficient"]
     assert filtered_report["unique_game_count"] == 1
     assert filtered_report["row_record_count"] == 2
-    assert filtered_report["end_condition_rows"] == [{"condition": "insufficient", "label": "Insufficient material", "games": 1}]
+    assert filtered_report["end_condition_rows"] == [
+        {"condition": "insufficient", "label": "Insufficient material", "games": 1}
+    ]
     assert filtered_report["matrix_rows"][0]["cells"][1]["summary"]["record"] == "0-1-0"
     assert filtered_report["total_rows"]["all"][0]["games"] == 1
     assert filtered_report["total_rows"]["all"][0]["record"] == "0-1-0"
     assert filtered_report["total_rows"]["humans"][0]["games"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_bot_matrix_report_returns_empty_shape_without_listed_bots() -> None:
+    users = FakeUsersCollection()
+    archives = FakeUsersCollection()
+
+    report = await UserService(users).get_bot_matrix_report(
+        FakeDB(users=users, game_archives=archives),
+        period="today",
+        outcomes=["time", "all"],
+        now=datetime(2026, 7, 6, 15, tzinfo=UTC),
+    )
+
+    assert report == {
+        "period": "today",
+        "generated_at": "2026-07-06T15:00:00+00:00",
+        "players": [],
+        "matrix_rows": [],
+        "end_condition_rows": [],
+        "total_rows": {"all": [], "humans": [], "bots": []},
+        "unique_game_count": 0,
+        "row_record_count": 0,
+        "usage_available": False,
+        "usage_start_date": "2026-07-04",
+        "outcomes": ["timeout"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_bot_matrix_report_batches_archive_cursor_and_skips_rows_outside_period() -> None:
+    class BatchCursor(FakeCursor):
+        def __init__(self, docs: list[dict]) -> None:
+            super().__init__(docs)
+            self.batch_sizes: list[int] = []
+
+        def batch_size(self, count: int):
+            self.batch_sizes.append(count)
+            return self
+
+    class NonFilteringArchives(FakeUsersCollection):
+        def __init__(self) -> None:
+            super().__init__()
+            self.last_cursor: BatchCursor | None = None
+
+        def find(self, query: dict, projection: dict | None = None):  # noqa: ARG002
+            self.last_cursor = BatchCursor(self.docs)
+            return self.last_cursor
+
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {
+                "_id": "haiku-id",
+                "username": "llm_haiku",
+                "username_display": "LLM Haiku",
+                "role": "bot",
+                "bot_profile": {"listed": True, "display_name": "LLM Haiku"},
+            },
+            {
+                "_id": "nano-id",
+                "username": "llm_gptnano",
+                "username_display": "LLM Nano",
+                "role": "bot",
+                "bot_profile": {"listed": True, "display_name": "LLM Nano"},
+            },
+        ]
+    )
+    archives = NonFilteringArchives()
+    archives.docs.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "state": "completed",
+                "game_code": "OLD001",
+                "updated_at": datetime(2026, 7, 4, 12, tzinfo=UTC),
+                "white": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
+                "black": {"user_id": "nano-id", "username": "llm_gptnano", "role": "bot"},
+                "result": {"winner": "white", "reason": "checkmate"},
+                "move_count": 20,
+            },
+            {
+                "_id": ObjectId(),
+                "state": "completed",
+                "game_code": "NODATE",
+                "white": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
+                "black": {"user_id": "nano-id", "username": "llm_gptnano", "role": "bot"},
+                "result": {"winner": "white", "reason": "timeout"},
+                "move_count": 12,
+            },
+            {
+                "_id": ObjectId(),
+                "state": "completed",
+                "game_code": "TODAY1",
+                "updated_at": datetime(2026, 7, 5, 9, tzinfo=UTC),
+                "white": {"user_id": "haiku-id", "username": "llm_haiku", "role": "bot"},
+                "black": {"user_id": "nano-id", "username": "llm_gptnano", "role": "bot"},
+                "result": {"winner": "black", "reason": "resignation"},
+                "move_count": 10,
+            },
+        ]
+    )
+
+    report = await UserService(users).get_bot_matrix_report(
+        FakeDB(users=users, game_archives=archives),
+        period="today",
+        now=datetime(2026, 7, 5, 12, tzinfo=UTC),
+    )
+
+    assert archives.last_cursor is not None
+    assert archives.last_cursor.batch_sizes == [1000]
+    assert report["unique_game_count"] == 1
+    assert report["row_record_count"] == 2
+    assert report["end_condition_rows"] == [{"condition": "resignation", "label": "Resignation", "games": 1}]
 
 
 @pytest.mark.asyncio
