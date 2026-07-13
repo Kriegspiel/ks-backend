@@ -347,27 +347,41 @@ async def test_guest_cannot_create_llm_bot_game() -> None:
     assert exc.value.code == "LLM_BOT_TIER_REQUIRED"
 
 
+def _add_ready_llm_bot(users: FakeUsersCollection, *, bot_id: ObjectId, username: str, now: datetime) -> None:
+    provider = BotService.model_availability_required_provider({"username": username}) or "openai"
+    users.docs.append(
+        {
+            "_id": bot_id,
+            "username": username,
+            "username_display": f"{username} (bot)",
+            "role": "bot",
+            "status": "active",
+            "bot_profile": {
+                "display_name": f"{username} (bot)",
+                "owner_email": "owner@example.com",
+                "description": "Model bot",
+                "model_availability": {"provider": provider, "ready": True, "reason": "ok", "checked_at": now},
+            },
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("viewer_tier", "bot_username"),
+    [
+        ("tier1", "llm_gptnano"),
+        ("tier2", "llm_sonnet5"),
+        ("tier3", "llm_opus48"),
+        ("tier4", "llm_gpt55"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_tier_one_cannot_create_higher_tier_bot_game() -> None:
+async def test_user_cannot_create_game_with_bot_above_their_tier(viewer_tier: str, bot_username: str) -> None:
     games = FakeGamesCollection()
     users = FakeUsersCollection()
     bot_id = ObjectId()
     now = datetime(2026, 6, 1, tzinfo=UTC)
-    users.docs.append(
-        {
-            "_id": bot_id,
-            "username": "llm_gptnano",
-            "username_display": "LLM GPT-4.5 Nano (bot)",
-            "role": "bot",
-            "status": "active",
-            "bot_profile": {
-                "display_name": "LLM GPT-4.5 Nano (bot)",
-                "owner_email": "owner@example.com",
-                "description": "Model bot",
-                "model_availability": {"provider": "openai", "ready": True, "reason": "ok", "checked_at": now},
-            },
-        }
-    )
+    _add_ready_llm_bot(users, bot_id=bot_id, username=bot_username, now=now)
     service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
     service.utcnow = lambda: now  # type: ignore[method-assign]
 
@@ -376,9 +390,42 @@ async def test_tier_one_cannot_create_higher_tier_bot_game() -> None:
             user_id="u1",
             username="player",
             request=CreateGameRequest(opponent_type="bot", bot_id=str(bot_id), play_as="white", time_control="rapid"),
+            llm_bot_tier=viewer_tier,
         )
 
     assert exc.value.code == "LLM_BOT_TIER_REQUIRED"
+    assert games.docs == []
+
+
+@pytest.mark.parametrize(
+    ("viewer_tier", "bot_username"),
+    [
+        ("tier2", "llm_gptnano"),
+        ("tier3", "llm_gptnano"),
+        ("tier4", "llm_sonnet5"),
+        ("tier5", "llm_opus48"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_user_can_create_game_with_bot_at_their_tier_or_below(viewer_tier: str, bot_username: str) -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    _add_ready_llm_bot(users, bot_id=bot_id, username=bot_username, now=now)
+    service = GameService(games, users_collection=users, site_origin="https://kriegspiel.org")
+    service.utcnow = lambda: now  # type: ignore[method-assign]
+
+    response = await service.create_game(
+        user_id="u1",
+        username="player",
+        request=CreateGameRequest(opponent_type="bot", bot_id=str(bot_id), play_as="white", time_control="rapid"),
+        llm_bot_tier=viewer_tier,
+    )
+
+    assert response.state == "active"
+    assert response.bot == {"bot_id": str(bot_id), "username": bot_username}
+    assert games.docs[0]["state"] == "active"
 
 
 @pytest.mark.asyncio
