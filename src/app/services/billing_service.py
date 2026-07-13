@@ -78,6 +78,13 @@ class StripeBillingClient:
         self._secret_key = secret_key
         self._api_base = settings.STRIPE_API_BASE.rstrip("/")
 
+    async def get(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
+        url = f"{self._api_base}{path}"
+        headers = {"Authorization": f"Bearer {self._secret_key}"}
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.get(url, params=params or {}, headers=headers)
+        return self._parse_response(response)
+
     async def post(self, path: str, data: dict[str, str]) -> dict[str, Any]:
         url = f"{self._api_base}{path}"
         headers = {
@@ -86,6 +93,10 @@ class StripeBillingClient:
         }
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(url, content=urlencode(data), headers=headers)
+        return self._parse_response(response)
+
+    @staticmethod
+    def _parse_response(response: httpx.Response) -> dict[str, Any]:
         try:
             payload = response.json()
         except ValueError as exc:
@@ -232,6 +243,67 @@ class BillingService:
             raise BillingProviderError("Stripe did not return a checkout client secret")
         return {"client_secret": client_secret}
 
+    async def create_subscription_change_session(
+        self,
+        *,
+        user: UserModel,
+        tier: BillingTier,
+        interval: BillingInterval,
+    ) -> dict[str, Any]:
+        if user.role == "guest":
+            raise PermissionError("Convert your guest account before changing a subscription")
+        if not self._stripe_enabled():
+            raise BillingConfigurationError("Stripe billing is not configured")
+
+        plan = self._plan_for(tier, interval)
+        doc = await self._db.users.find_one(_user_query(user.id))
+        billing = doc.get("billing") if isinstance(doc, dict) and isinstance(doc.get("billing"), dict) else {}
+        customer_id = _nonempty(billing.get("stripe_customer_id"))
+        subscription_id = _nonempty(billing.get("stripe_subscription_id"))
+        existing_status = _nonempty(billing.get("subscription_status"))
+        if (
+            customer_id is None
+            or subscription_id is None
+            or existing_status not in ACTIVE_SUBSCRIPTION_STATUSES
+        ):
+            raise LookupError("No active subscription exists for this account yet")
+
+        subscription = await self.stripe_client.get(f"/subscriptions/{subscription_id}")
+        subscription_customer_id = _nonempty(subscription.get("customer"))
+        if subscription_customer_id != customer_id:
+            raise BillingProviderError("Stripe subscription does not match this account")
+        subscription_status = _nonempty(subscription.get("status"))
+        if subscription_status not in ACTIVE_SUBSCRIPTION_STATUSES:
+            raise BillingPlanError("Only active subscriptions can be changed")
+
+        item = _single_subscription_item(subscription)
+        item_id = _nonempty(item.get("id"))
+        current_price_id = _subscription_item_price_id(item)
+        if item_id is None or current_price_id is None:
+            raise BillingProviderError("Stripe subscription is missing its subscription item")
+        if current_price_id == plan.price_id:
+            raise BillingPlanError("That subscription plan is already active")
+
+        return_url = f"{self._settings.SITE_ORIGIN.rstrip('/')}/subscription?tier={tier}"
+        portal = await self.stripe_client.post(
+            "/billing_portal/sessions",
+            {
+                "customer": customer_id,
+                "return_url": return_url,
+                "flow_data[type]": "subscription_update_confirm",
+                "flow_data[after_completion][type]": "redirect",
+                "flow_data[after_completion][redirect][return_url]": return_url,
+                "flow_data[subscription_update_confirm][subscription]": subscription_id,
+                "flow_data[subscription_update_confirm][items][0][id]": item_id,
+                "flow_data[subscription_update_confirm][items][0][price]": plan.price_id,
+                "flow_data[subscription_update_confirm][items][0][quantity]": "1",
+            },
+        )
+        url = _nonempty(portal.get("url"))
+        if url is None:
+            raise BillingProviderError("Stripe did not return a billing portal URL")
+        return {"url": url}
+
     async def create_portal_session(self, *, user: UserModel) -> dict[str, Any]:
         if user.role == "guest":
             raise PermissionError("Convert your guest account before managing billing")
@@ -297,7 +369,11 @@ class BillingService:
 
         if event_type == "checkout.session.completed":
             await self._handle_checkout_completed(data_object)
-        elif event_type in {"customer.subscription.created", "customer.subscription.updated"}:
+        elif event_type in {
+            "customer.subscription.created",
+            "customer.subscription.updated",
+            "customer.subscription.pending_update_applied",
+        }:
             await self._handle_subscription_update(data_object)
         elif event_type == "customer.subscription.deleted":
             await self._clear_subscription_access(
@@ -401,10 +477,22 @@ class BillingService:
 
 
 def _subscription_price_id(subscription: dict[str, Any]) -> str | None:
+    try:
+        item = _single_subscription_item(subscription)
+    except BillingPlanError:
+        return None
+    return _subscription_item_price_id(item)
+
+
+def _single_subscription_item(subscription: dict[str, Any]) -> dict[str, Any]:
     items = subscription.get("items")
     data = items.get("data") if isinstance(items, dict) else None
-    if not isinstance(data, list) or not data:
-        return None
-    price = data[0].get("price") if isinstance(data[0], dict) else None
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        raise BillingPlanError("Use billing management to change this subscription")
+    return data[0]
+
+
+def _subscription_item_price_id(item: dict[str, Any]) -> str | None:
+    price = item.get("price") if isinstance(item, dict) else None
     price_id = price.get("id") if isinstance(price, dict) else None
     return _nonempty(price_id)

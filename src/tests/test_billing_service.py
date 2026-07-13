@@ -94,7 +94,24 @@ class FakeUsers:
 
 class FakeStripeClient:
     def __init__(self) -> None:
+        self.gets: list[tuple[str, dict[str, str]]] = []
         self.posts: list[tuple[str, dict[str, str]]] = []
+        self.subscriptions: dict[str, dict] = {
+            "sub_123": {
+                "id": "sub_123",
+                "customer": "cus_123",
+                "status": "active",
+                "items": {"data": [{"id": "si_123", "price": {"id": "price_t2_monthly"}}]},
+            }
+        }
+
+    async def get(self, path: str, params: dict[str, str] | None = None) -> dict:
+        self.gets.append((path, params or {}))
+        prefix = "/subscriptions/"
+        if path.startswith(prefix):
+            subscription_id = path.removeprefix(prefix)
+            return self.subscriptions[subscription_id]
+        raise AssertionError(f"unexpected Stripe path {path}")
 
     async def post(self, path: str, data: dict[str, str]) -> dict:
         self.posts.append((path, data))
@@ -115,6 +132,7 @@ def _settings() -> Settings:
         STRIPE_PUBLISHABLE_KEY="pk_test_123",
         STRIPE_WEBHOOK_SECRET="whsec_123",
         STRIPE_PRICE_T2_MONTHLY="price_t2_monthly",
+        STRIPE_PRICE_T3_MONTHLY="price_t3_monthly",
         STRIPE_PRICE_T3_YEARLY="price_t3_yearly",
     )
 
@@ -168,7 +186,7 @@ async def test_billing_status_exposes_availability_without_price_ids() -> None:
     assert status["publishable_key"] == "pk_test_123"
     assert status["available_prices"] == {
         "tier2": {"monthly": True, "yearly": False},
-        "tier3": {"monthly": False, "yearly": True},
+        "tier3": {"monthly": True, "yearly": True},
         "tier4": {"monthly": False, "yearly": False},
     }
     assert "price_t2_monthly" not in json.dumps(status)
@@ -190,6 +208,69 @@ async def test_checkout_session_rejects_existing_active_subscription() -> None:
     with pytest.raises(BillingPlanError):
         await service.create_checkout_session(user=UserModel.from_mongo(doc), tier="tier2", interval="monthly")
 
+    assert fake_stripe.posts == []
+
+
+@pytest.mark.asyncio
+async def test_subscription_change_session_deep_links_to_portal_update_flow() -> None:
+    doc = _user_doc(
+        billing={
+            "stripe_customer_id": "cus_123",
+            "stripe_subscription_id": "sub_123",
+            "subscription_status": "active",
+            "tier": "tier2",
+            "interval": "monthly",
+        }
+    )
+    fake_stripe = FakeStripeClient()
+    service = BillingService(_db(doc), _settings(), stripe_client=fake_stripe)
+
+    response = await service.create_subscription_change_session(
+        user=UserModel.from_mongo(doc),
+        tier="tier3",
+        interval="monthly",
+    )
+
+    assert response == {"url": "https://billing.stripe.test/session"}
+    assert fake_stripe.gets == [("/subscriptions/sub_123", {})]
+    assert fake_stripe.posts == [
+        (
+            "/billing_portal/sessions",
+            {
+                "customer": "cus_123",
+                "return_url": "https://app.kriegspiel.org/subscription?tier=tier3",
+                "flow_data[type]": "subscription_update_confirm",
+                "flow_data[after_completion][type]": "redirect",
+                "flow_data[after_completion][redirect][return_url]": "https://app.kriegspiel.org/subscription?tier=tier3",
+                "flow_data[subscription_update_confirm][subscription]": "sub_123",
+                "flow_data[subscription_update_confirm][items][0][id]": "si_123",
+                "flow_data[subscription_update_confirm][items][0][price]": "price_t3_monthly",
+                "flow_data[subscription_update_confirm][items][0][quantity]": "1",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_subscription_change_session_rejects_the_current_plan() -> None:
+    doc = _user_doc(
+        billing={
+            "stripe_customer_id": "cus_123",
+            "stripe_subscription_id": "sub_123",
+            "subscription_status": "active",
+        }
+    )
+    fake_stripe = FakeStripeClient()
+    service = BillingService(_db(doc), _settings(), stripe_client=fake_stripe)
+
+    with pytest.raises(BillingPlanError):
+        await service.create_subscription_change_session(
+            user=UserModel.from_mongo(doc),
+            tier="tier2",
+            interval="monthly",
+        )
+
+    assert fake_stripe.gets == [("/subscriptions/sub_123", {})]
     assert fake_stripe.posts == []
 
 

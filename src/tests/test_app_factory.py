@@ -109,6 +109,7 @@ def test_openapi_uses_prefixless_canonical_paths_and_hides_legacy_api_prefix():
     assert "/billing/subscription" in paths
     assert "/billing/checkout-session" in paths
     assert "/billing/portal-session" in paths
+    assert "/billing/subscription-change-session" in paths
     assert "/game/stats" in paths
     assert "/bots" in paths
     assert "/user/{username}" in paths
@@ -138,6 +139,7 @@ def test_openapi_marks_bearer_authenticated_routes_and_leaves_registration_publi
     assert schema["paths"]["/billing/subscription"]["get"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/billing/checkout-session"]["post"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/billing/portal-session"]["post"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/billing/subscription-change-session"]["post"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/game/open"]["get"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/auth/me"]["get"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/tech/users-report"]["get"]["security"] == [{"BearerAuth": []}]

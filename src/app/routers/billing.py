@@ -8,6 +8,7 @@ from app.models.billing import (
     BillingCheckoutResponse,
     BillingPortalResponse,
     BillingStatusResponse,
+    BillingSubscriptionChangeRequest,
 )
 from app.models.user import UserModel
 from app.services.billing_service import (
@@ -69,6 +70,22 @@ async def create_portal_session(
 ) -> dict:
     try:
         return await billing_service.create_portal_session(user=user)
+    except Exception as exc:  # noqa: BLE001
+        raise _billing_http_error(exc) from exc
+
+
+@router.post("/subscription-change-session", response_model=BillingPortalResponse)
+async def create_subscription_change_session(
+    payload: BillingSubscriptionChangeRequest,
+    user: UserModel = Depends(get_current_user),
+    billing_service: BillingService = Depends(get_billing_service),
+) -> dict:
+    try:
+        return await billing_service.create_subscription_change_session(
+            user=user,
+            tier=payload.tier,
+            interval=payload.interval,
+        )
     except Exception as exc:  # noqa: BLE001
         raise _billing_http_error(exc) from exc
 
