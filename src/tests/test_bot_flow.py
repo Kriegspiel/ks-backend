@@ -7,14 +7,22 @@ import pytest
 from bson import ObjectId
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pymongo.errors import DuplicateKeyError
 
 from app.config import Settings
-from app.llm_bot_policy import KNOWN_LLM_BOT_USERNAMES, bot_required_tier_for_username
+from app.llm_bot_policy import (
+    KNOWN_LLM_BOT_USERNAMES,
+    bot_required_tier_for_document,
+    bot_required_tier_for_username,
+    is_llm_bot_document,
+    normalize_llm_bot_tier,
+    tier_allows_llm_bots,
+)
 from app.main import create_app
 from app.models.bot import BotAvailabilityReportRequest, BotProfileSyncRequest, BotUsageReportRequest
 from app.models.game import CreateGameRequest
 from app.routers.bot import report_bot_availability, report_bot_usage, sync_bot_profile
-from app.services.bot_service import BotService
+from app.services.bot_service import BotProfileConflictError, BotService
 from app.services.game_service import GameConflictError, GameForbiddenError, GameService, GameValidationError
 from app.services.user_service import UserService
 from tests.test_game_service import FakeGamesCollection
@@ -684,12 +692,83 @@ def test_t5_llm_catalog_bots_are_known_and_availability_gated() -> None:
         )
 
 
+def test_llm_bot_policy_helpers_cover_role_defaults_and_document_detection() -> None:
+    assert normalize_llm_bot_tier(None, role="guest") == "guest"
+    assert normalize_llm_bot_tier(None, role="bot") == "tier6"
+    assert normalize_llm_bot_tier(" 2 ") == "tier2"
+    assert normalize_llm_bot_tier("   ") == "tier1"
+    assert normalize_llm_bot_tier("unknown") == "tier1"
+    assert tier_allows_llm_bots("guest") is False
+    assert tier_allows_llm_bots("tier1") is True
+    assert bot_required_tier_for_document(None) == "guest"
+    assert is_llm_bot_document(None) is False
+    assert is_llm_bot_document({"username": "custombot", "bot_profile": {"llm_backed": True}}) is True
+
+
 @pytest.mark.asyncio
 async def test_bot_profile_updates_return_none_when_no_active_bot_matches() -> None:
     service = BotService(FakeUsersCollection(), now_factory=lambda: datetime(2026, 6, 1, tzinfo=UTC))
 
     assert await service.report_model_availability(user_id="missing", provider="openai", ready=True, reason="ok") is None
     assert await service.sync_supported_rule_variants(user_id="missing", supported_rule_variants=["berkeley"]) is None
+
+
+@pytest.mark.asyncio
+async def test_bot_service_records_usage_with_custom_recorder() -> None:
+    recorded = []
+
+    async def recorder(report):
+        recorded.append(report)
+        return True
+
+    service = BotService(FakeUsersCollection(), game_usage_recorder=recorder)
+    payload = BotUsageReportRequest(
+        game_id="game1",
+        provider="openai",
+        model="gpt-5.4-nano",
+        response_id="resp1",
+        input_tokens=20,
+        output_tokens=5,
+        total_tokens=25,
+        cost_usd=0.001,
+    )
+
+    assert await service.record_usage(user_id="bot1", username="llm_gptnano", payload=payload) is True
+    assert recorded[0].bot_user_id == "bot1"
+    assert recorded[0].bot_username == "llm_gptnano"
+
+
+@pytest.mark.asyncio
+async def test_bot_profile_sync_rejects_duplicate_usernames() -> None:
+    current_id = ObjectId()
+    users = FakeUsersCollection()
+    users.docs.extend(
+        [
+            {"_id": current_id, "username": "oldbot", "role": "bot", "status": "active", "bot_profile": {}},
+            {"_id": ObjectId(), "username": "takenbot", "role": "bot", "status": "active", "bot_profile": {}},
+        ]
+    )
+
+    with pytest.raises(BotProfileConflictError):
+        await BotService(users).sync_supported_rule_variants(
+            user_id=str(current_id),
+            username="takenbot",
+            supported_rule_variants=["berkeley"],
+        )
+
+    class DuplicateOnUpdateUsers(FakeUsersCollection):
+        async def find_one_and_update(self, query: dict, update: dict, return_document=None):  # noqa: ANN001
+            raise DuplicateKeyError("duplicate username")
+
+    duplicate_users = DuplicateOnUpdateUsers()
+    duplicate_users.docs.append({"_id": current_id, "username": "oldbot", "role": "bot", "status": "active", "bot_profile": {}})
+
+    with pytest.raises(BotProfileConflictError):
+        await BotService(duplicate_users).sync_supported_rule_variants(
+            user_id=str(current_id),
+            username="newbot",
+            supported_rule_variants=["berkeley"],
+        )
 
 
 @pytest.mark.asyncio
@@ -737,6 +816,14 @@ async def test_bot_routes_reject_non_bot_users_and_missing_bot_updates() -> None
     assert availability_missing.value.status_code == 404
     assert usage_unavailable.value.status_code == 503
     assert profile_missing.value.status_code == 404
+
+    bot_service.record_usage = AsyncMock(return_value=True)
+    await report_bot_usage(usage, user=bot_user, bot_service=bot_service)
+
+    bot_service.sync_supported_rule_variants = AsyncMock(side_effect=BotProfileConflictError("taken"))
+    with pytest.raises(HTTPException) as profile_conflict:
+        await sync_bot_profile(profile, user=bot_user, bot_service=bot_service)
+    assert profile_conflict.value.status_code == 409
 
 
 @pytest.mark.asyncio

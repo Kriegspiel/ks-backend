@@ -9,8 +9,9 @@ from unittest.mock import AsyncMock
 import pytest
 from bson import ObjectId
 
-from app.models.game import CreateGameRequest
+from app.models.game import ClockState, CreateGameRequest
 from app.models.user import default_user_stats_payload
+from app.services import game_service as game_service_module
 from app.services.engine_adapter import create_new_game, serialize_game_state
 from app.services.game_service import (
     BOT_GAME_FLUSH_PLIES,
@@ -1222,7 +1223,7 @@ async def test_resign_rejects_non_participant() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_game_state_auto_completes_llm_bot_at_turn_limit() -> None:
+async def test_get_game_state_auto_completes_llm_bot_at_turn_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     games = FakeGamesCollection()
     game = active_game_doc(white_role="bot", black_role="bot", turn="black")
     game["_id"] = ObjectId()
@@ -1247,6 +1248,32 @@ async def test_get_game_state_auto_completes_llm_bot_at_turn_limit() -> None:
     await service.flush_all()
     assert games.docs[0]["state"] == "completed"
     assert games.docs[0]["result"] == {"winner": "white", "reason": "resignation"}
+
+    human_games = FakeGamesCollection()
+    human_game = active_game_doc(white_role="user", black_role="bot", turn="black")
+    human_game["_id"] = ObjectId()
+    human_game["game_code"] = "H4M7T2"
+    human_game["engine_state"] = None
+    human_game["move_number"] = 257
+    human_game["moves"] = [
+        {"ply": index + 1, "question_type": "COMMON", "move_done": True}
+        for index in range(256)
+    ]
+    human_game["llm_bot_turn_limits"] = {"black": 128}
+    human_games.docs.append(human_game)
+    human_service = GameService(human_games)
+    human_involved_checks = iter([False, True])
+
+    def toggled_human_involved(game: dict) -> bool:  # noqa: ARG001
+        return next(human_involved_checks, True)
+
+    monkeypatch.setattr(human_service, "_is_human_involved_game", toggled_human_involved)
+
+    human_state = await human_service.get_game_state(game_id=str(human_game["_id"]), user_id="u1")
+
+    assert human_state.state == "completed"
+    assert human_games.docs[0]["state"] == "completed"
+    assert human_games.docs[0]["result"] == {"winner": "white", "reason": "resignation"}
 
 
 @pytest.mark.asyncio
@@ -1287,6 +1314,227 @@ def test_bot_vs_bot_llm_turn_limit_sampling_resolves_collisions() -> None:
     service = GameService(FakeGamesCollection(), rng=Rng())
 
     assert service._sample_distinct_bot_vs_bot_llm_turn_limits(2) == [150, 151]
+
+
+def test_llm_usage_and_limit_helpers_cover_fallbacks() -> None:
+    service = GameService(FakeGamesCollection())
+
+    assert GameService._successful_board_ply_count({"engine_state": {"game_state": {"move_stack": [1, 2, 3]}}}) == 3
+    assert GameService._successful_board_ply_count(
+        {"engine_state": {"game_state": {"move_stack": "bad"}}, "moves": [{"question_type": "COMMON", "move_done": True}]}
+    ) == 1
+    assert GameService._successful_board_ply_count({"moves": "legacy-bad"}) == 0
+    assert GameService._stored_llm_bot_ply_limit({"llm_bot_ply_limit": None}) is None
+    assert GameService._stored_llm_bot_ply_limit({"llm_bot_ply_limit": "bad"}) is None
+    assert GameService._stored_llm_bot_ply_limit({"llm_bot_ply_limit": 0}) is None
+    assert GameService._stored_llm_bot_ply_limit_for_color(
+        {"llm_bot_ply_limits": {"white": "bad"}, "llm_bot_ply_limit": 64},
+        "white",
+    ) is None
+    assert GameService._stored_llm_bot_ply_limit_for_color({"llm_bot_ply_limits": {"white": "32"}}, "white") == 32
+    assert GameService._stored_llm_bot_ply_limit_for_color({"llm_bot_ply_limits": {"white": 0}}, "white") is None
+    assert GameService._stored_llm_bot_ply_limit_for_color(
+        {"llm_bot_ply_limits": {}, "llm_bot_ply_limit": 64},
+        "white",
+    ) == 64
+    assert GameService._stored_llm_bot_ply_limit_for_color({"llm_bot_ply_limit": 64}, "white") == 64
+    assert GameService._stored_llm_bot_turn_limit({"llm_bot_turn_limit": None}) is None
+    assert GameService._stored_llm_bot_turn_limit({"llm_bot_turn_limit": "bad"}) is None
+    assert GameService._stored_llm_bot_turn_limit({"llm_bot_turn_limit": 0}) is None
+    assert GameService._stored_llm_bot_turn_limit_for_color(
+        {"llm_bot_turn_limits": {"black": "bad"}, "llm_bot_turn_limit": 128},
+        "black",
+    ) is None
+    assert GameService._stored_llm_bot_turn_limit_for_color({"llm_bot_turn_limits": {"black": "64"}}, "black") == 64
+    assert GameService._stored_llm_bot_turn_limit_for_color({"llm_bot_turn_limits": {"black": 0}}, "black") is None
+    assert GameService._stored_llm_bot_turn_limit_for_color(
+        {"llm_bot_turn_limits": {}, "llm_bot_turn_limit": 128},
+        "black",
+    ) == 128
+    assert GameService._stored_llm_bot_turn_limit_for_color({"llm_bot_turn_limit": 128}, "black") == 128
+
+    bot_game = {
+        "white": {"role": "bot"},
+        "black": {"role": "bot"},
+        "llm_bot_ply_limit": 64,
+        "llm_bot_turn_limit": 128,
+    }
+    assert service._visible_llm_bot_ply_limit(game=bot_game, viewer_color="white") == 64
+    assert service._visible_llm_bot_turn_limit(game=bot_game, viewer_color="white") == 128
+    assert service._visible_llm_bot_ply_limit(
+        game={**bot_game, "llm_bot_turn_limits": {"white": 150}},
+        viewer_color="white",
+    ) is None
+    assert service._visible_llm_bot_ply_limit(
+        game={"white": {"role": "user"}, "black": {"role": "bot"}, "llm_bot_ply_limit": 64},
+        viewer_color="black",
+    ) is None
+    assert service._visible_llm_bot_ply_limit(
+        game={"white": {"role": "bot"}, "black": {"role": "bot"}, "llm_bot_ply_limit": 64},
+        viewer_color="green",
+    ) is None
+    assert service._visible_llm_bot_turn_limit(game={"white": {"role": "user"}}, viewer_color="white") is None
+    assert service._visible_llm_bot_turn_limit(game={"white": {"role": "bot"}}, viewer_color="black") is None
+    assert 128 <= service._sample_bot_vs_bot_llm_turn_limit() <= 256
+    sampled = service._sample_distinct_bot_vs_bot_llm_turn_limits(1)
+    assert len(sampled) == 1
+    assert 128 <= sampled[0] <= 256
+
+    class CollisionRng:
+        def randint(self, lower: int, upper: int) -> int:  # noqa: ARG002
+            return 150
+
+    assert GameService(FakeGamesCollection(), rng=CollisionRng())._sample_distinct_bot_vs_bot_llm_turn_limits(3) == [
+        150,
+        151,
+        152,
+    ]
+
+    clock = ClockState(white_remaining=1.0, black_remaining=2.0, active_color=None)
+    service._clock = SimpleNamespace(response_clock=lambda **kwargs: clock)  # type: ignore[method-assign]
+    response = SimpleNamespace(model_copy=lambda *, update: update["clock"])
+    assert service._game_state_response_with_current_clock(
+        response,
+        time_control=None,
+        now=datetime(2026, 7, 6, tzinfo=UTC),
+    ) is clock
+
+
+def test_apply_llm_bot_turn_limit_rejects_ineligible_games_and_completes_eligible_bot() -> None:
+    service = GameService(FakeGamesCollection())
+    now = datetime(2026, 7, 6, tzinfo=UTC)
+
+    base = active_game_doc(white_role="bot", black_role="bot", turn="white")
+    base["engine_state"] = None
+    base["moves"] = [
+        {"question_type": "COMMON", "move_done": True},
+        {"question_type": "COMMON", "move_done": True},
+    ]
+    base["llm_bot_turn_limits"] = {"white": 1}
+
+    for mutation in (
+        lambda game: game.update({"state": "completed"}),
+        lambda game: game.update({"white": {"role": "user"}}),
+        lambda game: game.update({"turn": "green"}),
+        lambda game: game.pop("llm_bot_turn_limits"),
+        lambda game: game.update({"white": None}),
+        lambda game: (game.pop("llm_bot_turn_limits"), game.update({"llm_bot_turn_limit": 1, "llm_bot_user_id": "other"})),
+    ):
+        game = deepcopy(base)
+        mutation(game)
+        assert service._apply_llm_bot_turn_limit_locked(game=game, now=now) is False
+
+    eligible = deepcopy(base)
+    assert service._apply_llm_bot_turn_limit_locked(game=eligible, now=now) is True
+    assert eligible["state"] == "completed"
+    assert eligible["turn"] is None
+    assert eligible["result"] == {"winner": "black", "reason": "resignation"}
+
+
+@pytest.mark.asyncio
+async def test_bot_doc_and_bot_vs_bot_limit_payload_cover_non_llm_fallbacks() -> None:
+    service = GameService(FakeGamesCollection(), users_collection=FakeUsersCollection())
+
+    assert await service._bot_doc_for_player({"user_id": "missing", "username": "randobot"}) == {
+        "_id": "missing",
+        "username": "randobot",
+        "role": "bot",
+        "bot_profile": {},
+    }
+    assert await service._bot_vs_bot_llm_limit_payload(
+        white={"user_id": "missing-white", "username": "randobot", "role": "bot"},
+        black={"user_id": "human", "username": "player", "role": "user"},
+    ) == {}
+
+
+@pytest.mark.asyncio
+async def test_record_llm_usage_resolves_non_object_game_refs_and_updates_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    games = FakeGamesCollection()
+    now = datetime(2026, 7, 6, 12, tzinfo=UTC)
+    game = {
+        "_id": ObjectId(),
+        "game_code": "CODE12",
+        "rule_variant": "berkeley_any",
+        "white": {"user_id": "bot1", "username": "llm_gptnano", "connected": True, "role": "bot"},
+        "black": {"user_id": "u2", "username": "opponent", "connected": True, "role": "user"},
+        "state": "active",
+        "turn": "white",
+        "move_number": 4,
+        "created_at": now,
+        "updated_at": now,
+        "moves": [],
+    }
+    games.docs.append(deepcopy(game))
+    service = GameService(games)
+    entry = await service._prime_cache(deepcopy(game), persisted=True)
+    report = LlmUsageReport(
+        game_id="missing",
+        game_code="CODE12",
+        bot_user_id="bot1",
+        bot_username="llm_gptnano",
+        provider="openai",
+        model="gpt-5.4-nano",
+        response_id="resp-code",
+        input_tokens=100,
+        cached_input_tokens=20,
+        output_tokens=30,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        total_tokens=130,
+        cost_usd=0.002,
+    )
+
+    assert await service.record_llm_usage(report, now=now) is True
+    assert entry.dirty is True
+    assert entry.game["stats"]["llm_usage"]["white"]["response_ids"] == ["resp-code"]
+
+    assert await service.record_llm_usage(report, now=now) is True
+
+    uncached_report = LlmUsageReport(
+        game_id=str(game["_id"]),
+        game_code=None,
+        bot_user_id="bot1",
+        bot_username="llm_gptnano",
+        provider="openai",
+        model="gpt-5.4-nano",
+        response_id="resp-uncached",
+        input_tokens=10,
+        cached_input_tokens=0,
+        output_tokens=3,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        total_tokens=13,
+        cost_usd=0.001,
+    )
+    service._cache.clear()
+    assert await service.record_llm_usage(uncached_report, now=now) is True
+
+    empty_ref_report = LlmUsageReport(
+        game_id="",
+        game_code="",
+        bot_user_id="bot1",
+        bot_username="llm_gptnano",
+        provider="openai",
+        model="gpt-5.4-nano",
+        response_id="resp-empty",
+        input_tokens=1,
+        cached_input_tokens=0,
+        output_tokens=1,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        total_tokens=2,
+        cost_usd=0.0,
+    )
+    assert await service.record_llm_usage(empty_ref_report, now=now) is False
+
+    async def no_store(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+        return False
+
+    monkeypatch.setattr(game_service_module, "apply_llm_usage_to_game_stats", lambda *args, **kwargs: False)
+    monkeypatch.setattr(game_service_module, "store_llm_usage_in_game_stats", no_store)
+    cached_entry = await service._prime_cache(deepcopy(game), persisted=True)
+    assert await service.record_llm_usage(uncached_report, now=now) is False
+    assert cached_entry.dirty is False
 
 
 @pytest.mark.asyncio

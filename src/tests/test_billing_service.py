@@ -12,7 +12,16 @@ from bson import ObjectId
 
 from app.config import Settings
 from app.models.user import UserModel
-from app.services.billing_service import BillingPlanError, BillingService, BillingSignatureError
+from app.services.billing_service import (
+    BillingConfigurationError,
+    BillingPlanError,
+    BillingProviderError,
+    BillingService,
+    BillingSignatureError,
+    StripeBillingClient,
+    _portal_price_signature,
+    _subscription_price_id,
+)
 
 
 def _user_doc(**overrides) -> dict:
@@ -156,6 +165,28 @@ class FakeStripeClient:
         raise AssertionError(f"unexpected Stripe path {path}")
 
 
+class EmptyStripeClient(FakeStripeClient):
+    async def post(self, path: str, data: dict[str, str]) -> dict:
+        self.posts.append((path, data))
+        return {}
+
+
+class EmptyPortalSessionStripeClient(FakeStripeClient):
+    async def post(self, path: str, data: dict[str, str]) -> dict:
+        if path == "/billing_portal/sessions":
+            self.posts.append((path, data))
+            return {}
+        return await super().post(path, data)
+
+
+class EmptyPortalConfigurationStripeClient(FakeStripeClient):
+    async def post(self, path: str, data: dict[str, str]) -> dict:
+        if path == "/billing_portal/configurations":
+            self.posts.append((path, data))
+            return {}
+        return await super().post(path, data)
+
+
 def _settings() -> Settings:
     return Settings(
         ENVIRONMENT="testing",
@@ -167,6 +198,10 @@ def _settings() -> Settings:
         STRIPE_PRICE_T3_MONTHLY="price_t3_monthly",
         STRIPE_PRICE_T3_YEARLY="price_t3_yearly",
     )
+
+
+def _settings_without_stripe() -> Settings:
+    return Settings(ENVIRONMENT="testing", SITE_ORIGIN="https://app.kriegspiel.org")
 
 
 def _db(doc: dict):
@@ -358,6 +393,169 @@ async def test_subscription_change_session_rejects_the_current_plan() -> None:
 
 
 @pytest.mark.asyncio
+async def test_subscription_change_session_rejects_unavailable_accounts_and_invalid_subscriptions() -> None:
+    guest_doc = _user_doc(role="guest")
+    service = BillingService(_db(guest_doc), _settings(), stripe_client=FakeStripeClient())
+    with pytest.raises(PermissionError, match="guest account"):
+        await service.create_subscription_change_session(
+            user=UserModel.from_mongo(guest_doc),
+            tier="tier3",
+            interval="monthly",
+        )
+
+    active_billing = {
+        "stripe_customer_id": "cus_123",
+        "stripe_subscription_id": "sub_123",
+        "subscription_status": "active",
+    }
+    active_doc = _user_doc(billing=active_billing)
+    disabled = BillingService(_db(active_doc), _settings_without_stripe(), stripe_client=FakeStripeClient())
+    with pytest.raises(BillingConfigurationError):
+        await disabled.create_subscription_change_session(
+            user=UserModel.from_mongo(active_doc),
+            tier="tier3",
+            interval="monthly",
+        )
+
+    missing_subscription_doc = _user_doc(billing={"stripe_customer_id": "cus_123"})
+    missing_subscription = BillingService(
+        _db(missing_subscription_doc),
+        _settings(),
+        stripe_client=FakeStripeClient(),
+    )
+    with pytest.raises(LookupError):
+        await missing_subscription.create_subscription_change_session(
+            user=UserModel.from_mongo(missing_subscription_doc),
+            tier="tier3",
+            interval="monthly",
+        )
+
+    mismatched_customer = FakeStripeClient()
+    mismatched_customer.subscriptions["sub_123"] = {
+        **mismatched_customer.subscriptions["sub_123"],
+        "customer": "cus_other",
+    }
+    mismatch_service = BillingService(_db(active_doc), _settings(), stripe_client=mismatched_customer)
+    with pytest.raises(BillingProviderError, match="does not match"):
+        await mismatch_service.create_subscription_change_session(
+            user=UserModel.from_mongo(active_doc),
+            tier="tier3",
+            interval="monthly",
+        )
+
+    inactive_subscription = FakeStripeClient()
+    inactive_subscription.subscriptions["sub_123"] = {
+        **inactive_subscription.subscriptions["sub_123"],
+        "status": "canceled",
+    }
+    inactive_service = BillingService(_db(active_doc), _settings(), stripe_client=inactive_subscription)
+    with pytest.raises(BillingPlanError, match="active subscriptions"):
+        await inactive_service.create_subscription_change_session(
+            user=UserModel.from_mongo(active_doc),
+            tier="tier3",
+            interval="monthly",
+        )
+
+    missing_item = FakeStripeClient()
+    missing_item.subscriptions["sub_123"] = {
+        **missing_item.subscriptions["sub_123"],
+        "items": {"data": [{"id": "si_123", "price": {}}]},
+    }
+    missing_item_service = BillingService(_db(active_doc), _settings(), stripe_client=missing_item)
+    with pytest.raises(BillingProviderError, match="subscription item"):
+        await missing_item_service.create_subscription_change_session(
+            user=UserModel.from_mongo(active_doc),
+            tier="tier3",
+            interval="monthly",
+        )
+
+    empty_portal = EmptyPortalSessionStripeClient()
+    empty_portal_service = BillingService(_db(active_doc), _settings(), stripe_client=empty_portal)
+    with pytest.raises(BillingProviderError, match="billing portal URL"):
+        await empty_portal_service.create_subscription_change_session(
+            user=UserModel.from_mongo(active_doc),
+            tier="tier3",
+            interval="monthly",
+        )
+
+
+@pytest.mark.asyncio
+async def test_subscription_change_portal_configuration_error_and_skip_paths() -> None:
+    active_doc = _user_doc(
+        billing={
+            "stripe_customer_id": "cus_123",
+            "stripe_subscription_id": "sub_123",
+            "subscription_status": "active",
+        }
+    )
+    user = UserModel.from_mongo(active_doc)
+
+    missing_product = FakeStripeClient()
+    missing_product.prices["price_t2_monthly"] = {"id": "price_t2_monthly"}
+    missing_product_service = BillingService(_db(active_doc), _settings(), stripe_client=missing_product)
+    with pytest.raises(BillingProviderError, match="missing its product"):
+        await missing_product_service._portal_configuration_price_groups()  # noqa: SLF001
+
+    no_prices = BillingService(_db(active_doc), _settings_without_stripe(), stripe_client=FakeStripeClient())
+    with pytest.raises(BillingConfigurationError, match="No Stripe subscription prices"):
+        await no_prices._portal_configuration_price_groups()  # noqa: SLF001
+
+    empty_configuration = EmptyPortalConfigurationStripeClient()
+    empty_configuration_service = BillingService(_db(active_doc), _settings(), stripe_client=empty_configuration)
+    with pytest.raises(BillingProviderError, match="configuration id"):
+        await empty_configuration_service._portal_configuration_for_subscription_changes()  # noqa: SLF001
+
+    class NonListConfigurationsStripeClient(FakeStripeClient):
+        async def get(self, path: str, params: dict[str, str] | None = None) -> dict:
+            if path == "/billing_portal/configurations":
+                self.gets.append((path, params or {}))
+                return {"data": "legacy"}
+            return await super().get(path, params)
+
+    non_list_configurations = NonListConfigurationsStripeClient()
+    non_list_service = BillingService(_db(active_doc), _settings(), stripe_client=non_list_configurations)
+    assert (
+        await non_list_service._portal_configuration_for_subscription_changes()  # noqa: SLF001
+    ).config_id == "bpc_1"
+
+    skip_configs = FakeStripeClient()
+    price_groups = await BillingService(
+        _db(active_doc),
+        _settings(),
+        stripe_client=skip_configs,
+    )._portal_configuration_price_groups()  # noqa: SLF001
+    price_signature = _portal_price_signature(price_groups)
+    matching_metadata = {
+        "ks_app": "kriegspiel",
+        "ks_purpose": "subscription_change",
+        "ks_price_signature": price_signature,
+    }
+    skip_configs.portal_configurations = [
+        "legacy",
+        {"id": "inactive", "active": False, "metadata": matching_metadata},
+        {"id": "wrong-metadata", "active": True, "metadata": {"ks_app": "other"}},
+        {
+            "id": "disabled-update",
+            "active": True,
+            "metadata": matching_metadata,
+            "features": {"subscription_update": {"enabled": False, "proration_behavior": "always_invoice"}},
+        },
+        {
+            "id": "",
+            "active": True,
+            "metadata": matching_metadata,
+            "features": {"subscription_update": {"enabled": True, "proration_behavior": "always_invoice"}},
+        },
+    ]
+    skip_service = BillingService(_db(active_doc), _settings(), stripe_client=skip_configs)
+
+    assert await skip_service.create_subscription_change_session(user=user, tier="tier3", interval="monthly") == {
+        "url": "https://billing.stripe.test/session"
+    }
+    assert [path for path, _data in skip_configs.posts].count("/billing_portal/configurations") == 1
+
+
+@pytest.mark.asyncio
 async def test_webhook_activates_and_clears_subscription_access() -> None:
     doc = _user_doc(billing={"stripe_customer_id": "cus_123"})
     service = BillingService(_db(doc), _settings(), stripe_client=FakeStripeClient())
@@ -394,3 +592,245 @@ def test_webhook_rejects_invalid_signature() -> None:
 
     with pytest.raises(BillingSignatureError):
         service.verify_webhook(b"{}", "t=1000,v1=wrong", now=1_000)
+
+
+@pytest.mark.asyncio
+async def test_status_and_plan_helpers_handle_disabled_and_unknown_prices() -> None:
+    doc = _user_doc(_id="plain-user-id", billing="legacy")
+    service = BillingService(_db(doc), _settings_without_stripe(), stripe_client=FakeStripeClient())
+
+    status = await service.status_for_user(UserModel.from_mongo(doc))
+
+    assert status["enabled"] is False
+    assert status["publishable_key"] is None
+    assert status["billing"] == {"has_customer": False, "subscription_status": None, "tier": None, "interval": None}
+    assert service._price_id_for("tier9", "monthly") is None
+    assert service._plan_for_price_id("") is None
+    assert service._plan_for_price_id("price_missing") is None
+    with pytest.raises(BillingPlanError):
+        service._plan_for("tier4", "monthly")
+
+
+@pytest.mark.asyncio
+async def test_checkout_and_portal_error_paths() -> None:
+    guest_doc = _user_doc(role="guest")
+    service = BillingService(_db(guest_doc), _settings(), stripe_client=FakeStripeClient())
+    with pytest.raises(PermissionError):
+        await service.create_checkout_session(user=UserModel.from_mongo(guest_doc), tier="tier2", interval="monthly")
+    with pytest.raises(PermissionError):
+        await service.create_portal_session(user=UserModel.from_mongo(guest_doc))
+
+    user_doc = _user_doc()
+    disabled = BillingService(_db(user_doc), _settings_without_stripe(), stripe_client=FakeStripeClient())
+    with pytest.raises(BillingConfigurationError):
+        await disabled.create_checkout_session(user=UserModel.from_mongo(user_doc), tier="tier2", interval="monthly")
+    with pytest.raises(BillingConfigurationError):
+        await disabled.create_portal_session(user=UserModel.from_mongo(user_doc))
+
+    missing_customer = BillingService(_db(user_doc), _settings(), stripe_client=FakeStripeClient())
+    with pytest.raises(LookupError):
+        await missing_customer.create_portal_session(user=UserModel.from_mongo(user_doc))
+
+    empty_customer = BillingService(_db(_user_doc()), _settings(), stripe_client=EmptyStripeClient())
+    with pytest.raises(BillingProviderError, match="customer id"):
+        await empty_customer.create_checkout_session(user=UserModel.from_mongo(_user_doc()), tier="tier2", interval="monthly")
+
+    existing_customer_doc = _user_doc(billing={"stripe_customer_id": "cus_existing"})
+    empty_checkout = BillingService(_db(existing_customer_doc), _settings(), stripe_client=EmptyStripeClient())
+    with pytest.raises(BillingProviderError, match="checkout client secret"):
+        await empty_checkout.create_checkout_session(
+            user=UserModel.from_mongo(existing_customer_doc),
+            tier="tier2",
+            interval="monthly",
+        )
+
+    portal_doc = _user_doc(billing={"stripe_customer_id": "cus_existing"})
+    empty_portal = BillingService(_db(portal_doc), _settings(), stripe_client=EmptyStripeClient())
+    with pytest.raises(BillingProviderError, match="billing portal URL"):
+        await empty_portal.create_portal_session(user=UserModel.from_mongo(portal_doc))
+
+    portal = BillingService(_db(portal_doc), _settings(), stripe_client=FakeStripeClient())
+    assert await portal.create_portal_session(user=UserModel.from_mongo(portal_doc)) == {
+        "url": "https://billing.stripe.test/session"
+    }
+
+
+def test_webhook_signature_rejects_malformed_payloads() -> None:
+    service = BillingService(_db(_user_doc()), _settings(), stripe_client=FakeStripeClient())
+    valid_payload = b"{}"
+
+    with pytest.raises(BillingConfigurationError):
+        BillingService(_db(_user_doc()), _settings_without_stripe(), stripe_client=FakeStripeClient()).verify_webhook(
+            valid_payload,
+            "t=1000,v1=wrong",
+            now=1000,
+        )
+    with pytest.raises(BillingSignatureError, match="Missing"):
+        service.verify_webhook(valid_payload, None, now=1000)
+    with pytest.raises(BillingSignatureError, match="timestamp"):
+        service.verify_webhook(valid_payload, "t=not-int,v1=wrong,ignored", now=1000)
+    with pytest.raises(BillingSignatureError, match="Expired"):
+        service.verify_webhook(valid_payload, _signature(valid_payload, "whsec_123", timestamp=1000), now=1401)
+
+    timestamp = 1000
+    bad_json = b"{"
+    bad_json_sig = _signature(bad_json, "whsec_123", timestamp=timestamp)
+    with pytest.raises(BillingSignatureError, match="JSON"):
+        service.verify_webhook(bad_json, bad_json_sig, now=timestamp)
+
+    list_payload = b"[]"
+    list_sig = _signature(list_payload, "whsec_123", timestamp=timestamp)
+    with pytest.raises(BillingSignatureError, match="payload"):
+        service.verify_webhook(list_payload, list_sig, now=timestamp)
+
+
+@pytest.mark.asyncio
+async def test_webhook_ignored_checkout_and_inactive_subscription_paths() -> None:
+    doc = _user_doc()
+    service = BillingService(_db(doc), _settings(), stripe_client=FakeStripeClient())
+
+    ignored_payload = json.dumps({"type": "anything", "data": {"object": "not-dict"}}).encode("utf-8")
+    assert await service.handle_webhook(ignored_payload, _signature(ignored_payload, "whsec_123")) == {"status": "ignored"}
+
+    unknown_payload = json.dumps({"type": "invoice.paid", "data": {"object": {}}}).encode("utf-8")
+    assert await service.handle_webhook(unknown_payload, _signature(unknown_payload, "whsec_123")) == {"status": "ok"}
+
+    missing_metadata_checkout = {"type": "checkout.session.completed", "data": {"object": {"payment_status": "paid"}}}
+    missing_metadata_payload = json.dumps(missing_metadata_checkout).encode("utf-8")
+    assert await service.handle_webhook(missing_metadata_payload, _signature(missing_metadata_payload, "whsec_123")) == {
+        "status": "ok"
+    }
+
+    incomplete_checkout = {
+        "type": "checkout.session.completed",
+        "data": {"object": {"metadata": {"ks_user_id": str(doc["_id"]), "ks_tier": "tier2", "ks_interval": "monthly"}}},
+    }
+    incomplete_payload = json.dumps(incomplete_checkout).encode("utf-8")
+    assert await service.handle_webhook(incomplete_payload, _signature(incomplete_payload, "whsec_123")) == {"status": "ok"}
+    assert "billing" not in doc
+
+    checkout = {
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "client_reference_id": str(doc["_id"]),
+                "customer": "cus_checkout",
+                "subscription": "sub_checkout",
+                "payment_status": "paid",
+                "metadata": {"ks_tier": "tier2", "ks_interval": "monthly"},
+            }
+        },
+    }
+    checkout_payload = json.dumps(checkout).encode("utf-8")
+    assert await service.handle_webhook(checkout_payload, _signature(checkout_payload, "whsec_123")) == {"status": "ok"}
+    assert doc["llm_bot_tier"] == "tier2"
+    assert doc["billing"]["stripe_customer_id"] == "cus_checkout"
+
+    inactive = {
+        "type": "customer.subscription.updated",
+        "data": {"object": {"id": "sub_checkout", "customer": "cus_checkout", "status": "past_due", "metadata": {}}},
+    }
+    inactive_payload = json.dumps(inactive).encode("utf-8")
+    assert await service.handle_webhook(inactive_payload, _signature(inactive_payload, "whsec_123")) == {"status": "ok"}
+    assert "llm_bot_tier" not in doc
+    assert doc["billing"]["subscription_status"] == "past_due"
+
+    no_customer = {
+        "type": "customer.subscription.updated",
+        "data": {
+            "object": {
+                "id": "sub_missing",
+                "status": "active",
+                "metadata": {"ks_tier": "tier2", "ks_interval": "monthly"},
+            }
+        },
+    }
+    no_customer_payload = json.dumps(no_customer).encode("utf-8")
+    assert await service.handle_webhook(no_customer_payload, _signature(no_customer_payload, "whsec_123")) == {"status": "ok"}
+
+    await service._activate_subscription_access(
+        user_query={"_id": doc["_id"]},
+        customer_id=None,
+        subscription_id=None,
+        tier="tier9",
+        interval="monthly",
+        status="active",
+    )
+    await service._activate_subscription_access(
+        user_query={"_id": doc["_id"]},
+        customer_id=None,
+        subscription_id=None,
+        tier="tier2",
+        interval="monthly",
+        status="active",
+    )
+    await service._clear_subscription_access(customer_id="cus_checkout", subscription_id=None, status="deleted")
+    await service._clear_subscription_access(customer_id=None, subscription_id=None, status="deleted")
+    assert _subscription_price_id({}) is None
+    assert _subscription_price_id({"items": {"data": []}}) is None
+
+
+@pytest.mark.asyncio
+async def test_stripe_client_errors_and_lazy_service_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: object, *, json_error: bool = False) -> None:
+            self.status_code = status_code
+            self.payload = payload
+            self.json_error = json_error
+
+        def json(self):
+            if self.json_error:
+                raise ValueError("bad json")
+            return self.payload
+
+    class FakeAsyncClient:
+        responses: list[FakeResponse] = []
+
+        def __init__(self, timeout: float) -> None:
+            assert timeout == 20.0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def post(self, url: str, content: str, headers: dict[str, str]):
+            assert url == "https://stripe.test/v1/thing"
+            assert content == "a=b"
+            assert headers["Authorization"] == "Bearer sk_test_123"
+            return self.responses.pop(0)
+
+        async def get(self, url: str, params: dict[str, str], headers: dict[str, str]):
+            assert url == "https://stripe.test/v1/thing"
+            assert params == {"limit": "1"}
+            assert headers["Authorization"] == "Bearer sk_test_123"
+            return self.responses.pop(0)
+
+    monkeypatch.setattr("app.services.billing_service.httpx.AsyncClient", FakeAsyncClient)
+    settings = _settings().model_copy(update={"STRIPE_API_BASE": "https://stripe.test/v1/"})
+    client = StripeBillingClient(settings)
+
+    FakeAsyncClient.responses = [FakeResponse(200, {"ok": True})]
+    assert await client.post("/thing", {"a": "b"}) == {"ok": True}
+
+    FakeAsyncClient.responses = [FakeResponse(200, {"data": []})]
+    assert await client.get("/thing", {"limit": "1"}) == {"data": []}
+
+    FakeAsyncClient.responses = [FakeResponse(200, {}, json_error=True)]
+    with pytest.raises(BillingProviderError, match="non-JSON"):
+        await client.post("/thing", {"a": "b"})
+
+    FakeAsyncClient.responses = [FakeResponse(400, {"error": {"message": "card declined"}})]
+    with pytest.raises(BillingProviderError, match="card declined"):
+        await client.post("/thing", {"a": "b"})
+
+    FakeAsyncClient.responses = [FakeResponse(500, {})]
+    with pytest.raises(BillingProviderError, match="rejected"):
+        await client.post("/thing", {"a": "b"})
+
+    with pytest.raises(BillingConfigurationError):
+        StripeBillingClient(_settings_without_stripe())
+
+    lazy_service = BillingService(_db(_user_doc()), _settings())
+    assert isinstance(lazy_service.stripe_client, StripeBillingClient)

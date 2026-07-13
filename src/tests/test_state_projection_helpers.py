@@ -98,6 +98,7 @@ def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_
 
 def test_state_projection_turn_and_referee_helpers_skip_unrecognized_entries(monkeypatch) -> None:
     assert projection._build_turn_announcement({"announcement": "SECRET_MOVE"}, perspective="own") is None
+    assert projection.build_viewer_referee_turns(viewer_color="white", stored_scoresheet=None) == []
 
     turns = projection.build_referee_turns(
         [

@@ -307,6 +307,28 @@ def test_user_game_filter_options_route_returns_facets() -> None:
     service.get_game_history_filter_options.assert_awaited_once_with(db, "507f1f77bcf86cd799439011")
 
 
+def test_user_game_filter_options_route_404s_for_missing_user() -> None:
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    service = StubService()
+    app.dependency_overrides[get_user_service] = lambda: service
+
+    class FakeUsers:
+        async def find_one(self, query):  # noqa: ARG002
+            return None
+
+    class FakeDB:
+        users = FakeUsers()
+        sessions = object()
+
+    dependencies.get_db = lambda: FakeDB()
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/user/missing/games/filter-options")
+
+    assert response.status_code == 404
+    service.get_game_history_filter_options.assert_not_awaited()
+
+
 def test_tech_report_routes_require_operator_access() -> None:
     app = create_app(Settings(ENVIRONMENT="testing", TECH_REPORT_USERNAMES="playerone"))
     service = StubService()
