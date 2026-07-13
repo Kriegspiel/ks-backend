@@ -59,6 +59,10 @@ def test_billing_routes_call_service_contracts() -> None:
             assert kwargs["user"] is user
             return {"url": f"https://billing.example/{kwargs['user'].username}"}
 
+        async def create_subscription_change_session(self, **kwargs):
+            assert kwargs["user"] is user
+            return {"url": f"https://billing.example/change/{kwargs['tier']}/{kwargs['interval']}"}
+
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[get_billing_service] = StubBillingService
 
@@ -70,6 +74,11 @@ def test_billing_routes_call_service_contracts() -> None:
             headers={"host": "app.kriegspiel.org"},
         )
         portal = client.post("/api/billing/portal-session", headers={"host": "app.kriegspiel.org"})
+        change = client.post(
+            "/api/billing/subscription-change-session",
+            json={"tier": "tier3", "interval": "yearly"},
+            headers={"host": "app.kriegspiel.org"},
+        )
 
     assert status.status_code == 200
     assert status.json()["publishable_key"] == "pk_test_123"
@@ -77,3 +86,5 @@ def test_billing_routes_call_service_contracts() -> None:
     assert checkout.json() == {"client_secret": "secret:tier2:monthly"}
     assert portal.status_code == 200
     assert portal.json() == {"url": "https://billing.example/playerone"}
+    assert change.status_code == 200
+    assert change.json() == {"url": "https://billing.example/change/tier3/yearly"}

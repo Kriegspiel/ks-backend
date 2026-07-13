@@ -17,6 +17,11 @@ class BillingCheckoutResponse(BaseModel):
     client_secret: str
 
 
+class BillingSubscriptionChangeRequest(BaseModel):
+    tier: BillingTier
+    interval: BillingInterval
+
+
 class BillingPortalResponse(BaseModel):
     url: str
 
