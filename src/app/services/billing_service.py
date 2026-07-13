@@ -26,6 +26,10 @@ PRICE_ENV_BY_PLAN: dict[tuple[str, str], str] = {
     ("tier4", "yearly"): "STRIPE_PRICE_T4_YEARLY",
 }
 ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing"}
+PORTAL_CONFIGURATION_METADATA = {
+    "ks_app": "kriegspiel",
+    "ks_purpose": "subscription_change",
+}
 
 
 class BillingConfigurationError(RuntimeError):
@@ -49,6 +53,12 @@ class BillingPlan:
     tier: BillingTier
     interval: BillingInterval
     price_id: str
+
+
+@dataclass(frozen=True)
+class BillingPortalConfiguration:
+    config_id: str
+    price_signature: str
 
 
 def _utcnow() -> datetime:
@@ -155,6 +165,66 @@ class BillingService:
         ) is not None
         has_price = any(any(intervals.values()) for intervals in self._available_prices().values())
         return has_keys and has_price
+
+    def _configured_price_ids(self) -> list[str]:
+        seen: set[str] = set()
+        price_ids: list[str] = []
+        for tier, interval in PRICE_ENV_BY_PLAN:
+            price_id = self._price_id_for(tier, interval)
+            if price_id is not None and price_id not in seen:
+                seen.add(price_id)
+                price_ids.append(price_id)
+        return price_ids
+
+    async def _portal_configuration_for_subscription_changes(self) -> BillingPortalConfiguration:
+        price_groups = await self._portal_configuration_price_groups()
+        price_signature = _portal_price_signature(price_groups)
+        configurations = await self.stripe_client.get("/billing_portal/configurations", {"limit": "100"})
+        data = configurations.get("data")
+        if isinstance(data, list):
+            for config in data:
+                if not isinstance(config, dict) or config.get("active") is not True:
+                    continue
+                metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
+                if not _portal_metadata_matches(metadata, price_signature):
+                    continue
+                features = config.get("features") if isinstance(config.get("features"), dict) else {}
+                subscription_update = (
+                    features.get("subscription_update") if isinstance(features.get("subscription_update"), dict) else {}
+                )
+                if (
+                    subscription_update.get("enabled") is not True
+                    or subscription_update.get("proration_behavior") != "always_invoice"
+                ):
+                    continue
+                config_id = _nonempty(config.get("id"))
+                if config_id is not None:
+                    return BillingPortalConfiguration(config_id=config_id, price_signature=price_signature)
+
+        created = await self.stripe_client.post(
+            "/billing_portal/configurations",
+            _portal_configuration_payload(
+                price_groups=price_groups,
+                price_signature=price_signature,
+                return_url=f"{self._settings.SITE_ORIGIN.rstrip('/')}/subscription",
+            ),
+        )
+        config_id = _nonempty(created.get("id"))
+        if config_id is None:
+            raise BillingProviderError("Stripe did not return a billing portal configuration id")
+        return BillingPortalConfiguration(config_id=config_id, price_signature=price_signature)
+
+    async def _portal_configuration_price_groups(self) -> dict[str, list[str]]:
+        price_groups: dict[str, list[str]] = {}
+        for price_id in self._configured_price_ids():
+            price = await self.stripe_client.get(f"/prices/{price_id}")
+            product_id = _nonempty(price.get("product"))
+            if product_id is None:
+                raise BillingProviderError("Stripe price is missing its product")
+            price_groups.setdefault(product_id, []).append(price_id)
+        if not price_groups:
+            raise BillingConfigurationError("No Stripe subscription prices are configured")
+        return price_groups
 
     async def status_for_user(self, user: UserModel) -> dict[str, Any]:
         doc = await self._db.users.find_one(_user_query(user.id))
@@ -285,10 +355,12 @@ class BillingService:
             raise BillingPlanError("That subscription plan is already active")
 
         return_url = f"{self._settings.SITE_ORIGIN.rstrip('/')}/subscription?tier={tier}"
+        portal_configuration = await self._portal_configuration_for_subscription_changes()
         portal = await self.stripe_client.post(
             "/billing_portal/sessions",
             {
                 "customer": customer_id,
+                "configuration": portal_configuration.config_id,
                 "return_url": return_url,
                 "flow_data[type]": "subscription_update_confirm",
                 "flow_data[after_completion][type]": "redirect",
@@ -296,7 +368,6 @@ class BillingService:
                 "flow_data[subscription_update_confirm][subscription]": subscription_id,
                 "flow_data[subscription_update_confirm][items][0][id]": item_id,
                 "flow_data[subscription_update_confirm][items][0][price]": plan.price_id,
-                "flow_data[subscription_update_confirm][items][0][quantity]": "1",
             },
         )
         url = _nonempty(portal.get("url"))
@@ -496,3 +567,47 @@ def _subscription_item_price_id(item: dict[str, Any]) -> str | None:
     price = item.get("price") if isinstance(item, dict) else None
     price_id = price.get("id") if isinstance(price, dict) else None
     return _nonempty(price_id)
+
+
+def _portal_price_signature(price_groups: dict[str, list[str]]) -> str:
+    parts = [
+        f"{product_id}:{','.join(sorted(price_ids))}"
+        for product_id, price_ids in sorted(price_groups.items())
+    ]
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:24]
+
+
+def _portal_metadata_matches(metadata: dict[Any, Any], price_signature: str) -> bool:
+    return (
+        metadata.get("ks_app") == PORTAL_CONFIGURATION_METADATA["ks_app"]
+        and metadata.get("ks_purpose") == PORTAL_CONFIGURATION_METADATA["ks_purpose"]
+        and metadata.get("ks_price_signature") == price_signature
+    )
+
+
+def _portal_configuration_payload(
+    *,
+    price_groups: dict[str, list[str]],
+    price_signature: str,
+    return_url: str,
+) -> dict[str, str]:
+    payload = {
+        "name": "Kriegspiel subscription changes",
+        "default_return_url": return_url,
+        "metadata[ks_app]": PORTAL_CONFIGURATION_METADATA["ks_app"],
+        "metadata[ks_purpose]": PORTAL_CONFIGURATION_METADATA["ks_purpose"],
+        "metadata[ks_price_signature]": price_signature,
+        "features[invoice_history][enabled]": "true",
+        "features[payment_method_update][enabled]": "true",
+        "features[subscription_update][enabled]": "true",
+        "features[subscription_update][default_allowed_updates][0]": "price",
+        "features[subscription_update][billing_cycle_anchor]": "unchanged",
+        "features[subscription_update][proration_behavior]": "always_invoice",
+    }
+    for product_index, (product_id, price_ids) in enumerate(sorted(price_groups.items())):
+        product_prefix = f"features[subscription_update][products][{product_index}]"
+        payload[f"{product_prefix}[product]"] = product_id
+        payload[f"{product_prefix}[adjustable_quantity][enabled]"] = "false"
+        for price_index, price_id in enumerate(sorted(price_ids)):
+            payload[f"{product_prefix}[prices][{price_index}]"] = price_id
+    return payload
