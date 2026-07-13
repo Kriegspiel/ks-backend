@@ -96,6 +96,12 @@ class FakeStripeClient:
     def __init__(self) -> None:
         self.gets: list[tuple[str, dict[str, str]]] = []
         self.posts: list[tuple[str, dict[str, str]]] = []
+        self.portal_configurations: list[dict] = []
+        self.prices: dict[str, dict] = {
+            "price_t2_monthly": {"id": "price_t2_monthly", "product": "prod_t2"},
+            "price_t3_monthly": {"id": "price_t3_monthly", "product": "prod_t3"},
+            "price_t3_yearly": {"id": "price_t3_yearly", "product": "prod_t3"},
+        }
         self.subscriptions: dict[str, dict] = {
             "sub_123": {
                 "id": "sub_123",
@@ -111,6 +117,12 @@ class FakeStripeClient:
         if path.startswith(prefix):
             subscription_id = path.removeprefix(prefix)
             return self.subscriptions[subscription_id]
+        price_prefix = "/prices/"
+        if path.startswith(price_prefix):
+            price_id = path.removeprefix(price_prefix)
+            return self.prices[price_id]
+        if path == "/billing_portal/configurations":
+            return {"data": list(self.portal_configurations)}
         raise AssertionError(f"unexpected Stripe path {path}")
 
     async def post(self, path: str, data: dict[str, str]) -> dict:
@@ -119,6 +131,26 @@ class FakeStripeClient:
             return {"id": "cus_123"}
         if path == "/checkout/sessions":
             return {"client_secret": "cs_secret_123"}
+        if path == "/billing_portal/configurations":
+            config_id = f"bpc_{len(self.portal_configurations) + 1}"
+            metadata = {
+                "ks_app": data["metadata[ks_app]"],
+                "ks_purpose": data["metadata[ks_purpose]"],
+                "ks_price_signature": data["metadata[ks_price_signature]"],
+            }
+            config = {
+                "id": config_id,
+                "active": True,
+                "metadata": metadata,
+                "features": {
+                    "subscription_update": {
+                        "enabled": True,
+                        "proration_behavior": data["features[subscription_update][proration_behavior]"],
+                    }
+                },
+            }
+            self.portal_configurations.append(config)
+            return config
         if path == "/billing_portal/sessions":
             return {"url": "https://billing.stripe.test/session"}
         raise AssertionError(f"unexpected Stripe path {path}")
@@ -232,12 +264,38 @@ async def test_subscription_change_session_deep_links_to_portal_update_flow() ->
     )
 
     assert response == {"url": "https://billing.stripe.test/session"}
-    assert fake_stripe.gets == [("/subscriptions/sub_123", {})]
+    assert fake_stripe.gets == [
+        ("/subscriptions/sub_123", {}),
+        ("/prices/price_t2_monthly", {}),
+        ("/prices/price_t3_monthly", {}),
+        ("/prices/price_t3_yearly", {}),
+        ("/billing_portal/configurations", {"limit": "100"}),
+    ]
+    config_data = fake_stripe.posts[0][1]
+    assert fake_stripe.posts[0][0] == "/billing_portal/configurations"
+    assert config_data["name"] == "Kriegspiel subscription changes"
+    assert config_data["metadata[ks_app]"] == "kriegspiel"
+    assert config_data["metadata[ks_purpose]"] == "subscription_change"
+    assert config_data["features[payment_method_update][enabled]"] == "true"
+    assert config_data["features[subscription_update][enabled]"] == "true"
+    assert config_data["features[subscription_update][default_allowed_updates][0]"] == "price"
+    assert config_data["features[subscription_update][billing_cycle_anchor]"] == "unchanged"
+    assert config_data["features[subscription_update][proration_behavior]"] == "always_invoice"
+    assert config_data["features[subscription_update][products][0][product]"] == "prod_t2"
+    assert config_data["features[subscription_update][products][0][prices][0]"] == "price_t2_monthly"
+    assert config_data["features[subscription_update][products][1][product]"] == "prod_t3"
+    assert config_data["features[subscription_update][products][1][prices][0]"] == "price_t3_monthly"
+    assert config_data["features[subscription_update][products][1][prices][1]"] == "price_t3_yearly"
     assert fake_stripe.posts == [
+        (
+            "/billing_portal/configurations",
+            config_data,
+        ),
         (
             "/billing_portal/sessions",
             {
                 "customer": "cus_123",
+                "configuration": "bpc_1",
                 "return_url": "https://app.kriegspiel.org/subscription?tier=tier3",
                 "flow_data[type]": "subscription_update_confirm",
                 "flow_data[after_completion][type]": "redirect",
@@ -245,10 +303,35 @@ async def test_subscription_change_session_deep_links_to_portal_update_flow() ->
                 "flow_data[subscription_update_confirm][subscription]": "sub_123",
                 "flow_data[subscription_update_confirm][items][0][id]": "si_123",
                 "flow_data[subscription_update_confirm][items][0][price]": "price_t3_monthly",
-                "flow_data[subscription_update_confirm][items][0][quantity]": "1",
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_subscription_change_session_reuses_matching_portal_update_configuration() -> None:
+    doc = _user_doc(
+        billing={
+            "stripe_customer_id": "cus_123",
+            "stripe_subscription_id": "sub_123",
+            "subscription_status": "active",
+            "tier": "tier2",
+            "interval": "monthly",
+        }
+    )
+    fake_stripe = FakeStripeClient()
+    service = BillingService(_db(doc), _settings(), stripe_client=fake_stripe)
+    user = UserModel.from_mongo(doc)
+
+    await service.create_subscription_change_session(user=user, tier="tier3", interval="monthly")
+    await service.create_subscription_change_session(user=user, tier="tier3", interval="monthly")
+
+    paths = [path for path, _data in fake_stripe.posts]
+    assert paths.count("/billing_portal/configurations") == 1
+    assert paths.count("/billing_portal/sessions") == 2
+    session_posts = [data for path, data in fake_stripe.posts if path == "/billing_portal/sessions"]
+    assert session_posts[0]["configuration"] == "bpc_1"
+    assert session_posts[1]["configuration"] == "bpc_1"
 
 
 @pytest.mark.asyncio
