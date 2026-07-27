@@ -4,6 +4,13 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.4.7
+
+- **Tutor provider resilience**: distinguish OpenAI quota exhaustion from
+  transient rate limits, retry only retryable 429 responses with bounded
+  exponential backoff, and return stable JSON 429/503 errors that Cloudflare
+  does not replace with a generic origin-error page.
+
 ## ks-backend v. 1.4.6
 
 - **Tutor private beta**: add explicit, cached, structured coaching for one

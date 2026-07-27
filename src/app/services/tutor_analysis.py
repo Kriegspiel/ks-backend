@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import hashlib
 import hmac
 import json
+import random
 from typing import Any
 
 import httpx
@@ -17,6 +19,8 @@ from app.models.tutor import TutorModelOutput, TutorProfileResponse
 TUTOR_OUTPUT_SCHEMA_NAME = "kriegspiel_tutor_review"
 MAX_INCLUDED_PLAYER_TURNS = 48
 MAX_ATTEMPTS_PER_TURN = 8
+MAX_RATE_LIMIT_RETRIES = 2
+QUOTA_ERROR_LABELS = frozenset({"insufficient_quota", "billing_hard_limit_reached", "usage_limit_reached"})
 
 
 class TutorEvidenceError(ValueError):
@@ -317,6 +321,52 @@ class OpenAITutorProvider:
             )
 
     @staticmethod
+    def _provider_error_labels(response: httpx.Response) -> frozenset[str]:
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            return frozenset()
+        if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+            return frozenset()
+        error = payload["error"]
+        return frozenset(
+            value.strip().lower()
+            for key in ("code", "type")
+            if isinstance((value := error.get(key)), str) and value.strip()
+        )
+
+    @classmethod
+    def _http_status_error(cls, response: httpx.Response) -> TutorProviderError:
+        if response.status_code == 429:
+            if cls._provider_error_labels(response) & QUOTA_ERROR_LABELS:
+                return TutorProviderError(
+                    "TUTOR_PROVIDER_QUOTA",
+                    "Tutor's model quota is unavailable. No review was generated.",
+                )
+            return TutorProviderError(
+                "TUTOR_PROVIDER_RATE_LIMITED",
+                "Tutor is temporarily rate-limited. Please wait one minute before trying again.",
+            )
+        if response.status_code in {401, 403}:
+            return TutorProviderError(
+                "TUTOR_PROVIDER_AUTH",
+                "Tutor's model access is unavailable. No review was generated.",
+            )
+        return TutorProviderError("TUTOR_PROVIDER_FAILED", "Tutor generation failed.")
+
+    async def _post_with_rate_limit_backoff(self, payload: dict[str, Any]) -> httpx.Response:
+        retry = 0
+        while True:
+            response = await self._post(payload)
+            if response.status_code != 429:
+                return response
+            error = self._http_status_error(response)
+            if error.code == "TUTOR_PROVIDER_QUOTA" or retry == MAX_RATE_LIMIT_RETRIES:
+                raise error
+            await asyncio.sleep((2**retry) + random.uniform(0.0, 0.25))
+            retry += 1
+
+    @staticmethod
     def _response_text(payload: dict[str, Any]) -> str:
         direct = payload.get("output_text")
         if isinstance(direct, str) and direct.strip():
@@ -362,8 +412,12 @@ class OpenAITutorProvider:
     async def generate(self, request: PreparedTutorRequest) -> TutorProviderResult:
         self.ensure_available()
         try:
-            response = await self._post(request.payload)
+            response = await self._post_with_rate_limit_backoff(request.payload)
             response.raise_for_status()
+        except TutorProviderError:
+            raise
+        except httpx.HTTPStatusError as exc:
+            raise self._http_status_error(exc.response) from exc
         except httpx.HTTPError as exc:
             raise TutorProviderError("TUTOR_PROVIDER_FAILED", "Tutor generation failed.") from exc
 
