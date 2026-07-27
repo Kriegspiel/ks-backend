@@ -284,9 +284,18 @@ def test_provider_response_text_supports_direct_nested_and_refusal_payloads() ->
 
 def _provider_response(payload: object, *, json_error: Exception | None = None) -> Mock:
     response = Mock()
+    response.status_code = 200
     response.raise_for_status = Mock()
     response.json = Mock(side_effect=json_error) if json_error else Mock(return_value=payload)
     return response
+
+
+def _http_response(status_code: int, payload: object) -> httpx.Response:
+    return httpx.Response(
+        status_code,
+        request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+        json=payload,
+    )
 
 
 def _prepared_request(
@@ -413,3 +422,95 @@ async def test_provider_generate_maps_http_and_json_errors() -> None:
     with pytest.raises(TutorProviderError) as exc_info:
         await provider.generate(_prepared_request())
     assert exc_info.value.code == "TUTOR_PROVIDER_INVALID_RESPONSE"
+
+
+@pytest.mark.asyncio
+async def test_provider_does_not_retry_quota_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = OpenAITutorProvider(Settings(OPENAI_API_KEY="test-key"))
+    response = _http_response(
+        429,
+        {"error": {"code": "insufficient_quota", "type": "rate_limit_error"}},
+    )
+    provider._post = AsyncMock(return_value=response)  # type: ignore[method-assign]
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.services.tutor_analysis.asyncio.sleep", sleep)
+
+    with pytest.raises(TutorProviderError) as exc_info:
+        await provider.generate(_prepared_request())
+
+    assert exc_info.value.code == "TUTOR_PROVIDER_QUOTA"
+    assert "No review was generated" in str(exc_info.value)
+    provider._post.assert_awaited_once()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_retries_transient_rate_limits_with_bounded_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = OpenAITutorProvider(Settings(OPENAI_API_KEY="test-key"))
+    completed = _provider_response({"output_text": sample_model_output().model_dump_json()})
+    provider._post = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            _http_response(429, {"error": {"code": "rate_limit_exceeded"}}),
+            _http_response(429, {"error": {"type": "rate_limit_error"}}),
+            completed,
+        ]
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.services.tutor_analysis.asyncio.sleep", sleep)
+    monkeypatch.setattr("app.services.tutor_analysis.random.uniform", Mock(return_value=0.25))
+
+    result = await provider.generate(_prepared_request())
+
+    assert result.review == sample_model_output()
+    assert provider._post.await_count == 3
+    assert [call.args[0] for call in sleep.await_args_list] == [1.25, 2.25]
+
+
+@pytest.mark.asyncio
+async def test_provider_stops_after_bounded_unknown_rate_limit_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = OpenAITutorProvider(Settings(OPENAI_API_KEY="test-key"))
+    provider._post = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            _http_response(429, []),
+            _http_response(429, {"error": "unknown"}),
+            _http_response(429, {"error": {"code": 123, "type": None}}),
+        ]
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.services.tutor_analysis.asyncio.sleep", sleep)
+    monkeypatch.setattr("app.services.tutor_analysis.random.uniform", Mock(return_value=0))
+
+    with pytest.raises(TutorProviderError) as exc_info:
+        await provider.generate(_prepared_request())
+
+    assert exc_info.value.code == "TUTOR_PROVIDER_RATE_LIMITED"
+    assert provider._post.await_count == 3
+    assert [call.args[0] for call in sleep.await_args_list] == [1, 2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [(401, "TUTOR_PROVIDER_AUTH"), (403, "TUTOR_PROVIDER_AUTH"), (500, "TUTOR_PROVIDER_FAILED")],
+)
+async def test_provider_classifies_non_rate_limit_http_errors(status_code: int, expected_code: str) -> None:
+    provider = OpenAITutorProvider(Settings(OPENAI_API_KEY="test-key"))
+    provider._post = AsyncMock(  # type: ignore[method-assign]
+        return_value=_http_response(status_code, {"error": {"code": "provider_error"}})
+    )
+
+    with pytest.raises(TutorProviderError) as exc_info:
+        await provider.generate(_prepared_request())
+
+    assert exc_info.value.code == expected_code
+
+
+def test_provider_error_labels_ignore_invalid_json() -> None:
+    response = Mock()
+    response.json.side_effect = ValueError("not json")
+
+    assert OpenAITutorProvider._provider_error_labels(response) == frozenset()  # noqa: SLF001

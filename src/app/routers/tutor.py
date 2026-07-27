@@ -41,10 +41,12 @@ def _map_tutor_error(exc: TutorServiceError) -> JSONResponse:
         http_status = status.HTTP_409_CONFLICT
     elif exc.code == "TUTOR_BUDGET_EXCEEDED":
         http_status = status.HTTP_429_TOO_MANY_REQUESTS
+    elif exc.code == "TUTOR_PROVIDER_RATE_LIMITED":
+        http_status = status.HTTP_429_TOO_MANY_REQUESTS
     elif exc.code in {"TUTOR_UNAVAILABLE", "TUTOR_STORAGE_FAILED"}:
         http_status = status.HTTP_503_SERVICE_UNAVAILABLE
     elif exc.code.startswith("TUTOR_PROVIDER_") or exc.code == "TUTOR_REFUSED":
-        http_status = status.HTTP_502_BAD_GATEWAY
+        http_status = status.HTTP_503_SERVICE_UNAVAILABLE
     else:
         http_status = status.HTTP_400_BAD_REQUEST
     return _error_response(status_code=http_status, code=exc.code, message=str(exc))
