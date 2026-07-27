@@ -4,6 +4,22 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.4.6
+
+- **Tutor private beta**: add explicit, cached, structured coaching for one
+  active registered account selected by immutable id, with participant and
+  completed-game enforcement plus private 404 behavior for every other caller.
+- **Player-safe intelligence**: send only bounded player attempts, public
+  referee outcomes, and cumulative coaching memory to GPT-5.6 Terra; disable
+  provider storage and reject output whose evidence refs are not grounded in
+  the supplied turn data.
+- **Cost and operations**: add atomic per-user UTC-month reservations and
+  cached/uncached token settlement under a `$5` hard cap, versioned analysis
+  caching, five-review profile readiness, feedback, and a global kill switch;
+  missing or invalid usage fails closed at the reserved amount.
+- **Quality gate**: enforce 100% statement and branch coverage for the complete
+  backend suite.
+
 ## ks-backend v. 1.4.3
 
 - **LLM Bot Catalog API**: finish GPT-5.5 Pro and Qwen 3.7 Max as T5 bots in

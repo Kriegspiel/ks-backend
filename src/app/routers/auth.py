@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 import structlog
-from app.dependencies import can_view_tech_reports, get_current_user, get_session_service, require_db
+from app.dependencies import can_use_tutor, can_view_tech_reports, get_current_user, get_session_service, require_db
 from app.models.auth import (
     BotRegisterRequest,
     BotRegisterResponse,
@@ -68,6 +68,7 @@ def _user_payload(user: UserModel, request: Request) -> dict[str, object]:
         "is_guest": user.role == "guest",
         "llm_bot_tier": normalize_llm_bot_tier(user.llm_bot_tier, role=user.role),
         "can_view_tech_reports": can_view_tech_reports(user, settings),
+        "can_use_tutor": can_use_tutor(user, settings),
         "bot_profile": user.bot_profile.model_dump() if user.bot_profile else None,
         "stats": user.stats.model_dump(),
         "settings": user.settings.model_dump(),
@@ -249,4 +250,5 @@ async def session_status(
         "is_guest": user.role == "guest",
         "llm_bot_tier": normalize_llm_bot_tier(user.llm_bot_tier, role=user.role),
         "can_view_tech_reports": can_view_tech_reports(user, request.app.state.settings),
+        "can_use_tutor": can_use_tutor(user, request.app.state.settings),
     }

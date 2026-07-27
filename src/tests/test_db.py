@@ -36,7 +36,17 @@ async def reset_db_state():
 def _fake_db_collections():
     return {
         name: SimpleNamespace(create_index=AsyncMock())
-        for name in ["users", "games", "game_archives", "audit_log", "sessions", "analytics_events"]
+        for name in [
+            "users",
+            "games",
+            "game_archives",
+            "audit_log",
+            "sessions",
+            "analytics_events",
+            "tutor_analyses",
+            "tutor_profiles",
+            "tutor_usage",
+        ]
     }
 
 
@@ -135,6 +145,28 @@ async def test_init_db_creates_required_indexes(monkeypatch):
         (([("event_type", 1), ("occurred_at", -1)],), {}),
         (([("attribution_id", 1)],), {"unique": True}),
         (([("utm.source", 1), ("utm.campaign", 1), ("occurred_at", -1)],), {}),
+    ]
+    assert collections["tutor_analyses"].create_index.await_args_list == [
+        (
+            (
+                [
+                    ("user_id", 1),
+                    ("game_id", 1),
+                    ("analysis_version", 1),
+                    ("prompt_version", 1),
+                    ("model", 1),
+                ],
+            ),
+            {"unique": True},
+        ),
+        (([("user_id", 1), ("generated_at", -1)],), {}),
+        (([("status", 1), ("started_at", 1)],), {}),
+    ]
+    assert collections["tutor_profiles"].create_index.await_args_list == [
+        (([("user_id", 1)],), {"unique": True})
+    ]
+    assert collections["tutor_usage"].create_index.await_args_list == [
+        (([("user_id", 1), ("month", 1)],), {"unique": True})
     ]
 
 

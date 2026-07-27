@@ -11,11 +11,14 @@ from app.config import Settings
 from app import dependencies as deps
 from app.dependencies import (
     _bearer_token,
+    can_use_tutor,
     can_view_tech_reports,
     get_current_user,
     get_session_service,
+    get_tutor_candidate_user,
     require_db,
     require_tech_report_access,
+    require_tutor_access,
 )
 from app.models.user import UserModel
 from app.services.session_service import SessionService
@@ -145,6 +148,44 @@ def test_can_view_tech_reports_uses_admin_role_and_allowlisted_regular_users() -
     assert can_view_tech_reports(SimpleNamespace(username="outsider", role="user"), settings) is False
 
 
+def test_can_use_tutor_requires_enabled_exact_immutable_id_and_active_regular_user() -> None:
+    user = SimpleNamespace(id="fil-id", role="user", status="active")
+    enabled = Settings(TUTOR_ENABLED=True, TUTOR_BETA_USER_IDS=" other-id, fil-id ")
+
+    assert can_use_tutor(user, enabled) is True
+    assert can_use_tutor(user, Settings(TUTOR_ENABLED=False, TUTOR_BETA_USER_IDS="fil-id")) is False
+    assert can_use_tutor(SimpleNamespace(id="other-id", role="user", status="active"), enabled) is True
+    assert can_use_tutor(SimpleNamespace(id="outsider", role="user", status="active"), enabled) is False
+    assert can_use_tutor(SimpleNamespace(id="fil-id", role="user", status="inactive"), enabled) is False
+    assert can_use_tutor(SimpleNamespace(id="fil-id", role="guest", status="active"), enabled) is False
+    assert can_use_tutor(SimpleNamespace(id="fil-id", role="admin", status="active"), enabled) is False
+
+
+@pytest.mark.asyncio
+async def test_get_tutor_candidate_user_hides_authentication_errors_and_preserves_outages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace()
+    session_service = object()
+    user = SimpleNamespace(id="fil-id", role="user", status="active")
+    authenticate = AsyncMock(return_value=user)
+    monkeypatch.setattr(deps, "get_current_user", authenticate)
+
+    assert await get_tutor_candidate_user(request, session_service) is user
+    authenticate.assert_awaited_once_with(request, session_service)
+
+    authenticate.side_effect = HTTPException(status_code=401, detail="Authentication required")
+    with pytest.raises(HTTPException) as exc_info:
+        await get_tutor_candidate_user(request, session_service)
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Not Found"
+
+    authenticate.side_effect = HTTPException(status_code=503, detail="Database unavailable")
+    with pytest.raises(HTTPException) as exc_info:
+        await get_tutor_candidate_user(request, session_service)
+    assert exc_info.value.status_code == 503
+
+
 @pytest.mark.asyncio
 async def test_require_tech_report_access_rejects_authenticated_non_operators() -> None:
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=Settings(TECH_REPORT_USERNAMES="fil"))))
@@ -166,6 +207,31 @@ async def test_require_tech_report_access_uses_global_settings_when_app_state_mi
     user = SimpleNamespace(username="playerone", role="user")
 
     assert await require_tech_report_access(request, user) is user
+
+
+@pytest.mark.asyncio
+async def test_require_tutor_access_returns_only_allowlisted_user_and_hides_feature_from_others() -> None:
+    settings = Settings(TUTOR_ENABLED=True, TUTOR_BETA_USER_IDS="fil-id")
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
+    user = SimpleNamespace(id="fil-id", role="user", status="active")
+
+    assert await require_tutor_access(request, user) is user
+
+    with pytest.raises(HTTPException) as exc_info:
+        await require_tutor_access(request, SimpleNamespace(id="outsider", role="user", status="active"))
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Not Found"
+
+
+@pytest.mark.asyncio
+async def test_require_tutor_access_uses_global_settings_when_app_state_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(deps, "get_settings", lambda: Settings(TUTOR_ENABLED=True, TUTOR_BETA_USER_IDS="fil-id"))
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    user = SimpleNamespace(id="fil-id", role="user", status="active")
+
+    assert await require_tutor_access(request, user) is user
 
 
 @pytest.mark.asyncio
