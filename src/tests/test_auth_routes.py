@@ -230,6 +230,35 @@ def test_me_endpoint_uses_current_user_dependency(app_no_db) -> None:
     assert body["email"] == "player@example.com"
     assert body["is_guest"] is False
     assert body["can_view_tech_reports"] is False
+    assert body["can_use_tutor"] is False
+
+
+def test_me_and_session_expose_tutor_capability_only_for_fil(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_users = SimpleNamespace(find_one=AsyncMock(return_value=None), insert_one=AsyncMock())
+    fake_db = SimpleNamespace(users=fake_users)
+    from app.routers import auth as auth_router_module
+
+    monkeypatch.setattr(auth_router_module, "require_db", lambda: fake_db)
+    user = UserModel.from_mongo(_user_doc())
+    app = create_app(
+        Settings(
+            ENVIRONMENT="testing",
+            TUTOR_ENABLED=True,
+            TUTOR_BETA_USER_IDS=user.id,
+        )
+    )
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_session_service] = lambda: SimpleNamespace(update_session_for_user=AsyncMock())
+
+    with TestClient(app) as client:
+        me = client.get("/api/auth/me")
+        client.cookies.set(SessionService.COOKIE_NAME, "fil-session")
+        session = client.get("/api/auth/session")
+
+    assert me.status_code == 200
+    assert session.status_code == 200
+    assert me.json()["can_use_tutor"] is True
+    assert session.json()["can_use_tutor"] is True
 
 
 def test_session_status_without_cookie_uses_current_user(app_no_db) -> None:

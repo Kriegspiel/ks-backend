@@ -67,11 +67,32 @@ async def get_current_user(
     return UserModel.from_mongo(user_doc)
 
 
+async def get_tutor_candidate_user(
+    request: Request,
+    session_service: SessionService = Depends(get_session_service),
+) -> UserModel:
+    """Authenticate without advertising the private Tutor surface."""
+    try:
+        return await get_current_user(request, session_service)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found") from exc
+        raise
+
+
 def _tech_report_username_allowlist(settings: Settings) -> set[str]:
     return {
         username.strip().lower()
         for username in settings.TECH_REPORT_USERNAMES.split(",")
         if username.strip()
+    }
+
+
+def _tutor_beta_user_id_allowlist(settings: Settings) -> set[str]:
+    return {
+        user_id.strip()
+        for user_id in settings.TUTOR_BETA_USER_IDS.split(",")
+        if user_id.strip()
     }
 
 
@@ -84,6 +105,15 @@ def can_view_tech_reports(user: UserModel, settings: Settings) -> bool:
     return user.username.lower() in _tech_report_username_allowlist(settings)
 
 
+def can_use_tutor(user: UserModel, settings: Settings) -> bool:
+    return bool(
+        settings.TUTOR_ENABLED
+        and user.role.lower() == "user"
+        and user.status.lower() == "active"
+        and user.id in _tutor_beta_user_id_allowlist(settings)
+    )
+
+
 async def require_tech_report_access(
     request: Request,
     user: UserModel = Depends(get_current_user),
@@ -93,4 +123,16 @@ async def require_tech_report_access(
         settings = get_settings()
     if not can_view_tech_reports(user, settings):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tech reports are private")
+    return user
+
+
+async def require_tutor_access(
+    request: Request,
+    user: UserModel = Depends(get_tutor_candidate_user),
+) -> UserModel:
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        settings = get_settings()
+    if not can_use_tutor(user, settings):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     return user

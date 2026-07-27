@@ -12,7 +12,7 @@ import structlog
 
 from app.config import Settings, get_settings
 from app.db import close_db, get_db, init_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, get_tutor_candidate_user
 from app.logging_config import configure_logging
 from app.monitoring import capture_backend_restart, configure_sentry
 from app.services.archive_turn_counts import run_archive_turn_count_migration_once
@@ -22,10 +22,12 @@ from app.routers.auth import router as auth_router
 from app.routers.billing import router as billing_router
 from app.routers.bot import router as bot_router
 from app.routers.game import router as game_router
+from app.routers.tutor import router as tutor_router
 from app.routers.user import router as user_router
 from app.services.analytics_service import AnalyticsService
 from app.services.game_service import GameService
 from app.services.session_service import SessionService
+from app.services.tutor_service import TutorService
 
 logger = structlog.get_logger("app.main")
 APP_API_INGRESS_HOSTS = {"app.kriegspiel.org", "testserver", "localhost", "127.0.0.1"}
@@ -111,7 +113,10 @@ def configure_openapi(app: FastAPI, settings: Settings) -> None:
         for route in app.routes:
             if not isinstance(route, APIRoute) or not route.include_in_schema:
                 continue
-            if not _dependant_uses(route.dependant, get_current_user):
+            if not (
+                _dependant_uses(route.dependant, get_current_user)
+                or _dependant_uses(route.dependant, get_tutor_candidate_user)
+            ):
                 continue
             path_item = schema.get("paths", {}).get(route.path_format, {})
             for method in route.methods or []:
@@ -132,6 +137,7 @@ async def lifespan(app: FastAPI):
     app.state.game_service = None
     app.state.session_service = None
     app.state.analytics_service = None
+    app.state.tutor_service = None
     app.state.archive_turn_count_migration_task = None
     app.state.randobot_owner_email_migration_task = None
 
@@ -141,6 +147,12 @@ async def lifespan(app: FastAPI):
         app.state.db_ready = True
         app.state.session_service = SessionService(db.sessions)
         app.state.analytics_service = AnalyticsService(db.analytics_events)
+        app.state.tutor_service = TutorService(
+            db.tutor_analyses,
+            db.tutor_profiles,
+            db.tutor_usage,
+            settings=app.state.settings,
+        )
         app.state.game_service = GameService(
             db.games,
             users_collection=db.users,
@@ -165,6 +177,7 @@ async def lifespan(app: FastAPI):
         app.state.db_ready = False
         app.state.session_service = None
         app.state.analytics_service = None
+        app.state.tutor_service = None
 
     try:
         yield
@@ -220,7 +233,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"detail": "Not Found"}, status_code=status.HTTP_404_NOT_FOUND)
         return await call_next(request)
 
-    canonical_routers = (analytics_router, auth_router, billing_router, bot_router, game_router, user_router)
+    canonical_routers = (analytics_router, auth_router, billing_router, bot_router, game_router, tutor_router, user_router)
     for router in canonical_routers:
         app.include_router(router)
         app.include_router(router, prefix="/api", include_in_schema=False)
