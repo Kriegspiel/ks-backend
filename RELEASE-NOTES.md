@@ -4,6 +4,12 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.5.0
+
+- **Coordinated Tutor release**: promote the FIL-only private Tutor beta and
+  its provider-resilience safeguards to the shared `1.5.0` backend/frontend
+  release line.
+
 ## ks-backend v. 1.4.7
 
 - **Tutor provider resilience**: distinguish OpenAI quota exhaustion from
