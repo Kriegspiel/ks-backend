@@ -29,6 +29,9 @@ BOT_USAGE_USERNAME_ALIASES = {
 }
 BOT_USAGE_GENERIC_USERNAMES = frozenset({"openrouterbot"})
 BOT_USAGE_MODEL_ALIASES = {
+    "gpt-6-astra": "llm_gpt_astra",
+    "openai/gpt-6-astra": "llm_gpt_astra",
+    "claude-fable-5-1": "llm_fable",
     "openai/gpt-6-luna": "llm_gpt_luna",
     "gpt-6-luna": "llm_gpt_luna",
     "openai/gpt-6.1-sol": "llm_gpt_sol",

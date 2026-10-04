@@ -53,6 +53,8 @@ MODEL_AVAILABILITY_REQUIRED_BOTS = {
     "llm_minimax_m3": "openai",
     "llm_gpt55": "openai",
     "llm_gpt55_pro": "openai",
+    "llm_fable": "anthropic",
+    "llm_gpt_astra": "openai",
     "llm_gpt_luna": "openai",
     "llm_sonnet": "anthropic",
     "llm_gemini25_flash": "openai",

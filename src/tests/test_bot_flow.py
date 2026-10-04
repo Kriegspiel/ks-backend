@@ -82,6 +82,8 @@ T3_LLM_BOT_PROVIDERS = {
 }
 
 T5_LLM_BOT_PROVIDERS = {
+    "llm_fable": "anthropic",
+    "llm_gpt_astra": "openai",
     "llm_gpt55": "openai",
     "llm_gpt55_pro": "openai",
     "llm_grok45": "openrouter",
@@ -382,6 +384,8 @@ def _add_ready_llm_bot(users: FakeUsersCollection, *, bot_id: ObjectId, username
         ("tier2", "llm_sonnet5"),
         ("tier3", "llm_opus48"),
         ("tier4", "llm_gpt55"),
+        ("tier4", "llm_fable"),
+        ("tier4", "llm_gpt_astra"),
         ("tier1", "llm_gpt56_luna"),
         ("tier3", "llm_gpt56_sol"),
     ],
@@ -417,6 +421,8 @@ async def test_user_cannot_create_game_with_bot_above_their_tier(viewer_tier: st
         ("tier5", "llm_opus48"),
         ("tier2", "llm_gpt56_luna"),
         ("tier4", "llm_gpt56_sol"),
+        ("tier5", "llm_fable"),
+        ("tier5", "llm_gpt_astra"),
     ],
 )
 @pytest.mark.asyncio
