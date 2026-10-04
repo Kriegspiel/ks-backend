@@ -130,6 +130,8 @@ BOT_ACCESS_TIER_BY_USERNAME: dict[str, LlmBotTier] = {
     "llm_kimi_k27_code": "tier4",
     "llm_hermes4_405b": "tier4",
     "llm_gpt55": "tier5",
+    "llm_fable": "tier5",
+    "llm_gpt_astra": "tier5",
     "llm_gpt_sol": "tier4",
     "llm_grok": "tier5",
     "llm_gpt55_pro": "tier5",

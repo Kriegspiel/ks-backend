@@ -111,6 +111,8 @@ BOT_MATRIX_PLAYER_ORDER = (
     "llm_hermes4_405b",
     "llm_gpt_sol",
     "llm_gpt55_pro",
+    "llm_fable",
+    "llm_gpt_astra",
     "llm_qwen37_max",
     "randobot",
     "randobotany",
