@@ -84,7 +84,7 @@ T3_LLM_BOT_PROVIDERS = {
 T5_LLM_BOT_PROVIDERS = {
     "llm_gpt55": "openai",
     "llm_gpt55_pro": "openai",
-    "llm_grok45": "openai",
+    "llm_grok45": "openrouter",
     "llm_qwen37_max": "openai",
 }
 

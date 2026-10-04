@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.llm_bot_policy import LlmBotTier
 
 SupportedRuleVariant = str
+LlmReasoningLevel = Literal["none", "enabled", "low", "medium", "high", "xhigh", "max"]
 ALL_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"]
 SUPPORTED_RULE_VARIANT_VALUES = frozenset(ALL_SUPPORTED_RULE_VARIANTS)
 DEFAULT_SUPPORTED_RULE_VARIANTS = ["berkeley", "berkeley_any"]
@@ -47,7 +48,7 @@ def supported_rule_variants_for_bot(username: str, variants: object = None) -> l
 class BotModelAvailability(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["openai", "anthropic"]
+    provider: Literal["openai", "anthropic", "openrouter"]
     ready: bool = False
     reason: str = ""
     checked_at: datetime
@@ -60,6 +61,7 @@ class BotProfile(BaseModel):
     owner_email: str = "bots@kriegspiel.org"
     description: str = ""
     llm_backed: bool = False
+    llm_reasoning_level: LlmReasoningLevel | None = None
     listed: bool = True
     api_token_id: str | None = None
     api_token_hash: str | None = None
@@ -83,6 +85,7 @@ class BotListItem(BaseModel):
     ratings: dict[str, dict[str, int]] = Field(default_factory=dict)
     supported_rule_variants: list[SupportedRuleVariant] = Field(default_factory=lambda: DEFAULT_SUPPORTED_RULE_VARIANTS.copy())
     llm_backed: bool = False
+    llm_reasoning_level: LlmReasoningLevel | None = None
     required_tier: LlmBotTier = "guest"
     available_for_viewer: bool = True
     llm_bot_tier: LlmBotTier | None = None
@@ -99,7 +102,7 @@ class BotListResponse(BaseModel):
 class BotAvailabilityReportRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    provider: Literal["openai", "anthropic"]
+    provider: Literal["openai", "anthropic", "openrouter"]
     ready: bool
     reason: str = Field(default="", max_length=500)
 

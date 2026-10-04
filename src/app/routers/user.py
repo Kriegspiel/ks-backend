@@ -70,7 +70,7 @@ async def get_user_games(
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
-    user_doc = await db.users.find_one({"username": user_service.canonical_username(username)})
+    user_doc = await user_service.get_public_user_document(db, username)
     if user_doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
@@ -104,7 +104,7 @@ async def get_user_game_filter_options(
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
-    user_doc = await db.users.find_one({"username": user_service.canonical_username(username)})
+    user_doc = await user_service.get_public_user_document(db, username)
     if user_doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
@@ -120,7 +120,7 @@ async def get_user_rating_history(
     user_service: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     db = require_db()
-    user_doc = await db.users.find_one({"username": user_service.canonical_username(username)})
+    user_doc = await user_service.get_public_user_document(db, username)
     if user_doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return await user_service.get_rating_history(db, str(user_doc["_id"]), track=track, limit=limit)
