@@ -17,7 +17,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from app.config import get_settings
-from app.llm_bot_policy import normalize_llm_bot_tier
+from app.llm_bot_policy import LLM_BOT_USERNAME_ALIASES, normalize_llm_bot_tier
 from app.models.auth import BotRegisterRequest, ConvertGuestRequest, RegisterRequest
 from app.models.bot import supported_rule_variants_for_bot
 from app.models.user import UserModel, default_user_stats_payload, normalize_user_stats_payload, utcnow
@@ -90,26 +90,26 @@ BOT_MATRIX_PLAYER_ORDER = (
     "llm_deepseek_v32",
     "llm_minimax_m3",
     "llm_gpt55",
-    "llm_gpt56_luna",
-    "llm_sonnet5",
+    "llm_gpt_luna",
+    "llm_sonnet",
     "llm_gemini25_flash",
     "llm_gemini31_lite",
-    "llm_grok45",
-    "llm_gemini35_flash",
+    "llm_grok",
+    "llm_gemini_flash",
     "llm_mistral_large3",
     "llm_mistral_medium35",
     "llm_nemotron_ultra",
-    "llm_qwen36_flash",
+    "llm_qwen_flash",
     "llm_kimi_k2_thinking",
     "llm_hermes3_70b",
-    "llm_opus48",
+    "llm_opus",
     "bot_deepseekv4_pro",
     "llm_gpt56_terra",
     "llm_gemini31_pro_preview",
     "llm_glm52",
     "llm_kimi_k27_code",
     "llm_hermes4_405b",
-    "llm_gpt56_sol",
+    "llm_gpt_sol",
     "llm_gpt55_pro",
     "llm_qwen37_max",
     "randobot",
@@ -165,6 +165,22 @@ class UserService:
     @staticmethod
     def canonical_username(username: str) -> str:
         return username.strip().lower()
+
+    @staticmethod
+    def _ensure_username_not_reserved(username: str) -> None:
+        if username in LLM_BOT_USERNAME_ALIASES:
+            raise UserConflictError(field="username", code="USERNAME_TAKEN", message="Username is reserved")
+
+    @classmethod
+    async def get_public_user_document(cls, db: Any, username: str) -> dict[str, Any] | None:
+        normalized = cls.canonical_username(username)
+        user = await db.users.find_one({"username": normalized})
+        if user is not None:
+            return user
+        canonical = LLM_BOT_USERNAME_ALIASES.get(normalized)
+        if canonical is None:
+            return None
+        return await db.users.find_one({"username": canonical, "role": "bot"})
 
     @staticmethod
     def canonical_email(email: str) -> str:
@@ -1509,6 +1525,7 @@ class UserService:
 
     async def create_user(self, registration: RegisterRequest, *, acquisition: dict[str, Any] | None = None) -> UserModel:
         username = self.canonical_username(registration.username)
+        self._ensure_username_not_reserved(username)
         email = self.canonical_email(registration.email)
 
         existing = await self._users.find_one({"$or": [{"username": username}, {"email": email}]})
@@ -1642,6 +1659,8 @@ class UserService:
         if username == user.username or not username:
             raise ValueError("Guest username cannot be converted")
 
+        self._ensure_username_not_reserved(username)
+
         email = self.canonical_email(payload.email)
         user_id = self._to_object_id(user.id)
         existing = await self._users.find_one({"$or": [{"username": username}, {"email": email}], "_id": {"$ne": user_id}})
@@ -1696,6 +1715,7 @@ class UserService:
 
     async def create_bot(self, registration: BotRegisterRequest) -> tuple[UserModel, str]:
         username = self.canonical_username(registration.username)
+        self._ensure_username_not_reserved(username)
         existing = await self._users.find_one({"username": username})
         if existing:
             raise UserConflictError(field="username", code="USERNAME_TAKEN", message="Username already exists")
@@ -1800,8 +1820,7 @@ class UserService:
         return authenticated
 
     async def get_public_profile(self, db: Any, username: str) -> dict[str, Any] | None:
-        canonical = self.canonical_username(username)
-        user = await db.users.find_one({"username": canonical})
+        user = await self.get_public_user_document(db, username)
         if user is None:
             return None
         user = await self._ensure_result_tracks(db, user)
@@ -1821,6 +1840,7 @@ class UserService:
             "role": role,
             "status": user.get("status") or "active",
             "llm_bot_tier": public_llm_bot_tier,
+            "llm_reasoning_level": bot_profile.get("llm_reasoning_level") if role == "bot" else None,
             "is_bot": role == "bot",
             "owner_email": bot_profile.get("owner_email") or DEFAULT_BOT_OWNER_EMAIL if role == "bot" else None,
             "profile": user.get("profile", {}),

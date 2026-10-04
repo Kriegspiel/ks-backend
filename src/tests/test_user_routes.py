@@ -10,6 +10,7 @@ import app.dependencies as dependencies
 from app.config import Settings
 from app.main import create_app
 from app.routers.user import get_user_service
+from app.services.user_service import UserService
 
 
 class StubService:
@@ -167,6 +168,8 @@ class StubService:
     @staticmethod
     def canonical_username(username: str) -> str:
         return username.lower()
+
+    get_public_user_document = UserService.get_public_user_document
 
 
 def test_user_routes_profile_games_leaderboard_and_settings_auth_gate() -> None:

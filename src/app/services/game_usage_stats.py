@@ -7,18 +7,20 @@ from typing import Any
 
 from bson import ObjectId
 
+from app.llm_bot_policy import LLM_BOT_USERNAME_ALIASES, canonical_llm_bot_username
 from app.models.bot import BotUsageReportRequest
 
 BOT_USAGE_RECORD_START = datetime(2026, 7, 4, tzinfo=UTC)
 BOT_USAGE_RECORD_START_LABEL = "2026-07-04"
 BOT_USAGE_USERNAME_ALIASES = {
+    **LLM_BOT_USERNAME_ALIASES,
     "haiku": "llm_haiku",
     "gptnano": "llm_gptnano",
     "llm_gpt45nano": "llm_gptnano",
     "bot_gemini25_lite": "llm_gemini25_lite",
     "bot_deepseekv4_flash": "llm_deepseekv4_flash",
     "bot_gptoss120b": "llm_gptoss120b",
-    "bot_qwen36_flash": "llm_qwen36_flash",
+    "bot_qwen36_flash": "llm_qwen_flash",
     "bot_gemini31_lite": "llm_gemini31_lite",
     "bot_llama31_8b": "llm_llama31_8b",
     "openrouter_deepseekv4_flash": "llm_deepseekv4_flash",
@@ -27,6 +29,18 @@ BOT_USAGE_USERNAME_ALIASES = {
 }
 BOT_USAGE_GENERIC_USERNAMES = frozenset({"openrouterbot"})
 BOT_USAGE_MODEL_ALIASES = {
+    "openai/gpt-6-luna": "llm_gpt_luna",
+    "gpt-6-luna": "llm_gpt_luna",
+    "openai/gpt-6.1-sol": "llm_gpt_sol",
+    "gpt-6.1-sol": "llm_gpt_sol",
+    "claude-sonnet-5-5": "llm_sonnet",
+    "claude-opus-5-5": "llm_opus",
+    "google/gemini-3.8-flash": "llm_gemini_flash",
+    "gemini-3.8-flash": "llm_gemini_flash",
+    "qwen/qwen3.8-flash": "llm_qwen_flash",
+    "qwen3.8-flash": "llm_qwen_flash",
+    "x-ai/grok-4.7": "llm_grok",
+    "grok-4.7": "llm_grok",
     "claude-haiku-4-5-20251001": "llm_haiku",
     "gpt-5.4-nano": "llm_gptnano",
     "google/gemini-2.5-flash-lite": "llm_gemini25_lite",
@@ -37,26 +51,26 @@ BOT_USAGE_MODEL_ALIASES = {
     "gpt-5.5": "llm_gpt55",
     "openai/gpt-5.5-pro": "llm_gpt55_pro",
     "gpt-5.5-pro": "llm_gpt55_pro",
-    "openai/gpt-5.6-sol": "llm_gpt56_sol",
-    "gpt-5.6-sol": "llm_gpt56_sol",
+    "openai/gpt-5.6-sol": "llm_gpt_sol",
+    "gpt-5.6-sol": "llm_gpt_sol",
     "openai/gpt-5.6-terra": "llm_gpt56_terra",
     "gpt-5.6-terra": "llm_gpt56_terra",
-    "openai/gpt-5.6-luna": "llm_gpt56_luna",
-    "gpt-5.6-luna": "llm_gpt56_luna",
-    "claude-sonnet-5": "llm_sonnet5",
+    "openai/gpt-5.6-luna": "llm_gpt_luna",
+    "gpt-5.6-luna": "llm_gpt_luna",
+    "claude-sonnet-5": "llm_sonnet",
     "google/gemini-2.5-flash": "llm_gemini25_flash",
     "gemini-2.5-flash": "llm_gemini25_flash",
-    "x-ai/grok-4.5": "llm_grok45",
-    "grok-4.5": "llm_grok45",
-    "google/gemini-3.5-flash": "llm_gemini35_flash",
-    "gemini-3.5-flash": "llm_gemini35_flash",
+    "x-ai/grok-4.5": "llm_grok",
+    "grok-4.5": "llm_grok",
+    "google/gemini-3.5-flash": "llm_gemini_flash",
+    "gemini-3.5-flash": "llm_gemini_flash",
     "mistralai/mistral-large-2512": "llm_mistral_large3",
     "mistralai/mistral-medium-3-5": "llm_mistral_medium35",
     "mistral-medium-3-5": "llm_mistral_medium35",
     "nvidia/nemotron-3-ultra-550b-a55b": "llm_nemotron_ultra",
-    "qwen/qwen3.6-flash": "llm_qwen36_flash",
-    "qwen3.6-flash": "llm_qwen36_flash",
-    "qwen/qwen3-6b": "llm_qwen36_flash",
+    "qwen/qwen3.6-flash": "llm_qwen_flash",
+    "qwen3.6-flash": "llm_qwen_flash",
+    "qwen/qwen3-6b": "llm_qwen_flash",
     "qwen/qwen3.6-plus": "llm_qwen_plus",
     "qwen3.6-plus": "llm_qwen_plus",
     "qwen/qwen-plus": "llm_qwen_plus",
@@ -75,8 +89,8 @@ BOT_USAGE_MODEL_ALIASES = {
     "hermes-3-llama-3.1-70b": "llm_hermes3_70b",
     "meta-llama/llama-3.1-8b-instruct": "llm_llama31_8b",
     "llama-3.1-8b-instant": "llm_llama31_8b",
-    "claude-opus-4-8": "llm_opus48",
-    "claude-opus-4-8-20260701": "llm_opus48",
+    "claude-opus-4-8": "llm_opus",
+    "claude-opus-4-8-20260701": "llm_opus",
     "deepseek/deepseek-v4-pro": "bot_deepseekv4_pro",
     "deepseek-v4-pro": "bot_deepseekv4_pro",
     "google/gemini-3.1-pro-preview": "llm_gemini31_pro_preview",
@@ -230,7 +244,7 @@ def usage_color_for_game(game: dict[str, Any], report: LlmUsageReport) -> str | 
             continue
         if user_id and str(player.get("user_id") or "").strip() == user_id:
             return color
-        username = str(player.get("username") or "").strip().lower()
+        username = canonical_llm_bot_username(player.get("username"))
         if username and username in candidate_usernames:
             return color
     return None

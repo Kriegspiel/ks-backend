@@ -4,6 +4,22 @@ from typing import Any, Literal
 
 LlmBotTier = Literal["guest", "tier1", "tier2", "tier3", "tier4", "tier5", "tier6"]
 
+LLM_BOT_USERNAME_ALIASES = {
+    "llm_gpt56_luna": "llm_gpt_luna",
+    "llm_sonnet5": "llm_sonnet",
+    "llm_gemini35_flash": "llm_gemini_flash",
+    "llm_qwen36_flash": "llm_qwen_flash",
+    "llm_opus48": "llm_opus",
+    "llm_gpt56_sol": "llm_gpt_sol",
+    "llm_grok45": "llm_grok",
+}
+
+
+def canonical_llm_bot_username(username: object) -> str:
+    normalized = str(username or "").strip().lower()
+    return LLM_BOT_USERNAME_ALIASES.get(normalized, normalized)
+
+
 DEFAULT_USER_LLM_BOT_TIER: LlmBotTier = "tier1"
 GUEST_LLM_BOT_TIER: LlmBotTier = "guest"
 UNLIMITED_LLM_BOT_TIER: LlmBotTier = "tier6"
@@ -96,26 +112,26 @@ BOT_ACCESS_TIER_BY_USERNAME: dict[str, LlmBotTier] = {
     "llm_deepseek_v32": "tier2",
     "llm_minimax_m3": "tier2",
     "openrouter_qwen36_flash": "tier3",
-    "llm_qwen36_flash": "tier3",
-    "llm_gpt56_luna": "tier2",
-    "llm_sonnet5": "tier3",
+    "llm_qwen_flash": "tier3",
+    "llm_gpt_luna": "tier2",
+    "llm_sonnet": "tier3",
     "llm_gemini25_flash": "tier3",
-    "llm_gemini35_flash": "tier3",
+    "llm_gemini_flash": "tier3",
     "llm_nemotron_ultra": "tier3",
     "llm_mistral_medium35": "tier3",
     "llm_kimi_k2_thinking": "tier3",
     "llm_hermes3_70b": "tier3",
     "openrouter_deepseekv4_pro": "tier4",
     "bot_deepseekv4_pro": "tier4",
-    "llm_opus48": "tier4",
+    "llm_opus": "tier4",
     "llm_gpt56_terra": "tier4",
     "llm_gemini31_pro_preview": "tier4",
     "llm_glm52": "tier4",
     "llm_kimi_k27_code": "tier4",
     "llm_hermes4_405b": "tier4",
     "llm_gpt55": "tier5",
-    "llm_gpt56_sol": "tier4",
-    "llm_grok45": "tier5",
+    "llm_gpt_sol": "tier4",
+    "llm_grok": "tier5",
     "llm_gpt55_pro": "tier5",
     "llm_qwen37_max": "tier5",
 }
@@ -126,7 +142,7 @@ KNOWN_LLM_BOT_USERNAMES = frozenset(
     username
     for username in BOT_ACCESS_TIER_BY_USERNAME
     if username not in NON_LLM_GATED_BOT_USERNAMES
-) | frozenset({"openrouterbot"})
+) | frozenset(LLM_BOT_USERNAME_ALIASES) | frozenset({"openrouterbot"})
 
 
 def normalize_llm_bot_tier(value: object, *, role: str | None = None) -> LlmBotTier:
@@ -156,7 +172,7 @@ def tier_allows_llm_bots(tier: LlmBotTier) -> bool:
 
 
 def bot_required_tier_for_username(username: object) -> LlmBotTier:
-    normalized_username = str(username or "").strip().lower()
+    normalized_username = canonical_llm_bot_username(username)
     return BOT_ACCESS_TIER_BY_USERNAME.get(normalized_username, GUEST_LLM_BOT_TIER)
 
 

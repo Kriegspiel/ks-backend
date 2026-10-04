@@ -11,7 +11,9 @@ from pymongo.errors import DuplicateKeyError
 from app.models.bot import BotListItem, BotListResponse, BotUsageReportRequest, supported_rule_variants_for_bot
 from app.models.user import normalize_user_stats_payload
 from app.llm_bot_policy import (
+    LLM_BOT_USERNAME_ALIASES,
     bot_required_tier_for_document,
+    canonical_llm_bot_username,
     is_llm_bot_document,
     llm_bot_limit_label_for_tier,
     llm_bot_ply_limit_for_tier,
@@ -51,25 +53,25 @@ MODEL_AVAILABILITY_REQUIRED_BOTS = {
     "llm_minimax_m3": "openai",
     "llm_gpt55": "openai",
     "llm_gpt55_pro": "openai",
-    "llm_gpt56_luna": "openai",
-    "llm_sonnet5": "anthropic",
+    "llm_gpt_luna": "openai",
+    "llm_sonnet": "anthropic",
     "llm_gemini25_flash": "openai",
-    "llm_grok45": "openai",
-    "llm_gemini35_flash": "openai",
-    "llm_qwen36_flash": "openai",
+    "llm_grok": "openrouter",
+    "llm_gemini_flash": "openai",
+    "llm_qwen_flash": "openai",
     "llm_qwen_plus": "openai",
     "llm_mistral_medium35": "openai",
     "llm_kimi_k2_thinking": "openai",
     "llm_hermes3_70b": "openai",
     "openrouter_deepseekv4_pro": "openai",
     "bot_deepseekv4_pro": "openai",
-    "llm_opus48": "anthropic",
+    "llm_opus": "anthropic",
     "llm_gpt56_terra": "openai",
     "llm_gemini31_pro_preview": "openai",
     "llm_glm52": "openai",
     "llm_kimi_k27_code": "openai",
     "llm_hermes4_405b": "openai",
-    "llm_gpt56_sol": "openai",
+    "llm_gpt_sol": "openai",
     "llm_qwen37_max": "openai",
 }
 MODEL_AVAILABILITY_STALE_AFTER = timedelta(seconds=120)
@@ -132,7 +134,7 @@ class BotService:
 
     @classmethod
     def model_availability_required_provider(cls, doc: dict[str, Any]) -> str | None:
-        username = str(doc.get("username") or "").strip().lower()
+        username = canonical_llm_bot_username(doc.get("username"))
         return MODEL_AVAILABILITY_REQUIRED_BOTS.get(username)
 
     @classmethod
@@ -191,6 +193,7 @@ class BotService:
                     ratings=stats.get("ratings", {}),
                     supported_rule_variants=self._supported_rule_variants(doc),
                     llm_backed=llm_backed,
+                    llm_reasoning_level=profile.get("llm_reasoning_level"),
                     required_tier=required_tier,
                     available_for_viewer=available_for_viewer,
                     llm_bot_tier=tier if llm_backed else None,
@@ -255,6 +258,8 @@ class BotService:
         old_username = str(current.get("username") or "").strip().lower()
         new_username = username.strip().lower() if isinstance(username, str) and username.strip() else old_username
         if new_username != old_username:
+            if new_username in LLM_BOT_USERNAME_ALIASES:
+                raise BotProfileConflictError(f"Username is reserved: {new_username}")
             existing = await self._users.find_one({"username": new_username, "_id": {"$ne": current["_id"]}})
             if existing is not None:
                 raise BotProfileConflictError(f"Username already exists: {new_username}")
