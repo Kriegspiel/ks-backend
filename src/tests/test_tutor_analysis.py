@@ -130,6 +130,7 @@ def test_build_tutor_evidence_bounds_attempts_and_long_games() -> None:
 
 def test_reasoning_and_safety_helpers_are_stable() -> None:
     assert _reasoning_effort(" HIGH ") == "high"
+    assert _reasoning_effort(" NONE ") == "medium"
     assert _reasoning_effort("unexpected") == "medium"
     identifier = _stable_safety_identifier(user_id=USER_ID, secret_key="secret")
 
@@ -138,7 +139,8 @@ def test_reasoning_and_safety_helpers_are_stable() -> None:
     assert identifier.startswith("ks_tutor_")
 
 
-def test_provider_requires_key_and_prepares_strict_bounded_request() -> None:
+@pytest.mark.parametrize("reasoning_effort", ["invalid", "none"])
+def test_provider_requires_key_and_prepares_strict_bounded_request(reasoning_effort: str) -> None:
     unavailable = OpenAITutorProvider(Settings(OPENAI_API_KEY=None))
     with pytest.raises(TutorProviderError) as exc_info:
         unavailable.ensure_available()
@@ -167,7 +169,7 @@ def test_provider_requires_key_and_prepares_strict_bounded_request() -> None:
 
     settings = Settings(
         OPENAI_API_KEY="test-key",
-        TUTOR_REASONING_EFFORT="invalid",
+        TUTOR_REASONING_EFFORT=reasoning_effort,
         TUTOR_MAX_OUTPUT_TOKENS=10,
     )
     provider = OpenAITutorProvider(settings)
@@ -178,7 +180,7 @@ def test_provider_requires_key_and_prepares_strict_bounded_request() -> None:
         user_id=USER_ID,
     )
 
-    assert request.payload["model"] == "gpt-5.6-terra"
+    assert request.payload["model"] == "gpt-6.1-sol"
     assert request.payload["reasoning"] == {"effort": "medium"}
     assert request.payload["max_output_tokens"] == 256
     assert request.payload["store"] is False

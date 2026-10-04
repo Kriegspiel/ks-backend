@@ -1819,6 +1819,7 @@ class UserService:
             "username": user.get("username"),
             "display_name": display_name,
             "role": role,
+            "status": user.get("status") or "active",
             "llm_bot_tier": public_llm_bot_tier,
             "is_bot": role == "bot",
             "owner_email": bot_profile.get("owner_email") or DEFAULT_BOT_OWNER_EMAIL if role == "bot" else None,

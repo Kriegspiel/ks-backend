@@ -1748,6 +1748,12 @@ class GameService:
             return loaded
         return {"_id": user_id, "username": player.get("username"), "role": "bot", "bot_profile": {}}
 
+    async def _active_bot_doc(self, user_id: str) -> dict[str, Any] | None:
+        bot = await self._find_user_doc(user_id)
+        if bot is None or bot.get("role") != "bot" or bot.get("status") != "active":
+            return None
+        return bot
+
     @staticmethod
     def _llm_bot_limit_payload(
         *,
@@ -2057,9 +2063,9 @@ class GameService:
         if creator.get("role") != "bot":
             raise GameForbiddenError(code="FORBIDDEN", message="Bots cannot join human-created lobby games")
 
-        bot_user = await self._find_user_doc(user_id)
+        bot_user = await self._active_bot_doc(user_id)
         if bot_user is None:
-            raise GameForbiddenError(code="FORBIDDEN", message="Bot account could not be loaded")
+            raise GameForbiddenError(code="BOT_INACTIVE", message="Bot account is not active")
 
         last_joined = self._normalize_utc_datetime((bot_user.get("bot_profile") or {}).get("last_bot_game_joined_at"))
         if isinstance(last_joined, datetime):
@@ -2085,6 +2091,8 @@ class GameService:
         code = await generate_game_code(SimpleNamespace(games=self._games, game_archives=self._archives))
 
         if role == "bot":
+            if await self._active_bot_doc(user_id) is None:
+                raise GameForbiddenError(code="BOT_INACTIVE", message="Bot account is not active")
             if request.opponent_type != "human":
                 raise GameValidationError(
                     code="BOT_CREATE_REQUIRES_HUMAN_OPPONENT", message="Bots can only create open lobby games"
@@ -2212,12 +2220,16 @@ class GameService:
             await self._enforce_bot_join_rules(user_id=user_id, game=game, now=now)
 
         llm_bot_payload: dict[str, Any] = {}
-        if role != "bot" and creator.get("role") == "bot":
-            llm_bot_payload = self._llm_bot_limit_payload(
-                bot=await self._bot_doc_for_player(creator),
-                viewer_role=role,
-                viewer_llm_bot_tier=llm_bot_tier,
-            )
+        if creator.get("role") == "bot":
+            creator_bot = await self._active_bot_doc(str(creator["user_id"]))
+            if creator_bot is None:
+                raise GameValidationError(code="BOT_UNAVAILABLE", message="Game creator bot is not active")
+            if role != "bot":
+                llm_bot_payload = self._llm_bot_limit_payload(
+                    bot=creator_bot,
+                    viewer_role=role,
+                    viewer_llm_bot_tier=llm_bot_tier,
+                )
 
         creator_color: PlayerColor = game.get("creator_color", "white")
         joiner_color: PlayerColor = "black" if creator_color == "white" else "white"
@@ -2282,6 +2294,8 @@ class GameService:
             creator_color: PlayerColor = doc.get("creator_color", "white")
             creator = self._creator_player(doc)
             if creator is None:
+                continue
+            if creator.get("role") == "bot" and await self._active_bot_doc(str(creator["user_id"])) is None:
                 continue
             items.append(
                 OpenGameItem(

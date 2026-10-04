@@ -219,7 +219,7 @@ def _stable_safety_identifier(*, user_id: str, secret_key: str) -> str:
 
 def _reasoning_effort(value: str) -> str:
     normalized = value.strip().lower()
-    return normalized if normalized in {"none", "low", "medium", "high", "xhigh", "max"} else "medium"
+    return normalized if normalized in {"low", "medium", "high", "xhigh", "max"} else "medium"
 
 
 class OpenAITutorProvider:
