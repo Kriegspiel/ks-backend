@@ -77,7 +77,7 @@ def _analysis_document(*, feedback: bool = False) -> dict:
         "game_id": GAME_ID,
         "game_code": GAME_CODE,
         "status": "completed",
-        "model": "gpt-5.6-terra",
+        "model": "gpt-6.1-sol",
         "analysis_version": "tutor-evidence-v1",
         "prompt_version": "tutor-private-beta-v1",
         "generated_at": NOW,
@@ -98,7 +98,7 @@ def test_service_defaults_provider_and_builds_versioned_query() -> None:
         "game_id": GAME_ID,
         "analysis_version": "tutor-evidence-v1",
         "prompt_version": "tutor-private-beta-v1",
-        "model": "gpt-5.6-terra",
+        "model": "gpt-6.1-sol",
     }
     assert service._month() == "2026-07"  # noqa: SLF001
 
@@ -259,13 +259,7 @@ async def test_budget_reservation_is_atomic_and_rejects_requests_over_five_dolla
 
 @pytest.mark.asyncio
 async def test_budget_settlement_and_actual_cost_are_fail_closed() -> None:
-    service, _analyses, _profiles, usage, _provider_obj = _service(
-        settings=Settings(
-            TUTOR_INPUT_COST_PER_MILLION_USD=2.5,
-            TUTOR_CACHED_INPUT_COST_PER_MILLION_USD=0.25,
-            TUTOR_OUTPUT_COST_PER_MILLION_USD=15,
-        )
-    )
+    service, _analyses, _profiles, usage, _provider_obj = _service()
 
     assert (
         service._actual_cost(  # noqa: SLF001
@@ -310,7 +304,7 @@ async def test_budget_settlement_and_actual_cost_are_fail_closed() -> None:
             output_tokens=500,
             reservation=0.1,
         )
-        == 0.0091
+        == 0.00624
     )
 
     await service._settle_budget(user_id=USER_ID, reservation=0.1, actual=0.01, failed=False)  # noqa: SLF001

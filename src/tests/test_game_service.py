@@ -2186,7 +2186,7 @@ async def test_waiting_game_and_bot_join_helpers_cover_list_and_missing_user_bra
             game={"white": {"user_id": "creator", "role": "bot"}},
             now=now,
         )
-    assert exc.value.code == "FORBIDDEN"
+    assert exc.value.code == "BOT_INACTIVE"
 
 
 @pytest.mark.asyncio

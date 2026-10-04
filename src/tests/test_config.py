@@ -15,7 +15,10 @@ def test_settings_defaults(monkeypatch):
         "TUTOR_BETA_USER_IDS",
         "TUTOR_MONTHLY_BUDGET_USD",
         "TUTOR_ANALYSIS_MODEL",
+        "TUTOR_REASONING_EFFORT",
+        "TUTOR_INPUT_COST_PER_MILLION_USD",
         "TUTOR_CACHED_INPUT_COST_PER_MILLION_USD",
+        "TUTOR_OUTPUT_COST_PER_MILLION_USD",
         "OPENAI_API_KEY",
         "STRIPE_SECRET_KEY",
         "STRIPE_PUBLISHABLE_KEY",
@@ -36,8 +39,11 @@ def test_settings_defaults(monkeypatch):
     assert settings.TUTOR_ENABLED is False
     assert settings.TUTOR_BETA_USER_IDS == ""
     assert settings.TUTOR_MONTHLY_BUDGET_USD == 5.0
-    assert settings.TUTOR_ANALYSIS_MODEL == "gpt-5.6-terra"
-    assert settings.TUTOR_CACHED_INPUT_COST_PER_MILLION_USD == 0.25
+    assert settings.TUTOR_ANALYSIS_MODEL == "gpt-6.1-sol"
+    assert settings.TUTOR_REASONING_EFFORT == "medium"
+    assert settings.TUTOR_INPUT_COST_PER_MILLION_USD == 2.0
+    assert settings.TUTOR_CACHED_INPUT_COST_PER_MILLION_USD == 0.10
+    assert settings.TUTOR_OUTPUT_COST_PER_MILLION_USD == 10.0
     assert settings.OPENAI_API_KEY is None
     assert settings.STRIPE_SECRET_KEY is None
     assert settings.STRIPE_PUBLISHABLE_KEY is None

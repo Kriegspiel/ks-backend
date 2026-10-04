@@ -19,6 +19,7 @@ from app.llm_bot_policy import (
     tier_allows_llm_bots,
 )
 from app.main import create_app
+from app.models.auth import BotRegisterRequest
 from app.models.bot import BotAvailabilityReportRequest, BotProfileSyncRequest, BotUsageReportRequest
 from app.models.game import CreateGameRequest
 from app.routers.bot import report_bot_availability, report_bot_usage, sync_bot_profile
@@ -31,6 +32,7 @@ T2_LLM_BOT_USERNAMES = (
     "llm_gptnano",
     "llm_gpt45nano",
     "llm_haiku",
+    "llm_gpt56_luna",
     "llm_deepseekv4_flash",
     "llm_gemini25_lite",
     "llm_gptoss120b",
@@ -59,6 +61,7 @@ T4_LLM_BOT_PROVIDERS = {
     "llm_opus48": "anthropic",
     "bot_deepseekv4_pro": "openai",
     "llm_gpt56_terra": "openai",
+    "llm_gpt56_sol": "openai",
     "llm_gemini31_pro_preview": "openai",
     "llm_glm52": "openai",
     "llm_kimi_k27_code": "openai",
@@ -66,7 +69,6 @@ T4_LLM_BOT_PROVIDERS = {
 }
 
 T3_LLM_BOT_PROVIDERS = {
-    "llm_gpt56_luna": "openai",
     "llm_sonnet5": "anthropic",
     "llm_gemini25_flash": "openai",
     "llm_gemini31_lite": "openai",
@@ -82,7 +84,6 @@ T3_LLM_BOT_PROVIDERS = {
 T5_LLM_BOT_PROVIDERS = {
     "llm_gpt55": "openai",
     "llm_gpt55_pro": "openai",
-    "llm_gpt56_sol": "openai",
     "llm_grok45": "openai",
     "llm_qwen37_max": "openai",
 }
@@ -381,6 +382,8 @@ def _add_ready_llm_bot(users: FakeUsersCollection, *, bot_id: ObjectId, username
         ("tier2", "llm_sonnet5"),
         ("tier3", "llm_opus48"),
         ("tier4", "llm_gpt55"),
+        ("tier1", "llm_gpt56_luna"),
+        ("tier3", "llm_gpt56_sol"),
     ],
 )
 @pytest.mark.asyncio
@@ -412,6 +415,8 @@ async def test_user_cannot_create_game_with_bot_above_their_tier(viewer_tier: st
         ("tier3", "llm_gptnano"),
         ("tier4", "llm_sonnet5"),
         ("tier5", "llm_opus48"),
+        ("tier2", "llm_gpt56_luna"),
+        ("tier4", "llm_gpt56_sol"),
     ],
 )
 @pytest.mark.asyncio
@@ -994,6 +999,122 @@ async def test_bot_can_create_one_open_lobby_game_only() -> None:
     assert exc.value.code == "BOT_ALREADY_HAS_OPEN_GAME"
 
 
+@pytest.mark.parametrize("action", ["create", "join"])
+@pytest.mark.asyncio
+async def test_retired_bot_cannot_start_games_with_cached_authentication(action: str) -> None:
+    users = FakeUsersCollection()
+    user_service = UserService(users)
+    UserService.clear_bot_token_cache()
+    bot, token = await user_service.create_bot(
+        BotRegisterRequest(
+            username="retiredbot",
+            display_name="Retired Bot",
+            owner_email="owner@example.com",
+            description="Historical bot",
+        )
+    )
+    cached_bot = await user_service.authenticate_bot_token(token)
+    assert cached_bot is not None
+    users.docs[0]["status"] = "inactive"
+
+    # The token cache can outlive a database status change. New-game eligibility
+    # must still consult the canonical account rather than this cached model.
+    assert await user_service.authenticate_bot_token(token) is cached_bot
+    assert cached_bot.status == "active"
+    games = FakeGamesCollection()
+    service = GameService(games, users_collection=users)
+    if action == "join":
+        creator_id = ObjectId()
+        users.docs.append({"_id": creator_id, "role": "bot", "status": "active", "username": "creatorbot"})
+        now = datetime.now(UTC)
+        games.docs.append(
+            {
+                "_id": ObjectId(),
+                "game_code": "R7K2M9",
+                "creator_color": "white",
+                "opponent_type": "human",
+                "white": {"user_id": str(creator_id), "username": "creatorbot", "role": "bot"},
+                "state": "waiting",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    try:
+        with pytest.raises(GameForbiddenError) as exc:
+            if action == "create":
+                await service.create_game(
+                    user_id=bot.id,
+                    username=bot.username,
+                    role=cached_bot.role,
+                    request=CreateGameRequest(opponent_type="human", time_control="rapid"),
+                )
+            else:
+                await service.join_game(
+                    user_id=bot.id, username=bot.username, role=cached_bot.role, game_code="R7K2M9"
+                )
+        assert exc.value.code == "BOT_INACTIVE"
+        assert len(games.docs) == (1 if action == "join" else 0)
+        assert all(game["state"] == "waiting" for game in games.docs)
+    finally:
+        UserService.clear_bot_token_cache()
+
+
+@pytest.mark.parametrize("joiner_role", ["user", "bot"])
+@pytest.mark.parametrize("creator_color", ["white", "black"])
+@pytest.mark.asyncio
+async def test_retired_bot_lobby_is_hidden_and_cannot_be_joined(joiner_role: str, creator_color: str) -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    retired_id = ObjectId()
+    joiner_id = ObjectId()
+    users.docs.extend(
+        [
+            {"_id": retired_id, "username": "retiredbot", "role": "bot", "status": "inactive"},
+            {"_id": joiner_id, "username": "joiner", "role": joiner_role, "status": "active"},
+        ]
+    )
+    now = datetime.now(UTC)
+    games.docs.append(
+        {
+            "_id": ObjectId(),
+            "game_code": "R7K2M9",
+            "creator_color": creator_color,
+            "opponent_type": "human",
+            creator_color: {"user_id": str(retired_id), "username": "retiredbot", "role": "bot"},
+            "state": "waiting",
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    service = GameService(games, users_collection=users)
+
+    assert (await service.get_open_games()).games == []
+    with pytest.raises(GameValidationError) as exc:
+        await service.join_game(
+            user_id=str(joiner_id), username="joiner", role=joiner_role, game_code="R7K2M9"
+        )
+    assert exc.value.code == "BOT_UNAVAILABLE"
+    assert games.docs[0]["state"] == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_open_lobby_keeps_active_bots() -> None:
+    games = FakeGamesCollection()
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    users.docs.append({"_id": bot_id, "username": "activebot", "role": "bot", "status": "active"})
+    service = GameService(games, users_collection=users)
+    created = await service.create_game(
+        user_id=str(bot_id),
+        username="activebot",
+        role="bot",
+        request=CreateGameRequest(opponent_type="human", time_control="rapid"),
+    )
+
+    assert [game.game_code for game in (await service.get_open_games()).games] == [created.game_code]
+
+
 @pytest.mark.asyncio
 async def test_bot_cannot_create_selected_bot_game() -> None:
     games = FakeGamesCollection()
@@ -1464,6 +1585,9 @@ async def test_bot_service_lists_active_bots() -> None:
     assert [bot.username for bot in listed.bots] == ["randobot"]
     assert listed.bots[0].elo == 1200
     assert listed.bots[0].supported_rule_variants == ["berkeley", "berkeley_any"]
+    assert "sleepybot" not in {
+        bot.username for bot in (await service.list_bots(profile_username="sleepybot")).bots
+    }
 
 
 @pytest.mark.asyncio
