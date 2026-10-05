@@ -1130,8 +1130,6 @@ class GameService:
         return finalized
 
     async def _finalize_completed_game_in_session(self, game: dict[str, Any], *, session: Any | None = None) -> dict[str, Any]:
-        if game.get("state") != "completed":
-            return game
         if game.get("stats_recorded_at"):
             await self._archive_completed_game_and_delete_live(game, session=session)
             return game
