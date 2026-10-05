@@ -568,11 +568,12 @@ def test_get_game_service_prefers_app_state_and_falls_back_to_database(monkeypat
 
     assert get_game_service(request) is existing_service
 
-    fake_db = SimpleNamespace(games=object(), users=object(), game_archives=object())
+    fake_db = SimpleNamespace(games=object(), users=object(), game_archives=object(), client=object())
     captured: dict[str, object] = {}
 
     class FakeGameService:
-        def __init__(self, games, *, users_collection, archives_collection, site_origin) -> None:  # noqa: ANN001
+        def __init__(self, games, *, users_collection, archives_collection, site_origin, mongo_client) -> None:  # noqa: ANN001
+            captured["mongo_client"] = mongo_client
             captured["games"] = games
             captured["users"] = users_collection
             captured["archives"] = archives_collection
@@ -596,6 +597,7 @@ def test_get_game_service_prefers_app_state_and_falls_back_to_database(monkeypat
 
     assert isinstance(service, FakeGameService)
     assert captured == {
+        "mongo_client": fake_db.client,
         "games": fake_db.games,
         "users": fake_db.users,
         "archives": fake_db.game_archives,

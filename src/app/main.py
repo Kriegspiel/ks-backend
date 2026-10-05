@@ -158,6 +158,7 @@ async def lifespan(app: FastAPI):
             users_collection=db.users,
             archives_collection=db.game_archives,
             site_origin=app.state.settings.SITE_ORIGIN,
+            mongo_client=db.client,
         )
         await app.state.game_service.start()
         app.state.archive_turn_count_migration_task = asyncio.create_task(

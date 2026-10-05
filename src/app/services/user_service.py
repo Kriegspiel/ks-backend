@@ -1408,10 +1408,14 @@ class UserService:
             stats["games_lost"] = int(overall_results.get("games_lost", 0))
             stats["games_drawn"] = int(overall_results.get("games_drawn", 0))
         updated = await db.users.find_one_and_update(
-            {"_id": user["_id"]},
+            {"_id": user["_id"], "stats": user.get("stats")},
             {"$set": {"stats": {**stats, "results_synced_at": utcnow()}, "updated_at": utcnow()}},
             return_document=ReturnDocument.AFTER,
         )
+        if updated is None:
+            # A completed game or another repair changed stats while archives
+            # were being read. Keep that newer state rather than overwriting it.
+            updated = await db.users.find_one({"_id": user["_id"]})
         normalized_user = dict(updated or user)
         normalized_user["stats"] = normalize_user_stats_payload(normalized_user.get("stats"))
         return normalized_user
