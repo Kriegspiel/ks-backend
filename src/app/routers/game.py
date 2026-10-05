@@ -77,6 +77,7 @@ def get_game_service(request: Request) -> GameService:
         db.games,
         users_collection=db.users,
         archives_collection=db.game_archives,
+        mongo_client=getattr(db, "client", None),
         site_origin=request.app.state.settings.SITE_ORIGIN,
     )
 

@@ -11,6 +11,8 @@ from typing import Any, Literal
 from bson import ObjectId
 import chess
 from pymongo import ReturnDocument
+from pymongo.read_concern import ReadConcern
+from pymongo.write_concern import WriteConcern
 import structlog
 
 from app.models.bot import supported_rule_variants_for_bot
@@ -163,8 +165,10 @@ class GameService:
         *,
         site_origin: str = "https://kriegspiel.org",
         rng: Any | None = None,
+        mongo_client: Any | None = None,
     ):
         self._games = games_collection
+        self._mongo_client = mongo_client
         self._users = users_collection
         self._archives = archives_collection
         self._site_origin = site_origin.rstrip("/")
@@ -935,11 +939,11 @@ class GameService:
     def _track_for_opponent_role(opponent_role: str) -> str:
         return "vs_bots" if opponent_role == "bot" else "vs_humans"
 
-    async def _find_user_doc(self, user_id: str | None) -> dict[str, Any] | None:
+    async def _find_user_doc(self, user_id: str | None, *, session: Any | None = None) -> dict[str, Any] | None:
         if self._users is None or not user_id:
             return None
 
-        user = await self._users.find_one({"_id": user_id})
+        user = await self._users.find_one({"_id": user_id}, **self._session_options(session))
         if user is not None:
             return user
 
@@ -947,14 +951,16 @@ class GameService:
             oid = ObjectId(user_id)
         except Exception:
             return None
-        return await self._users.find_one({"_id": oid})
+        return await self._users.find_one({"_id": oid}, **self._session_options(session))
 
-    async def _update_user_stats(self, *, user_id: str | None, stats: dict[str, Any]) -> None:
+    async def _update_user_stats(self, *, user_id: str | None, stats: dict[str, Any], session: Any | None = None) -> None:
         if self._users is None or not user_id:
             return
 
         update = {"$set": {"stats": normalize_user_stats_payload(stats), "updated_at": self.utcnow()}}
-        updated = await self._users.find_one_and_update({"_id": user_id}, update, return_document=ReturnDocument.AFTER)
+        updated = await self._users.find_one_and_update(
+            {"_id": user_id}, update, return_document=ReturnDocument.AFTER, **self._session_options(session)
+        )
         if updated is not None:
             return
 
@@ -962,14 +968,18 @@ class GameService:
             oid = ObjectId(user_id)
         except Exception:
             return
-        await self._users.find_one_and_update({"_id": oid}, update, return_document=ReturnDocument.AFTER)
+        await self._users.find_one_and_update(
+            {"_id": oid}, update, return_document=ReturnDocument.AFTER, **self._session_options(session)
+        )
 
-    async def _upsert_archive(self, archived_game: dict[str, Any]) -> None:
+    async def _upsert_archive(self, archived_game: dict[str, Any], *, session: Any | None = None) -> None:
         if self._archives is None:
             return
 
         if hasattr(self._archives, "replace_one"):
-            await self._archives.replace_one({"_id": archived_game["_id"]}, archived_game, upsert=True)
+            await self._archives.replace_one(
+                {"_id": archived_game["_id"]}, archived_game, upsert=True, **self._session_options(session)
+            )
             return
 
         docs = getattr(self._archives, "docs", None)
@@ -980,11 +990,11 @@ class GameService:
                     return
             docs.append(archived_game)
 
-    async def _find_archived_game_by_id(self, game_id: ObjectId) -> dict[str, Any] | None:
+    async def _find_archived_game_by_id(self, game_id: ObjectId, *, session: Any | None = None) -> dict[str, Any] | None:
         if self._archives is None:
             return None
         if hasattr(self._archives, "find_one"):
-            return await self._archives.find_one({"_id": game_id})
+            return await self._archives.find_one({"_id": game_id}, **self._session_options(session))
         docs = getattr(self._archives, "docs", None)
         if isinstance(docs, list):
             for doc in docs:
@@ -1004,9 +1014,9 @@ class GameService:
                     return doc
         return None
 
-    async def _find_live_game_by_id(self, game_id: ObjectId) -> dict[str, Any] | None:
+    async def _find_live_game_by_id(self, game_id: ObjectId, *, session: Any | None = None) -> dict[str, Any] | None:
         if hasattr(self._games, "find_one"):
-            return await self._games.find_one({"_id": game_id})
+            return await self._games.find_one({"_id": game_id}, **self._session_options(session))
         docs = getattr(self._games, "docs", None)
         if isinstance(docs, list):
             for doc in docs:
@@ -1014,9 +1024,9 @@ class GameService:
                     return doc
         return None
 
-    async def _delete_completed_live_game_document(self, *, game_id: ObjectId) -> None:
+    async def _delete_completed_live_game_document(self, *, game_id: ObjectId, session: Any | None = None) -> None:
         if hasattr(self._games, "delete_one"):
-            await self._games.delete_one({"_id": game_id})
+            await self._games.delete_one({"_id": game_id}, **self._session_options(session))
             return
         docs = getattr(self._games, "docs", None)
         if isinstance(docs, list):
@@ -1025,29 +1035,27 @@ class GameService:
                     docs.pop(index)
                     return
 
-    async def _archive_completed_game_and_delete_live(self, finalized: dict[str, Any]) -> None:
+    async def _archive_completed_game_and_delete_live(self, finalized: dict[str, Any], *, session: Any | None = None) -> None:
         if self._archives is None:
             return
 
         archive_doc = deepcopy(finalized)
         archive_doc.pop("stats_recording_started_at", None)
         archive_doc.update(archive_count_fields(archive_doc))
-        await self._upsert_archive(archive_doc)
-        archived = await self._find_archived_game_by_id(archive_doc["_id"])
+        await self._upsert_archive(archive_doc, session=session)
+        archived = await self._find_archived_game_by_id(archive_doc["_id"], session=session)
         if not mongo_documents_equal(archived, archive_doc):
             raise GameConflictError(
                 code="ARCHIVE_WRITE_MISMATCH",
                 message="Completed game archive write did not match the live game document",
             )
-        await self._delete_completed_live_game_document(game_id=archive_doc["_id"])
+        await self._delete_completed_live_game_document(game_id=archive_doc["_id"], session=session)
         from app.services.user_service import UserService
 
-        UserService.evict_profile_metrics_cache_for_user_ids(
-            [
-                str((archive_doc.get("white") or {}).get("user_id") or ""),
-                str((archive_doc.get("black") or {}).get("user_id") or ""),
-            ]
-        )
+        if session is None:
+            UserService.evict_profile_metrics_cache_for_user_ids(
+                [str((archive_doc.get(color) or {}).get("user_id") or "") for color in ("white", "black")]
+            )
 
     def _stats_recording_is_claimable(self, game: dict[str, Any], *, now: datetime) -> bool:
         if game.get("stats_recorded_at"):
@@ -1055,7 +1063,9 @@ class GameService:
         started_at = self._normalize_utc_datetime(game.get("stats_recording_started_at"))
         return started_at is None or now - started_at >= STATS_RECORDING_STALE_AFTER
 
-    async def _claim_completed_game_stats_recording(self, *, game_id: ObjectId, now: datetime) -> dict[str, Any] | None:
+    async def _claim_completed_game_stats_recording(
+        self, *, game_id: ObjectId, now: datetime, session: Any | None = None
+    ) -> dict[str, Any] | None:
         stale_before = now - STATS_RECORDING_STALE_AFTER
         query = {
             "_id": game_id,
@@ -1069,7 +1079,9 @@ class GameService:
         update = {"$set": {"stats_recording_started_at": now}}
 
         if hasattr(self._games, "find_one_and_update"):
-            return await self._games.find_one_and_update(query, update, return_document=ReturnDocument.AFTER)
+            return await self._games.find_one_and_update(
+                query, update, return_document=ReturnDocument.AFTER, **self._session_options(session)
+            )
 
         docs = getattr(self._games, "docs", None)
         if isinstance(docs, list):
@@ -1082,24 +1094,52 @@ class GameService:
                 return doc
         return None
 
-    async def _completed_game_after_stats_claim_miss(self, *, game_id: ObjectId) -> dict[str, Any] | None:
-        archived = await self._find_archived_game_by_id(game_id)
+    async def _completed_game_after_stats_claim_miss(
+        self, *, game_id: ObjectId, session: Any | None = None
+    ) -> dict[str, Any] | None:
+        archived = await self._find_archived_game_by_id(game_id, session=session)
         if archived is not None:
             return archived
-        live = await self._find_live_game_by_id(game_id)
+        live = await self._find_live_game_by_id(game_id, session=session)
         return live if live is not None and live.get("state") == "completed" else None
+
+    @staticmethod
+    def _session_options(session: Any | None) -> dict[str, Any]:
+        return {"session": session} if session is not None else {}
 
     async def _finalize_completed_game(self, game: dict[str, Any]) -> dict[str, Any]:
         if game.get("state") != "completed":
             return game
+        if self._mongo_client is None:
+            return await self._finalize_completed_game_in_session(deepcopy(game))
+
+        async def record(session: Any) -> dict[str, Any]:
+            # with_transaction may retry this callback after a write conflict.
+            # Never reuse the mutated document from an aborted attempt.
+            return await self._finalize_completed_game_in_session(deepcopy(game), session=session)
+
+        async with await self._mongo_client.start_session() as session:
+            finalized = await session.with_transaction(
+                record, read_concern=ReadConcern("snapshot"), write_concern=WriteConcern("majority")
+            )
+        from app.services.user_service import UserService
+
+        UserService.evict_profile_metrics_cache_for_user_ids(
+            [str((finalized.get(color) or {}).get("user_id") or "") for color in ("white", "black")]
+        )
+        return finalized
+
+    async def _finalize_completed_game_in_session(self, game: dict[str, Any], *, session: Any | None = None) -> dict[str, Any]:
+        if game.get("state") != "completed":
+            return game
         if game.get("stats_recorded_at"):
-            await self._archive_completed_game_and_delete_live(game)
+            await self._archive_completed_game_and_delete_live(game, session=session)
             return game
 
         processed_at = self.utcnow()
-        claimed_game = await self._claim_completed_game_stats_recording(game_id=game["_id"], now=processed_at)
+        claimed_game = await self._claim_completed_game_stats_recording(game_id=game["_id"], now=processed_at, session=session)
         if claimed_game is None:
-            existing = await self._completed_game_after_stats_claim_miss(game_id=game["_id"])
+            existing = await self._completed_game_after_stats_claim_miss(game_id=game["_id"], session=session)
             if existing is not None:
                 return existing
             game["stats_recording_started_at"] = processed_at
@@ -1110,8 +1150,8 @@ class GameService:
         winner = result.get("winner")
         white_user_id = game.get("white", {}).get("user_id")
         black_user_id = game.get("black", {}).get("user_id")
-        white_doc = await self._find_user_doc(white_user_id)
-        black_doc = await self._find_user_doc(black_user_id)
+        white_doc = await self._find_user_doc(white_user_id, session=session)
+        black_doc = await self._find_user_doc(black_user_id, session=session)
 
         rating_snapshot: dict[str, Any] | None = None
         if white_doc is not None and black_doc is not None:
@@ -1219,8 +1259,8 @@ class GameService:
             white_stats["elo_peak"] = white_stats["ratings"]["overall"]["peak"]
             black_stats["elo_peak"] = black_stats["ratings"]["overall"]["peak"]
 
-            await self._update_user_stats(user_id=white_user_id, stats=white_stats)
-            await self._update_user_stats(user_id=black_user_id, stats=black_stats)
+            await self._update_user_stats(user_id=white_user_id, stats=white_stats, session=session)
+            await self._update_user_stats(user_id=black_user_id, stats=black_stats, session=session)
 
         finalized_fields: dict[str, Any] = {"stats_recorded_at": processed_at}
         if rating_snapshot is not None:
@@ -1230,11 +1270,12 @@ class GameService:
             {"_id": game["_id"], "state": "completed"},
             {"$set": finalized_fields, "$unset": {"stats_recording_started_at": ""}},
             return_document=ReturnDocument.AFTER,
+            **self._session_options(session),
         )
         finalized = updated or game
         finalized.update(finalized_fields)
         finalized.pop("stats_recording_started_at", None)
-        await self._archive_completed_game_and_delete_live(finalized)
+        await self._archive_completed_game_and_delete_live(finalized, session=session)
         return finalized
 
     async def _get_live_game_document(self, *, game_id: str) -> dict[str, Any] | None:

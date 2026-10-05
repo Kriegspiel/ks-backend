@@ -4,6 +4,14 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.5.5
+
+- Record completed-game statistics, both players' Elo updates, and archival in
+  one MongoDB transaction; retry overlapping games without losing results.
+- Prevent profile result repair from overwriting statistics changed concurrently.
+- Add an offline, backed-up reconciliation of archived ratings and lifetime
+  results in completion order, with a read-only dry run.
+
 ## ks-backend v. 1.5.4
 
 - Publish the coordinated bot reasoning metadata rollout: xhigh for models supporting it, medium for Gemini and GPT-OSS. Preserve persisted labels as the source of truth in profiles and bot listings.

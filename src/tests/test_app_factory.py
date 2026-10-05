@@ -229,6 +229,7 @@ def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
         (),
         {
             "games": object(),
+            "client": object(),
             "users": object(),
             "sessions": object(),
             "analytics_events": object(),
@@ -241,7 +242,8 @@ def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
     calls: list[str] = []
 
     class FakeGameService:
-        def __init__(self, games, *, users_collection, archives_collection, site_origin) -> None:  # noqa: ANN001
+        def __init__(self, games, *, users_collection, archives_collection, site_origin, mongo_client) -> None:  # noqa: ANN001
+            assert mongo_client is fake_db.client
             assert games is fake_db.games
             assert users_collection is fake_db.users
             assert archives_collection is fake_db.game_archives
@@ -324,6 +326,7 @@ def test_lifespan_cancels_pending_migration_tasks(monkeypatch: pytest.MonkeyPatc
         (),
         {
             "games": object(),
+            "client": object(),
             "users": object(),
             "sessions": object(),
             "analytics_events": object(),
@@ -352,7 +355,7 @@ def test_lifespan_cancels_pending_migration_tasks(monkeypatch: pytest.MonkeyPatc
             return raise_cancelled().__await__()
 
     class FakeGameService:
-        def __init__(self, games, *, users_collection, archives_collection, site_origin) -> None:  # noqa: ANN001
+        def __init__(self, games, *, users_collection, archives_collection, site_origin, mongo_client) -> None:  # noqa: ANN001
             self.start = AsyncMock(side_effect=lambda: calls.append("start"))
             self.shutdown = AsyncMock(side_effect=lambda: calls.append("shutdown"))
 
