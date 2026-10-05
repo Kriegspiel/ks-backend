@@ -597,6 +597,7 @@ def test_get_game_service_prefers_app_state_and_falls_back_to_database(monkeypat
 
     assert isinstance(service, FakeGameService)
     assert captured == {
+        "mongo_client": fake_db.client,
         "games": fake_db.games,
         "users": fake_db.users,
         "archives": fake_db.game_archives,
