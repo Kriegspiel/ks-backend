@@ -37,5 +37,29 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install -r src/app/requirements-dev.txt
+      - name: Start disposable MongoDB replica set for statistics transaction tests
+        run: |
+          docker run --detach --name stats-mongo \
+            -p 127.0.0.1:27019:27019 mongo:7 \
+            --port 27019 --replSet ksStatsTest --bind_ip_all
+          for attempt in {1..30}; do
+            if docker exec stats-mongo mongosh --port 27019 --quiet --eval 'db.adminCommand({ping: 1})' >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec stats-mongo mongosh --port 27019 --quiet --eval \
+            'rs.initiate({_id: "ksStatsTest", members: [{_id: 0, host: "127.0.0.1:27019"}]})'
+          for attempt in {1..30}; do
+            if docker exec stats-mongo mongosh --port 27019 --quiet --eval \
+                'if (!db.hello().isWritablePrimary) { quit(1); }' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'Statistics test replica set did not become writable.' >&2
+          exit 1
       - name: Backend tests
+        env:
+          KRIEGSPIEL_TEST_MONGO_URI: mongodb://127.0.0.1:27019/?replicaSet=ksStatsTest
         run: ./scripts/regression/backend-regression.sh
