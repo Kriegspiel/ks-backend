@@ -202,3 +202,40 @@ def test_legacy_profile_and_all_history_routes_keep_the_same_identity(monkeypatc
     assert service.get_game_history.await_args.args[1] == str(bot_id)
     service.get_game_history_filter_options.assert_awaited_once_with(db, str(bot_id))
     service.get_rating_history.assert_awaited_once_with(db, str(bot_id), track="overall", limit=100)
+
+
+@pytest.mark.parametrize("username,level", [
+    ("llm_gpt_luna", "xhigh"), ("llm_gpt_sol", "xhigh"), ("llm_gpt_astra", "xhigh"),
+    ("llm_sonnet", "xhigh"), ("llm_opus", "xhigh"), ("llm_fable", "xhigh"), ("llm_grok", "xhigh"),
+    ("llm_gptoss120b", "medium"), ("llm_gemini31_lite", "medium"),
+    ("llm_gemini_flash", "medium"), ("llm_gemini31_pro_preview", "medium"),
+    ("llm_haiku", "enabled"), ("llm_gemma4_31b", "enabled"), ("llm_llama4_maverick", "none"),
+])
+@pytest.mark.asyncio
+async def test_active_catalog_reasoning_rollout_preserves_identity_stats_and_profile_refresh(username, level) -> None:
+    now = datetime.now(UTC)
+    users = FakeUsersCollection()
+    bot_id = ObjectId()
+    stats = default_user_stats_payload()
+    stats["elo"] = 1432
+    provider = BotService.model_availability_required_provider({"username": username})
+    users.docs.append({
+        "_id": bot_id, "username": username, "role": "bot", "status": "active",
+        "stats": stats, "created_at": now,
+        "bot_profile": {
+            "display_name": username, "llm_reasoning_level": level,
+            "model_availability": {"provider": provider, "ready": True, "checked_at": now},
+        },
+    })
+    service = BotService(users, now_factory=lambda: now)
+    await service.sync_supported_rule_variants(user_id=str(bot_id), supported_rule_variants=["wild16"])
+    assert users.docs[0]["stats"] == stats
+    db = FakeDB(users=users, game_archives=FakeUsersCollection())
+    profile = await UserService(users).get_public_profile(db, username)
+    catalog = await service.list_bots(viewer_llm_bot_tier="tier6")
+    assert profile["llm_reasoning_level"] == level
+    assert len(catalog.bots) == 1
+    assert catalog.bots[0].llm_reasoning_level == level
+    assert catalog.bots[0].bot_id == str(bot_id)
+    assert catalog.bots[0].elo == 1432
+    assert catalog.bots[0].required_tier == bot_required_tier_for_username(username)
