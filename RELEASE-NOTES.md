@@ -4,6 +4,10 @@ These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
 
+## ks-backend v. 1.5.4
+
+- Publish the coordinated bot reasoning metadata rollout: xhigh for models supporting it, medium for Gemini and GPT-OSS. Preserve persisted labels as the source of truth in profiles and bot listings.
+
 ## ks-backend v. 1.5.0
 
 - **Coordinated Tutor release**: promote the FIL-only private Tutor beta and
