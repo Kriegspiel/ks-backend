@@ -72,6 +72,7 @@ class BotRegisterRequest(BaseModel):
     display_name: str = Field(min_length=3, max_length=40)
     owner_email: str = Field(min_length=3, max_length=320)
     description: str = Field(default="", max_length=280)
+    author_note: str = Field(default="", max_length=2000)
     listed: bool | None = None
     supported_rule_variants: list[str] | None = None
 

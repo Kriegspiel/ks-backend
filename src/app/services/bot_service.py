@@ -247,10 +247,11 @@ class BotService:
         self,
         *,
         user_id: str,
-        supported_rule_variants: list[str],
+        supported_rule_variants: list[str] | None = None,
         username: str | None = None,
         display_name: str | None = None,
         description: str | None = None,
+        author_note: str | None = None,
     ) -> dict[str, Any] | None:
         current = await self._find_active_bot(user_id)
         if current is None:
@@ -267,9 +268,12 @@ class BotService:
                 raise BotProfileConflictError(f"Username already exists: {new_username}")
 
         changes: dict[str, Any] = {
-            "bot_profile.supported_rule_variants": list(supported_rule_variants),
             "updated_at": now,
         }
+        if supported_rule_variants is not None:
+            changes["bot_profile.supported_rule_variants"] = list(supported_rule_variants)
+        if author_note is not None:
+            changes["bot_profile.author_note"] = author_note.strip()
         if new_username != old_username:
             changes["username"] = new_username
         if isinstance(display_name, str) and display_name.strip():

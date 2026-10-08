@@ -128,8 +128,8 @@ def test_bot_profile_sync_request_validates_supported_rule_variants() -> None:
     assert payload.description == "LLM GPT-4.5 Nano (bot) Kriegspiel model bot."
     assert payload.supported_rule_variants == ["wild16", "berkeley_any"]
 
-    with pytest.raises(ValueError, match="At least one supported rule variant is required"):
-        BotProfileSyncRequest.validate_supported_rule_variants(None)
+    assert BotProfileSyncRequest.validate_supported_rule_variants(None) is None
+    assert BotProfileSyncRequest(author_note="Model: example-model").supported_rule_variants is None
 
     with pytest.raises(ValueError, match="Unsupported rule variant"):
         BotProfileSyncRequest(supported_rule_variants=["standard"])

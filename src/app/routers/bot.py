@@ -100,6 +100,7 @@ async def sync_bot_profile(
             username=payload.username,
             display_name=payload.display_name,
             description=payload.description,
+            author_note=payload.author_note,
         )
     except BotProfileConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -116,5 +117,6 @@ async def sync_bot_profile(
             or user.username
         ),
         description=str(profile.get("description") or ""),
-        supported_rule_variants=payload.supported_rule_variants,
+        author_note=str(profile.get("author_note") or ""),
+        supported_rule_variants=bot_service._supported_rule_variants(updated),
     )
