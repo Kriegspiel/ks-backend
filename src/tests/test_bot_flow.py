@@ -2285,6 +2285,7 @@ def test_bot_router_syncs_supported_rule_variants_for_authenticated_bot() -> Non
         "username": "simpleheuristics",
         "display_name": "Simple Heuristics",
         "description": "Heuristic bot",
+        "author_note": "",
         "supported_rule_variants": ["berkeley", "berkeley_any", "wild16"],
     }
     assert users.docs[0]["bot_profile"]["supported_rule_variants"] == ["berkeley", "berkeley_any", "wild16"]

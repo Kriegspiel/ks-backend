@@ -60,6 +60,7 @@ class BotProfile(BaseModel):
     display_name: str
     owner_email: str = "bots@kriegspiel.org"
     description: str = ""
+    author_note: str = Field(default="", max_length=2000)
     llm_backed: bool = False
     llm_reasoning_level: LlmReasoningLevel | None = None
     listed: bool = True
@@ -142,15 +143,13 @@ class BotProfileSyncRequest(BaseModel):
     username: str | None = Field(default=None, min_length=1, max_length=33, pattern=BOT_USERNAME_PATTERN)
     display_name: str | None = Field(default=None, min_length=3, max_length=40)
     description: str | None = Field(default=None, max_length=280)
-    supported_rule_variants: list[SupportedRuleVariant]
+    author_note: str | None = Field(default=None, max_length=2000)
+    supported_rule_variants: list[SupportedRuleVariant] | None = None
 
     @field_validator("supported_rule_variants")
     @classmethod
-    def validate_supported_rule_variants(cls, value: list[str]) -> list[SupportedRuleVariant]:
-        normalized = normalize_supported_rule_variants(value)
-        if normalized is None:
-            raise ValueError("At least one supported rule variant is required")
-        return normalized
+    def validate_supported_rule_variants(cls, value: list[str] | None) -> list[SupportedRuleVariant] | None:
+        return normalize_supported_rule_variants(value)
 
 
 class BotProfileSyncResponse(BaseModel):
@@ -160,4 +159,5 @@ class BotProfileSyncResponse(BaseModel):
     username: str
     display_name: str
     description: str
+    author_note: str
     supported_rule_variants: list[SupportedRuleVariant]
