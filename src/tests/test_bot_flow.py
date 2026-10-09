@@ -58,6 +58,7 @@ T2_LLM_BOT_USERNAMES = (
 )
 
 T4_LLM_BOT_PROVIDERS = {
+    "llm_grok45": "openrouter",
     "llm_opus48": "anthropic",
     "bot_deepseekv4_pro": "openai",
     "llm_gpt56_terra": "openai",
@@ -69,6 +70,7 @@ T4_LLM_BOT_PROVIDERS = {
 }
 
 T3_LLM_BOT_PROVIDERS = {
+    "llm_muse_spark": "openrouter",
     "llm_sonnet5": "anthropic",
     "llm_gemini25_flash": "openai",
     "llm_gemini31_lite": "openai",
@@ -86,7 +88,6 @@ T5_LLM_BOT_PROVIDERS = {
     "llm_gpt_astra": "openai",
     "llm_gpt55": "openai",
     "llm_gpt55_pro": "openai",
-    "llm_grok45": "openrouter",
     "llm_qwen37_max": "openai",
 }
 
@@ -1669,12 +1670,13 @@ async def test_bot_service_hides_catalog_suppressed_bots_but_keeps_direct_lookup
     )
     direct = await service.get_bot_by_id(str(hidden_bot_ids["llm_gemini25_flash"]))
 
-    assert [bot.username for bot in listed.bots] == ["llm_gemini31_lite", "llm_mistral_small32"]
+    assert [bot.username for bot in listed.bots] == ["llm_mistral_small32"]
     assert [bot.username for bot in profile_listed.bots] == [
         "llm_gemini25_flash",
-        "llm_gemini31_lite",
         "llm_mistral_small32",
     ]
+    lite_lookup = await service.list_bots(viewer_llm_bot_tier="tier3", profile_username="llm_gemini31_lite")
+    assert "llm_gemini31_lite" in {bot.username for bot in lite_lookup.bots}
     assert direct is not None
     assert direct["username"] == "llm_gemini25_flash"
     assert BotService.bot_can_start_games(direct, now=now) is True

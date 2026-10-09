@@ -30,7 +30,7 @@ RENAMED_BOTS = (
     ("llm_qwen36_flash", "llm_qwen_flash", "tier3", "openai", "qwen/qwen3.8-flash"),
     ("llm_opus48", "llm_opus", "tier4", "anthropic", "claude-opus-5-5"),
     ("llm_gpt56_sol", "llm_gpt_sol", "tier4", "openai", "gpt-6.1-sol"),
-    ("llm_grok45", "llm_grok", "tier5", "openrouter", "x-ai/grok-4.7"),
+    ("llm_grok45", "llm_grok", "tier4", "openrouter", "x-ai/grok-4.7"),
 )
 
 
@@ -207,7 +207,7 @@ def test_legacy_profile_and_all_history_routes_keep_the_same_identity(monkeypatc
 @pytest.mark.parametrize("username,level", [
     ("llm_gpt_luna", "xhigh"), ("llm_gpt_sol", "xhigh"), ("llm_gpt_astra", "xhigh"),
     ("llm_sonnet", "xhigh"), ("llm_opus", "xhigh"), ("llm_fable", "xhigh"), ("llm_grok", "xhigh"),
-    ("llm_gptoss120b", "medium"), ("llm_gemini31_lite", "medium"),
+    ("llm_gptoss120b", "medium"), ("llm_muse_glimmer", "xhigh"), ("llm_muse_spark", "xhigh"),
     ("llm_gemini_flash", "medium"), ("llm_gemini31_pro_preview", "medium"),
     ("llm_haiku", "enabled"), ("llm_gemma4_31b", "enabled"), ("llm_llama4_maverick", "none"),
 ])
@@ -239,3 +239,34 @@ async def test_active_catalog_reasoning_rollout_preserves_identity_stats_and_pro
     assert catalog.bots[0].bot_id == str(bot_id)
     assert catalog.bots[0].elo == 1432
     assert catalog.bots[0].required_tier == bot_required_tier_for_username(username)
+
+
+@pytest.mark.parametrize("username,model,tier", [
+    ("llm_muse_glimmer", "meta/muse-glimmer-30b", "tier2"),
+    ("llm_muse_spark", "meta/muse-spark-1.3", "tier3"),
+])
+def test_muse_bots_require_openrouter_readiness_and_attribute_usage(username, model, tier):
+    from app.llm_bot_policy import tier_allows_bot
+    now = datetime.now(UTC)
+    assert username in KNOWN_LLM_BOT_USERNAMES
+    assert bot_required_tier_for_username(username) == tier
+    assert tier_allows_bot(tier, tier)
+    assert not tier_allows_bot("tier1" if tier == "tier2" else "tier2", tier)
+    assert BotService.model_availability_required_provider({"username": username}) == "openrouter"
+    doc = {"username": username, "status": "active", "bot_profile": {}}
+    assert not BotService.bot_can_start_games(doc, now=now)
+    doc["bot_profile"]["model_availability"] = {"provider": "openrouter", "ready": True, "checked_at": now}
+    assert BotService.bot_can_start_games(doc, now=now)
+    doc["bot_profile"]["model_availability"]["provider"] = "openai"
+    assert not BotService.bot_can_start_games(doc, now=now)
+    for model_id in (model, model.split("/", 1)[1]):
+        report = _report(bot_user_id="", bot_username="openrouterbot", model=model_id, provider="openrouter")
+        assert usage_color_for_game({"black": {"username": username}}, report) == "black"
+
+
+def test_grok_is_available_from_t4_and_retired_lite_keeps_historical_tier():
+    from app.llm_bot_policy import tier_allows_bot
+    assert bot_required_tier_for_username("llm_grok45") == "tier4"
+    assert tier_allows_bot("tier4", bot_required_tier_for_username("llm_grok"))
+    assert not tier_allows_bot("tier3", bot_required_tier_for_username("llm_grok"))
+    assert bot_required_tier_for_username("llm_gemini31_lite") == "tier3"

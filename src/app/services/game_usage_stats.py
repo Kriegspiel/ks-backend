@@ -29,6 +29,10 @@ BOT_USAGE_USERNAME_ALIASES = {
 }
 BOT_USAGE_GENERIC_USERNAMES = frozenset({"openrouterbot"})
 BOT_USAGE_MODEL_ALIASES = {
+    "meta/muse-glimmer-30b": "llm_muse_glimmer",
+    "muse-glimmer-30b": "llm_muse_glimmer",
+    "meta/muse-spark-1.3": "llm_muse_spark",
+    "muse-spark-1.3": "llm_muse_spark",
     "gpt-6-astra": "llm_gpt_astra",
     "openai/gpt-6-astra": "llm_gpt_astra",
     "claude-fable-5-1": "llm_fable",

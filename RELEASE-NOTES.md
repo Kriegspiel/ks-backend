@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.5.7
+
+- Add OpenRouter Muse Glimmer (T2) and standard Muse Spark (T3) identities, readiness gates and usage attribution; move Grok to T4 and hide retired Flash-Lite.
+
 These notes summarize the backend release history reconstructed from the git
 history. New releases should add a section at the top when the application
 version changes.
