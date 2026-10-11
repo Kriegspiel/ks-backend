@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.5.8
+
+- Enable T5 Master checkout, prorated subscription changes, and webhook entitlement updates using server-configured monthly and annual prices.
+
 ## 1.5.7
 
 - Add OpenRouter Muse Glimmer (T2) and standard Muse Spark (T3) identities, readiness gates and usage attribution; move Grok to T4 and hide retired Flash-Lite.

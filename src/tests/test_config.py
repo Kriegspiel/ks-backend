@@ -23,6 +23,8 @@ def test_settings_defaults(monkeypatch):
         "STRIPE_SECRET_KEY",
         "STRIPE_PUBLISHABLE_KEY",
         "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_PRICE_T5_MONTHLY",
+        "STRIPE_PRICE_T5_YEARLY",
     ]:
         monkeypatch.delenv(key, raising=False)
 
@@ -50,6 +52,8 @@ def test_settings_defaults(monkeypatch):
     assert settings.STRIPE_WEBHOOK_SECRET is None
     assert settings.STRIPE_API_BASE == "https://api.stripe.com/v1"
     assert settings.STRIPE_PRICE_T2_MONTHLY is None
+    assert settings.STRIPE_PRICE_T5_MONTHLY is None
+    assert settings.STRIPE_PRICE_T5_YEARLY is None
 
 
 def test_settings_reads_environment_overrides(monkeypatch):
@@ -71,6 +75,8 @@ def test_settings_reads_environment_overrides(monkeypatch):
     monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_123")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_123")
     monkeypatch.setenv("STRIPE_PRICE_T2_MONTHLY", "price_t2_monthly")
+    monkeypatch.setenv("STRIPE_PRICE_T5_MONTHLY", "price_t5_monthly")
+    monkeypatch.setenv("STRIPE_PRICE_T5_YEARLY", "price_t5_yearly")
 
     settings = Settings()
 
@@ -92,6 +98,8 @@ def test_settings_reads_environment_overrides(monkeypatch):
     assert settings.STRIPE_PUBLISHABLE_KEY == "pk_test_123"
     assert settings.STRIPE_WEBHOOK_SECRET == "whsec_123"
     assert settings.STRIPE_PRICE_T2_MONTHLY == "price_t2_monthly"
+    assert settings.STRIPE_PRICE_T5_MONTHLY == "price_t5_monthly"
+    assert settings.STRIPE_PRICE_T5_YEARLY == "price_t5_yearly"
 
 
 def test_get_settings_cache_can_be_cleared_between_tests(monkeypatch):

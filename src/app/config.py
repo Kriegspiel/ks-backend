@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     STRIPE_PRICE_T3_YEARLY: str | None = None
     STRIPE_PRICE_T4_MONTHLY: str | None = None
     STRIPE_PRICE_T4_YEARLY: str | None = None
+    STRIPE_PRICE_T5_MONTHLY: str | None = None
+    STRIPE_PRICE_T5_YEARLY: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
