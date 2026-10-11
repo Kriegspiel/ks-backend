@@ -255,6 +255,7 @@ async def test_billing_status_exposes_availability_without_price_ids() -> None:
         "tier2": {"monthly": True, "yearly": False},
         "tier3": {"monthly": True, "yearly": True},
         "tier4": {"monthly": False, "yearly": False},
+        "tier5": {"monthly": False, "yearly": False},
     }
     assert "price_t2_monthly" not in json.dumps(status)
     assert status["billing"]["has_customer"] is True

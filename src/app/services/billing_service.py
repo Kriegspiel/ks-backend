@@ -24,6 +24,8 @@ PRICE_ENV_BY_PLAN: dict[tuple[str, str], str] = {
     ("tier3", "yearly"): "STRIPE_PRICE_T3_YEARLY",
     ("tier4", "monthly"): "STRIPE_PRICE_T4_MONTHLY",
     ("tier4", "yearly"): "STRIPE_PRICE_T4_YEARLY",
+    ("tier5", "monthly"): "STRIPE_PRICE_T5_MONTHLY",
+    ("tier5", "yearly"): "STRIPE_PRICE_T5_YEARLY",
 }
 ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing"}
 PORTAL_CONFIGURATION_METADATA = {
@@ -156,7 +158,7 @@ class BillingService:
                 interval: self._price_id_for(tier, interval) is not None
                 for interval in ("monthly", "yearly")
             }
-            for tier in ("tier2", "tier3", "tier4")
+            for tier in ("tier2", "tier3", "tier4", "tier5")
         }
 
     def _stripe_enabled(self) -> bool:
@@ -507,7 +509,7 @@ class BillingService:
         interval: str,
         status: str,
     ) -> None:
-        if tier not in {"tier2", "tier3", "tier4"} or interval not in {"monthly", "yearly"}:
+        if tier not in {"tier2", "tier3", "tier4", "tier5"} or interval not in {"monthly", "yearly"}:
             return
         update = {
             "$set": {

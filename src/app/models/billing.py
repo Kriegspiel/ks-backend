@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-BillingTier = Literal["tier2", "tier3", "tier4"]
+BillingTier = Literal["tier2", "tier3", "tier4", "tier5"]
 BillingInterval = Literal["monthly", "yearly"]
 
 
