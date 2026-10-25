@@ -28,6 +28,7 @@ from app.services.game_usage_stats import (
     game_usage_report_summary,
 )
 from app.services.guest_names import GUEST_FIRST_NAMES, GUEST_LAST_NAMES
+from app.services.rating_history_cache import RatingHistoryCache
 
 DEFAULT_BOT_OWNER_EMAIL = "bots@kriegspiel.org"
 USER_GAME_HISTORY_MAX_PER_PAGE = 10000
@@ -144,6 +145,7 @@ class UserService:
     _bot_token_cache_ttl_seconds = get_settings().BOT_TOKEN_CACHE_TTL_SECONDS
     _profile_metrics_cache: dict[str, tuple[int, dict[str, Any]]] = {}
     _profile_metrics_cache_max_entries = 2048
+    _rating_history_cache = RatingHistoryCache()
 
     def __init__(self, users_collection: Any):
         self._users = users_collection
@@ -157,12 +159,14 @@ class UserService:
     @classmethod
     def clear_profile_metrics_cache(cls) -> None:
         cls._profile_metrics_cache.clear()
+        cls._rating_history_cache.clear()
 
     @classmethod
     def evict_profile_metrics_cache_for_user_ids(cls, user_ids: list[str | None] | tuple[str | None, ...]) -> None:
         for user_id in user_ids:
             if user_id:
                 cls._profile_metrics_cache.pop(str(user_id), None)
+                cls._rating_history_cache.invalidate_user(str(user_id))
 
     @staticmethod
     def canonical_username(username: str) -> str:
@@ -1448,6 +1452,13 @@ class UserService:
         return aggregated
 
     async def get_rating_history(self, db: Any, user_id: str, *, track: str, limit: int = 100) -> dict[str, Any]:
+        bounded_limit = min(max(limit, 10), 100)
+        return await self._rating_history_cache.get(
+            (id(db), user_id, track, bounded_limit),
+            lambda: self._build_rating_history(db, user_id, track=track, limit=bounded_limit),
+        )
+
+    async def _build_rating_history(self, db: Any, user_id: str, *, track: str, limit: int) -> dict[str, Any]:
         bounded_limit = min(max(limit, 10), 100)
         query = {"$or": [{"white.user_id": user_id}, {"black.user_id": user_id}]}
         cursor = self._find(

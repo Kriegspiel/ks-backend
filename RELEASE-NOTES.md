@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.5.9 — 2026-10-25
+
+Cache complete rating-history chart responses with bounded memory and expiry, coalesce concurrent reads, and invalidate after committed game completion. All rating tracks and whole-history aggregation retain their existing semantics.
+
 ## 1.5.8
 
 - Enable T5 Master checkout, prorated subscription changes, and webhook entitlement updates using server-configured monthly and annual prices.

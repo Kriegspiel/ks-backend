@@ -325,6 +325,11 @@ async def reconcile_database(
     for collection, operations in ((db.game_archives, archive_ops), (db.games, live_ops), (db.users, user_ops)):
         for start in range(0, len(operations), max(1, batch_size)):
             await collection.bulk_write(operations[start : start + max(1, batch_size)], ordered=True)
+    # Also invalidate charts for callers using this repair helper in-process.
+    # The production wrapper keeps the backend offline and restarts it afterward.
+    from app.services.user_service import UserService
+
+    UserService.clear_profile_metrics_cache()
     # While offline, an exact replay must be a no-op after a successful apply.
     verified = await reconcile_database(db, apply=False, ratings_from=ratings_from)
     if verified["changed_users"] or verified["changed_archives"]:
