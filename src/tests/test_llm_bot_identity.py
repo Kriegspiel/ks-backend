@@ -24,7 +24,7 @@ from tests.test_user_service import FakeDB, FakeUsersCollection
 
 
 RENAMED_BOTS = (
-    ("llm_gpt56_terra", "llm_gpt_terra", "tier4", "openai", "gpt-6.1-terra"),
+    ("llm_gpt56_terra", "llm_gpt_terra", "tier3", "openai", "gpt-6.1-terra"),
     ("llm_gpt56_luna", "llm_gpt_luna", "tier2", "openai", "gpt-6-luna"),
     ("llm_sonnet5", "llm_sonnet", "tier3", "anthropic", "claude-sonnet-5-5"),
     ("llm_gemini35_flash", "llm_gemini_flash", "tier3", "openai", "google/gemini-3.8-flash"),
