@@ -61,8 +61,6 @@ T4_LLM_BOT_PROVIDERS = {
     "llm_grok45": "openrouter",
     "llm_opus48": "anthropic",
     "bot_deepseekv4_pro": "openai",
-    "llm_gpt56_terra": "openai",
-    "llm_gpt_terra": "openai",
     "llm_gpt56_sol": "openai",
     "llm_gemini31_pro_preview": "openai",
     "llm_glm52": "openai",
@@ -71,6 +69,9 @@ T4_LLM_BOT_PROVIDERS = {
 }
 
 T3_LLM_BOT_PROVIDERS = {
+    "llm_gpt56_terra": "openai",
+    "llm_gpt_terra": "openai",
+
     "llm_muse_spark": "openrouter",
     "llm_sonnet5": "anthropic",
     "llm_gemini25_flash": "openai",
@@ -390,7 +391,7 @@ def _add_ready_llm_bot(users: FakeUsersCollection, *, bot_id: ObjectId, username
         ("tier4", "llm_gpt_astra"),
         ("tier1", "llm_gpt56_luna"),
         ("tier3", "llm_gpt56_sol"),
-        ("tier3", "llm_gpt_terra"),
+        ("tier2", "llm_gpt_terra"),
     ],
 )
 @pytest.mark.asyncio
@@ -424,6 +425,7 @@ async def test_user_cannot_create_game_with_bot_above_their_tier(viewer_tier: st
         ("tier5", "llm_opus48"),
         ("tier2", "llm_gpt56_luna"),
         ("tier4", "llm_gpt56_sol"),
+        ("tier3", "llm_gpt_terra"),
         ("tier4", "llm_gpt_terra"),
         ("tier5", "llm_fable"),
         ("tier5", "llm_gpt_astra"),
