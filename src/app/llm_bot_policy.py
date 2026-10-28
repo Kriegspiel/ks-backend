@@ -5,6 +5,7 @@ from typing import Any, Literal
 LlmBotTier = Literal["guest", "tier1", "tier2", "tier3", "tier4", "tier5", "tier6"]
 
 LLM_BOT_USERNAME_ALIASES = {
+    "llm_gpt56_terra": "llm_gpt_terra",
     "llm_gpt56_luna": "llm_gpt_luna",
     "llm_sonnet5": "llm_sonnet",
     "llm_gemini35_flash": "llm_gemini_flash",
@@ -125,6 +126,7 @@ BOT_ACCESS_TIER_BY_USERNAME: dict[str, LlmBotTier] = {
     "bot_deepseekv4_pro": "tier4",
     "llm_opus": "tier4",
     "llm_gpt56_terra": "tier4",
+    "llm_gpt_terra": "tier4",
     "llm_gemini31_pro_preview": "tier4",
     "llm_glm52": "tier4",
     "llm_kimi_k27_code": "tier4",

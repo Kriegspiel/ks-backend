@@ -71,6 +71,7 @@ MODEL_AVAILABILITY_REQUIRED_BOTS = {
     "bot_deepseekv4_pro": "openai",
     "llm_opus": "anthropic",
     "llm_gpt56_terra": "openai",
+    "llm_gpt_terra": "openai",
     "llm_gemini31_pro_preview": "openai",
     "llm_glm52": "openai",
     "llm_kimi_k27_code": "openai",

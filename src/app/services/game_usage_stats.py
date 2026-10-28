@@ -29,6 +29,8 @@ BOT_USAGE_USERNAME_ALIASES = {
 }
 BOT_USAGE_GENERIC_USERNAMES = frozenset({"openrouterbot"})
 BOT_USAGE_MODEL_ALIASES = {
+    "gpt-6.1-terra": "llm_gpt_terra",
+    "openai/gpt-6.1-terra": "llm_gpt_terra",
     "meta/muse-glimmer-30b": "llm_muse_glimmer",
     "muse-glimmer-30b": "llm_muse_glimmer",
     "meta/muse-spark-1.3": "llm_muse_spark",
@@ -60,8 +62,8 @@ BOT_USAGE_MODEL_ALIASES = {
     "gpt-5.5-pro": "llm_gpt55_pro",
     "openai/gpt-5.6-sol": "llm_gpt_sol",
     "gpt-5.6-sol": "llm_gpt_sol",
-    "openai/gpt-5.6-terra": "llm_gpt56_terra",
-    "gpt-5.6-terra": "llm_gpt56_terra",
+    "openai/gpt-5.6-terra": "llm_gpt_terra",
+    "gpt-5.6-terra": "llm_gpt_terra",
     "openai/gpt-5.6-luna": "llm_gpt_luna",
     "gpt-5.6-luna": "llm_gpt_luna",
     "claude-sonnet-5": "llm_sonnet",

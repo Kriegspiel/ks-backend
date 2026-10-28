@@ -105,7 +105,7 @@ BOT_MATRIX_PLAYER_ORDER = (
     "llm_hermes3_70b",
     "llm_opus",
     "bot_deepseekv4_pro",
-    "llm_gpt56_terra",
+    "llm_gpt_terra",
     "llm_gemini31_pro_preview",
     "llm_glm52",
     "llm_kimi_k27_code",
