@@ -24,6 +24,7 @@ from tests.test_user_service import FakeDB, FakeUsersCollection
 
 
 RENAMED_BOTS = (
+    ("llm_gpt56_terra", "llm_gpt_terra", "tier4", "openai", "gpt-6.1-terra"),
     ("llm_gpt56_luna", "llm_gpt_luna", "tier2", "openai", "gpt-6-luna"),
     ("llm_sonnet5", "llm_sonnet", "tier3", "anthropic", "claude-sonnet-5-5"),
     ("llm_gemini35_flash", "llm_gemini_flash", "tier3", "openai", "google/gemini-3.8-flash"),
@@ -270,3 +271,10 @@ def test_grok_is_available_from_t4_and_retired_lite_keeps_historical_tier():
     assert tier_allows_bot("tier4", bot_required_tier_for_username("llm_grok"))
     assert not tier_allows_bot("tier3", bot_required_tier_for_username("llm_grok"))
     assert bot_required_tier_for_username("llm_gemini31_lite") == "tier3"
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-terra", "openai/gpt-5.6-terra", "gpt-6.1-terra", "openai/gpt-6.1-terra"])
+def test_terra_usage_keeps_matching_preserved_and_canonical_names(model):
+    for player in ("llm_gpt56_terra", "llm_gpt_terra"):
+        report = _report(bot_user_id="", bot_username="openrouterbot", model=model, provider="openai")
+        assert usage_color_for_game({"black": {"username": player}}, report) == "black"
