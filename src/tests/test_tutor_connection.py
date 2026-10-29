@@ -11,6 +11,7 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jose import jwk, jwt
+from jose.exceptions import JWTClaimsError
 
 from app import tutor_login
 from app.services.tutor_connection import (
@@ -199,7 +200,10 @@ async def test_failed_refresh_never_uses_api_key_or_overwrites_registration(cred
     assert read_credentials(credential_path)["access_token"] == "private-access"
 
 
-def login_factory(login, *, subject="fil", nonce=None, scopes=None, status=200, tokens=True):
+def login_factory(
+    login, *, subject="fil", nonce=None, scopes=None, status=200, tokens=True,
+    include_at_hash=True, returned_access_token="a",
+):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     from cryptography.hazmat.primitives import serialization
 
@@ -218,6 +222,7 @@ def login_factory(login, *, subject="fil", nonce=None, scopes=None, status=200, 
         },
         pem,
         algorithm="RS256",
+        access_token="a" if include_at_hash else None,
     )
 
     def handle(request):
@@ -227,7 +232,7 @@ def login_factory(login, *, subject="fil", nonce=None, scopes=None, status=200, 
             status,
             json={
                 "id_token": token,
-                "access_token": "a",
+                "access_token": returned_access_token,
                 "refresh_token": "r" if tokens else None,
                 "scope": " ".join(REQUIRED_SCOPES) if scopes is None else scopes,
             },
@@ -257,6 +262,23 @@ def test_official_login_validates_pkce_state_identity_and_scopes(tmp_path):
     returning.complete(callback(returning), login_factory(returning))
     with pytest.raises(ValueError):
         login.complete(callback(login))
+
+
+@pytest.mark.parametrize("include_at_hash", [True, False])
+def test_login_accepts_verified_identity_with_optional_access_token_binding(tmp_path, include_at_hash):
+    path = str(tmp_path / "connection.json")
+    login = tutor_login.Login(path, 1455)
+    login.complete(callback(login), login_factory(login, include_at_hash=include_at_hash))
+    assert read_credentials(path)["access_token"] == "a"
+
+
+@pytest.mark.parametrize("returned_access_token", ["different-token", None])
+def test_login_rejects_identity_bound_to_a_different_or_missing_access_token(tmp_path, returned_access_token):
+    path = tmp_path / "connection.json"
+    login = tutor_login.Login(str(path), 1455)
+    with pytest.raises(JWTClaimsError, match="access_token"):
+        login.complete(callback(login), login_factory(login, returned_access_token=returned_access_token))
+    assert not path.exists()
 
 
 @pytest.mark.parametrize(
