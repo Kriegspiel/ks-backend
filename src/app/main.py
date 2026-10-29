@@ -23,11 +23,13 @@ from app.routers.billing import router as billing_router
 from app.routers.bot import router as bot_router
 from app.routers.game import router as game_router
 from app.routers.tutor import router as tutor_router
+from app.routers.tutor import tutor_error_handler
 from app.routers.user import router as user_router
 from app.services.analytics_service import AnalyticsService
 from app.services.game_service import GameService
 from app.services.session_service import SessionService
 from app.services.tutor_service import TutorService
+from app.services.tutor_connection import TutorError
 
 logger = structlog.get_logger("app.main")
 APP_API_INGRESS_HOSTS = {"app.kriegspiel.org", "testserver", "localhost", "127.0.0.1"}
@@ -148,11 +150,13 @@ async def lifespan(app: FastAPI):
         app.state.session_service = SessionService(db.sessions)
         app.state.analytics_service = AnalyticsService(db.analytics_events)
         app.state.tutor_service = TutorService(
-            db.tutor_analyses,
-            db.tutor_profiles,
-            db.tutor_usage,
+            db.tutor_sessions,
+            db.tutor_learning,
+            db.tutor_exercises,
+            db.game_archives,
             settings=app.state.settings,
         )
+        await app.state.tutor_service.start()
         app.state.game_service = GameService(
             db.games,
             users_collection=db.users,
@@ -183,6 +187,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        tutor_service = getattr(app.state, "tutor_service", None)
+        if tutor_service is not None:
+            await tutor_service.shutdown()
         game_service = getattr(app.state, "game_service", None)
         if game_service is not None:
             await game_service.shutdown()
@@ -217,6 +224,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
     )
     app.state.settings = resolved_settings
+    app.add_exception_handler(TutorError, tutor_error_handler)
     configure_openapi(app, resolved_settings)
     logger.info("app_bootstrap", environment=resolved_settings.ENVIRONMENT, sentry_enabled=sentry_enabled)
 

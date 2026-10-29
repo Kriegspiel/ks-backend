@@ -69,20 +69,11 @@ async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
         [("utm.source", ASCENDING), ("utm.campaign", ASCENDING), ("occurred_at", DESCENDING)]
     )
 
-    await db.tutor_analyses.create_index(
-        [
-            ("user_id", ASCENDING),
-            ("game_id", ASCENDING),
-            ("analysis_version", ASCENDING),
-            ("prompt_version", ASCENDING),
-            ("model", ASCENDING),
-        ],
-        unique=True,
-    )
-    await db.tutor_analyses.create_index([("user_id", ASCENDING), ("generated_at", DESCENDING)])
-    await db.tutor_analyses.create_index([("status", ASCENDING), ("started_at", ASCENDING)])
-    await db.tutor_profiles.create_index([("user_id", ASCENDING)], unique=True)
-    await db.tutor_usage.create_index([("user_id", ASCENDING), ("month", ASCENDING)], unique=True)
+    await db.tutor_sessions.create_index([("user_id", ASCENDING), ("session_id", ASCENDING)], unique=True)
+    await db.tutor_sessions.create_index([("user_id", ASCENDING), ("updated_at", DESCENDING)])
+    await db.tutor_learning.create_index([("user_id", ASCENDING)], unique=True)
+    await db.tutor_exercises.create_index([("user_id", ASCENDING), ("exercise_id", ASCENDING)], unique=True)
+    await db.tutor_exercises.create_index([("user_id", ASCENDING), ("updated_at", DESCENDING)])
 
 
 async def init_db(settings: Settings) -> AsyncIOMotorDatabase:

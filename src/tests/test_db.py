@@ -43,9 +43,9 @@ def _fake_db_collections():
             "audit_log",
             "sessions",
             "analytics_events",
-            "tutor_analyses",
-            "tutor_profiles",
-            "tutor_usage",
+            "tutor_sessions",
+            "tutor_learning",
+            "tutor_exercises",
         ]
     }
 
@@ -146,27 +146,14 @@ async def test_init_db_creates_required_indexes(monkeypatch):
         (([("attribution_id", 1)],), {"unique": True}),
         (([("utm.source", 1), ("utm.campaign", 1), ("occurred_at", -1)],), {}),
     ]
-    assert collections["tutor_analyses"].create_index.await_args_list == [
-        (
-            (
-                [
-                    ("user_id", 1),
-                    ("game_id", 1),
-                    ("analysis_version", 1),
-                    ("prompt_version", 1),
-                    ("model", 1),
-                ],
-            ),
-            {"unique": True},
-        ),
-        (([("user_id", 1), ("generated_at", -1)],), {}),
-        (([("status", 1), ("started_at", 1)],), {}),
+    assert collections["tutor_sessions"].create_index.await_args_list == [
+        (([("user_id", 1), ("session_id", 1)],), {"unique": True}),
+        (([("user_id", 1), ("updated_at", -1)],), {}),
     ]
-    assert collections["tutor_profiles"].create_index.await_args_list == [
-        (([("user_id", 1)],), {"unique": True})
-    ]
-    assert collections["tutor_usage"].create_index.await_args_list == [
-        (([("user_id", 1), ("month", 1)],), {"unique": True})
+    assert collections["tutor_learning"].create_index.await_args_list == [(([("user_id", 1)],), {"unique": True})]
+    assert collections["tutor_exercises"].create_index.await_args_list == [
+        (([("user_id", 1), ("exercise_id", 1)],), {"unique": True}),
+        (([("user_id", 1), ("updated_at", -1)],), {}),
     ]
 
 
@@ -222,12 +209,10 @@ async def test_init_db_integration_creates_indexes_when_mongo_available():
     assert any(spec.get("key") == [("game_code", 1)] and spec.get("unique") for spec in archives_indexes.values())
     assert any(spec.get("key") == [("updated_at", -1)] for spec in archives_indexes.values())
     assert any(
-        spec.get("key") == [("white.user_id", 1), ("updated_at", -1), ("created_at", -1)]
-        for spec in archives_indexes.values()
+        spec.get("key") == [("white.user_id", 1), ("updated_at", -1), ("created_at", -1)] for spec in archives_indexes.values()
     )
     assert any(
-        spec.get("key") == [("black.user_id", 1), ("updated_at", -1), ("created_at", -1)]
-        for spec in archives_indexes.values()
+        spec.get("key") == [("black.user_id", 1), ("updated_at", -1), ("created_at", -1)] for spec in archives_indexes.values()
     )
 
     for collection_name in ("games", "game_archives"):
