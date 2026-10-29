@@ -120,6 +120,10 @@ async def test_subscription_stream_contract_and_only_completed_response_succeeds
         ),
         ({"type": "response.failed", "response": {"error": None}}, "TUTOR_CONNECTION_UNAVAILABLE"),
         ({"type": "response.incomplete"}, "TUTOR_RESPONSE_INCOMPLETE"),
+        (
+            {"type": "response.incomplete", "response": {"usage": {"input_tokens": 10, "output_tokens": 5}}},
+            "TUTOR_RESPONSE_INCOMPLETE",
+        ),
         ({"type": "error"}, "TUTOR_RESPONSE_INCOMPLETE"),
         ({"type": "response.completed", "response": {"status": "incomplete"}}, "TUTOR_RESPONSE_INCOMPLETE"),
     ],
@@ -137,6 +141,7 @@ async def test_stream_failures_are_not_cached_or_retried(credential_path, event,
     with pytest.raises(TutorError) as exc:
         await connection.respond(instructions="", inputs=[], tools=[])
     assert exc.value.code == code
+    assert exc.value.usage == (event.get("response") or {}).get("usage")
     assert sum(request.method == "POST" for request in calls) == 1
 
 
@@ -201,8 +206,15 @@ async def test_failed_refresh_never_uses_api_key_or_overwrites_registration(cred
 
 
 def login_factory(
-    login, *, subject="fil", nonce=None, scopes=None, status=200, tokens=True,
-    include_at_hash=True, returned_access_token="a",
+    login,
+    *,
+    subject="fil",
+    nonce=None,
+    scopes=None,
+    status=200,
+    tokens=True,
+    include_at_hash=True,
+    returned_access_token="a",
 ):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     from cryptography.hazmat.primitives import serialization

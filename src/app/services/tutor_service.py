@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from uuid import uuid4
 
 import structlog
@@ -13,6 +14,7 @@ from pydantic import ValidationError
 from app.models.tutor import Evidence, MessageCreate, SessionCreate, TutorInput
 from app.services.tutor_connection import TutorConnection, TutorError
 from app.services.tutor_tools import TOOL_MODELS, TutorTools, learning_context, now, rules, tool_definitions
+from app.services.tutor_usage import TOKEN_FIELDS, initial_usage, measured_usage, public_usage
 
 logger = structlog.get_logger(__name__)
 
@@ -66,6 +68,16 @@ class TutorService:
         return TutorTools(self.archives, self.learning, self.exercises, user_id=user_id, session_id=session_id)
 
     async def start(self) -> None:
+        # Normalize the existing personal-alpha totals once; historical cache/reasoning splits cannot be recovered.
+        async for session in self.sessions.find({"usage.accounting_version": {"$ne": 1}}):
+            await self.sessions.update_one(
+                {"user_id": session["user_id"], "session_id": session["session_id"]},
+                {"$set": {"usage": initial_usage(session.get("usage")), "usage_events": {}}},
+            )
+        async for session in self.sessions.find({"status": "running"}):
+            for call_id, event in session.get("usage_events", {}).items():
+                if event["status"] == "pending":
+                    await self._finish_usage(session["user_id"], session["session_id"], call_id, event, None, "interrupted")
         # A restarted process cannot resume an unknown provider outcome without risking duplicate usage.
         await self.sessions.update_many(
             {"status": "running"},
@@ -111,7 +123,8 @@ class TutorService:
             "messages": [],
             "requests": [],
             "tool_log": [],
-            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "usage": initial_usage(),
+            "usage_events": {},
             "updated_at": now(),
         }
         await self.sessions.insert_one(session)
@@ -119,7 +132,7 @@ class TutorService:
 
     @staticmethod
     def session_public(document: dict) -> dict:
-        return {
+        response = {
             key: document[key]
             for key in (
                 "session_id",
@@ -129,10 +142,66 @@ class TutorService:
                 "activity",
                 "messages",
                 "tool_log",
-                "usage",
                 "updated_at",
             )
         }
+        response["usage"] = public_usage(document["usage"])
+        response["usage_events"] = list(document["usage_events"].values())[-20:]
+        return response
+
+    async def _finish_usage(self, user_id, session_id, call_id, event, raw, status):
+        measured = measured_usage(raw)
+        record = {**event, **measured, "status": status, "finished_at": now().isoformat()}
+        record["duration_ms"] = max(0, round((time.monotonic() - event["started_monotonic"]) * 1000))
+        record.pop("started_monotonic")
+        increments = {f"usage.{key}": measured[key] for key in TOKEN_FIELDS}
+        increments.update(
+            {
+                "usage.api_equivalent_nanodollars": measured["api_equivalent_nanodollars"],
+                "usage.reported_requests": int(measured["reported"]),
+                "usage.unknown_requests": -int(measured["reported"]),
+                "usage.incomplete_cache_requests": int(measured["reported"] and not measured["cache_breakdown_reported"]),
+                "usage.incomplete_reasoning_requests": int(
+                    measured["reported"] and not measured["reasoning_breakdown_reported"]
+                ),
+            }
+        )
+        changed = await self.sessions.update_one(
+            {"user_id": user_id, "session_id": session_id, f"usage_events.{call_id}.status": "pending"},
+            {"$set": {f"usage_events.{call_id}": record}, "$inc": increments},
+        )
+        if changed.modified_count:
+            logger.info("tutor_model_usage", session_id=session_id, **record)
+
+    async def _respond(self, user_id, session_id, run_id, inputs):
+        call_id = str(uuid4())
+        event = {
+            "call_id": call_id,
+            "run_id": run_id,
+            "status": "pending",
+            "started_at": now().isoformat(),
+            "started_monotonic": time.monotonic(),
+        }
+        stored = await self.sessions.update_one(
+            {"user_id": user_id, "session_id": session_id},
+            {"$inc": {"usage.requests": 1, "usage.unknown_requests": 1}, "$set": {f"usage_events.{call_id}": event}},
+        )
+        if stored.modified_count != 1:
+            raise TutorError("TUTOR_USAGE_UNAVAILABLE", "Usage could not be saved. No model request was started.", 503)
+        try:
+            response = await self.connection.respond(instructions=COACH_INSTRUCTIONS, inputs=inputs, tools=tool_definitions())
+        except BaseException as exc:
+            await self._finish_usage(
+                user_id,
+                session_id,
+                call_id,
+                event,
+                getattr(exc, "usage", None),
+                "interrupted" if isinstance(exc, asyncio.CancelledError) else "failed",
+            )
+            raise
+        await self._finish_usage(user_id, session_id, call_id, event, response.get("usage"), "completed")
+        return response
 
     async def get_session(self, user_id: str, session_id: str) -> dict:
         document = await self.sessions.find_one({"user_id": user_id, "session_id": session_id})
@@ -235,11 +304,20 @@ class TutorService:
                 else "This turn could not finish. Your session is saved; you can try again."
             )
             await self.sessions.update_one(query, {"$set": {"status": "error", "activity": message}})
-            logger.warning("tutor_turn_failed", error_type=type(exc).__name__)
+            logger.warning("tutor_turn_failed", session_id=session_id, run_id=run_id, error_type=type(exc).__name__)
         finally:
             await self.sessions.update_one(query, {"$set": {"active_run": None}})
             await self.learning.update_one({"user_id": user_id, "active_run": run_id}, {"$set": {"active_run": None}})
             self.tasks.pop(run_id, None)
+            saved = await self.sessions.find_one({"user_id": user_id, "session_id": session_id})
+            if saved is not None:
+                logger.info(
+                    "tutor_session_usage",
+                    session_id=session_id,
+                    run_id=run_id,
+                    status=saved["status"],
+                    **public_usage(saved["usage"]),
+                )
 
     async def _loop(self, user_id: str, session_id: str, run_id: str) -> None:
         query = {"user_id": user_id, "session_id": session_id, "active_run": run_id}
@@ -257,18 +335,8 @@ class TutorService:
                     "TUTOR_CONTEXT_LIMIT",
                     "This turn has enough material. Ask for a smaller review or continue in a new session.",
                 )
-            response = await self.connection.respond(instructions=COACH_INSTRUCTIONS, inputs=inputs, tools=tool_definitions())
+            response = await self._respond(user_id, session_id, run_id, inputs)
             await self._active(user_id, session_id, run_id)
-            usage = response.get("usage") or {}
-            await self.sessions.update_one(
-                query,
-                {
-                    "$inc": {
-                        "usage.input_tokens": max(0, int(usage.get("input_tokens", 0))),
-                        "usage.output_tokens": max(0, int(usage.get("output_tokens", 0))),
-                    }
-                },
-            )
             output = response.get("output", [])
             function_calls = [item for item in output if item.get("type") == "function_call"]
             if not function_calls:
@@ -336,9 +404,9 @@ class TutorService:
                 except (ValidationError, TutorError) as exc:
                     encoded = json.dumps(
                         {
-                            "error": str(exc)
-                            if isinstance(exc, TutorError)
-                            else "Invalid tool arguments; follow the tool schema."
+                            "error": (
+                                str(exc) if isinstance(exc, TutorError) else "Invalid tool arguments; follow the tool schema."
+                            )
                         }
                     )
                 await self.sessions.update_one(
