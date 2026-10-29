@@ -111,10 +111,10 @@ def test_openapi_uses_prefixless_canonical_paths_and_hides_legacy_api_prefix():
     assert "/billing/portal-session" in paths
     assert "/billing/subscription-change-session" in paths
     assert "/game/stats" in paths
-    assert "/tutor/profile" in paths
-    assert "/tutor/games/{game_code}" in paths
-    assert "/tutor/games/{game_code}/analysis" in paths
-    assert "/tutor/games/{game_code}/feedback" in paths
+    assert "/tutor/workspace" in paths
+    assert "/tutor/sessions" in paths
+    assert "/tutor/exercises/{exercise_id}/actions" in paths
+    assert "/tutor/games/{game_code}/analysis" not in paths
     assert "/bots" in paths
     assert "/user/{username}" in paths
     assert "/tech/users-report" in paths
@@ -122,7 +122,7 @@ def test_openapi_uses_prefixless_canonical_paths_and_hides_legacy_api_prefix():
     assert "/api/auth/login" not in paths
     assert "/api/billing/subscription" not in paths
     assert "/api/game/stats" not in paths
-    assert "/api/tutor/profile" not in paths
+    assert "/api/tutor/workspace" not in paths
     assert "/api/bots" not in paths
     assert "/api/user/{username}" not in paths
     assert "/api/tech/users-report" not in paths
@@ -146,8 +146,8 @@ def test_openapi_marks_bearer_authenticated_routes_and_leaves_registration_publi
     assert schema["paths"]["/billing/portal-session"]["post"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/billing/subscription-change-session"]["post"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/game/open"]["get"]["security"] == [{"BearerAuth": []}]
-    assert schema["paths"]["/tutor/games/{game_code}"]["get"]["security"] == [{"BearerAuth": []}]
-    assert schema["paths"]["/tutor/games/{game_code}/analysis"]["post"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/tutor/workspace"]["get"]["security"] == [{"BearerAuth": []}]
+    assert schema["paths"]["/tutor/sessions"]["post"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/auth/me"]["get"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/tech/users-report"]["get"]["security"] == [{"BearerAuth": []}]
     assert schema["paths"]["/tech/acquisition-report"]["get"]["security"] == [{"BearerAuth": []}]
@@ -234,9 +234,9 @@ def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
             "sessions": object(),
             "analytics_events": object(),
             "game_archives": object(),
-            "tutor_analyses": object(),
-            "tutor_profiles": object(),
-            "tutor_usage": object(),
+            "tutor_sessions": SimpleNamespace(update_many=AsyncMock()),
+            "tutor_learning": SimpleNamespace(update_many=AsyncMock()),
+            "tutor_exercises": object(),
         },
     )()
     calls: list[str] = []
@@ -331,9 +331,9 @@ def test_lifespan_cancels_pending_migration_tasks(monkeypatch: pytest.MonkeyPatc
             "sessions": object(),
             "analytics_events": object(),
             "game_archives": object(),
-            "tutor_analyses": object(),
-            "tutor_profiles": object(),
-            "tutor_usage": object(),
+            "tutor_sessions": SimpleNamespace(update_many=AsyncMock()),
+            "tutor_learning": SimpleNamespace(update_many=AsyncMock()),
+            "tutor_exercises": object(),
         },
     )()
     calls: list[str] = []
