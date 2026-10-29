@@ -3,7 +3,7 @@ from importlib.metadata import PackageNotFoundError
 from app import version as version_module
 
 
-def test_current_release_version_is_1_6_0():
+def test_current_release_version_matches_approved_patch_release():
     assert version_module._load_project_metadata()["version"] == "1.5.12"
 
 
