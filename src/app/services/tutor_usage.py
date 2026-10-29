@@ -13,6 +13,40 @@ PRICING_SOURCE = "https://developers.openai.com/api/docs/pricing"
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_tokens", "reasoning_tokens")
 
 
+def usage_log_fields(value: dict) -> dict:
+    """Token counts under `units`, not credential-like names masked by the shared logger."""
+    counters = (*TOKEN_FIELDS, "total_tokens", "legacy_input_tokens", "legacy_output_tokens", "cache_write_12h_tokens")
+    metadata = (
+        "call_id",
+        "run_id",
+        "status",
+        "started_at",
+        "finished_at",
+        "duration_ms",
+        "model",
+        "effort",
+        "reported",
+        "cache_breakdown_reported",
+        "reasoning_breakdown_reported",
+        "requests",
+        "reported_requests",
+        "unknown_requests",
+        "incomplete_cache_requests",
+        "incomplete_reasoning_requests",
+        "accounting_version",
+        "api_equivalent_nanodollars",
+        "api_equivalent_usd",
+        "pricing_version",
+        "pricing_source",
+        "basis",
+    )
+    fields = {key: value[key] for key in metadata if key in value}
+    fields["units"] = {key.removesuffix("_tokens"): value[key] for key in counters if key in value}
+    if "rates_nanodollars_per_token" in value:
+        fields["rates_nanodollars_per_unit"] = value["rates_nanodollars_per_token"]
+    return fields
+
+
 def count(value) -> int:
     return value if type(value) is int and 0 <= value <= 10_000_000 else 0
 
