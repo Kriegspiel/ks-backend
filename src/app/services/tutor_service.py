@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from app.models.tutor import Evidence, MessageCreate, SessionCreate, TutorInput
 from app.services.tutor_connection import TutorConnection, TutorError
 from app.services.tutor_tools import TOOL_MODELS, TutorTools, learning_context, now, rules, tool_definitions
-from app.services.tutor_usage import TOKEN_FIELDS, initial_usage, measured_usage, public_usage
+from app.services.tutor_usage import TOKEN_FIELDS, initial_usage, measured_usage, public_usage, usage_log_fields
 
 logger = structlog.get_logger(__name__)
 
@@ -171,7 +171,7 @@ class TutorService:
             {"$set": {f"usage_events.{call_id}": record}, "$inc": increments},
         )
         if changed.modified_count:
-            logger.info("tutor_model_usage", session_id=session_id, **record)
+            logger.info("tutor_model_usage", coach_id=session_id, **usage_log_fields(record))
 
     async def _respond(self, user_id, session_id, run_id, inputs):
         call_id = str(uuid4())
@@ -304,7 +304,7 @@ class TutorService:
                 else "This turn could not finish. Your session is saved; you can try again."
             )
             await self.sessions.update_one(query, {"$set": {"status": "error", "activity": message}})
-            logger.warning("tutor_turn_failed", session_id=session_id, run_id=run_id, error_type=type(exc).__name__)
+            logger.warning("tutor_turn_failed", coach_id=session_id, run_id=run_id, error_type=type(exc).__name__)
         finally:
             await self.sessions.update_one(query, {"$set": {"active_run": None}})
             await self.learning.update_one({"user_id": user_id, "active_run": run_id}, {"$set": {"active_run": None}})
@@ -313,10 +313,10 @@ class TutorService:
             if saved is not None:
                 logger.info(
                     "tutor_session_usage",
-                    session_id=session_id,
+                    coach_id=session_id,
                     run_id=run_id,
                     status=saved["status"],
-                    **public_usage(saved["usage"]),
+                    **usage_log_fields(public_usage(saved["usage"])),
                 )
 
     async def _loop(self, user_id: str, session_id: str, run_id: str) -> None:

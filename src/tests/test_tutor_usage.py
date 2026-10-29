@@ -10,6 +10,32 @@ from tests.test_tutor_agent import archive, exercise_args, service as tutor_serv
 service = tutor_service_fixture
 
 
+@pytest.mark.asyncio
+async def test_real_production_logger_preserves_numeric_usage_and_never_logs_private_text(service, capsys, monkeypatch):
+    import json
+    import structlog
+    from uuid import uuid4
+    from app.logging_config import configure_logging
+    from tests.test_tutor_agent import MessageCreate, reply, finish
+
+    configure_logging("production")
+    monkeypatch.setattr("app.services.tutor_service.logger", structlog.get_logger("test.tutor.usage"))
+    created = await service.create_session("fil-id", SessionCreate())
+    service.connection.respond.return_value = reply("PRIVATE REPLY")
+    await service.message("fil-id", created["session_id"], MessageCreate(request_id=uuid4(), text="PRIVATE PROMPT"))
+    await finish(service)
+    output = capsys.readouterr().out
+    records = [json.loads(line) for line in output.splitlines()]
+    model = next(row for row in records if row["event"] == "tutor_model_usage")
+    total = next(row for row in records if row["event"] == "tutor_session_usage")
+    assert model["coach_id"] == total["coach_id"] == created["session_id"]
+    assert model["units"]["input"] == total["units"]["input"] == 50
+    assert model["units"]["output"] == total["units"]["output"] == 20
+    assert model["rates_nanodollars_per_unit"]["input"] == 2000
+    assert total["api_equivalent_usd"] == 0.0003 and total["requests"] == 1
+    assert "[REDACTED]" not in output and "PRIVATE PROMPT" not in output and "PRIVATE REPLY" not in output
+
+
 def test_token_value_has_no_cache_or_reasoning_double_counting():
     usage = measured_usage(
         {
