@@ -23,7 +23,12 @@ from app.models.tutor import (
 )
 from app.services import engine_adapter as engine
 from app.services.game_service import GameService
-from app.services.state_projection import build_viewer_scoresheet, serialize_engine_scoresheets
+from app.services.state_projection import (
+    _answer_next_turn_message,
+    _move_messages,
+    build_viewer_scoresheet,
+    serialize_engine_scoresheets,
+)
 from app.services.tutor_connection import TutorError
 
 
@@ -155,6 +160,7 @@ class TutorTools:
                     "color": color,
                     "result": document.get("result"),
                     "completed_at": document["updated_at"].isoformat(),
+                    "opponent": document["black" if color == "white" else "white"].get("username"),
                     "opponent_role": document["black" if color == "white" else "white"].get("role", "user"),
                     "attempts": len(own),
                     "completed_moves": sum(bool(move.get("move_done")) for _, move in own),
@@ -184,6 +190,7 @@ class TutorTools:
                 move = moves[index]
                 own = move["color"] == color
                 before = engine.visible_fen(game, color)
+                turn = int(engine.full_fen(game).split()[-1])
                 answer = (
                     engine.ask_any(game)
                     if move.get("question_type") == "ASK_ANY"
@@ -200,12 +207,15 @@ class TutorTools:
                     {
                         "ref": f"{args.game_code}:{index + 1}",
                         "ply": index + 1,
+                        "turn": turn,
+                        "color": move["color"],
                         "actor": "self" if own else "opponent",
                         "attempt": move.get("uci") if own else None,
                         "question": move.get("question_type") if own else None,
                         "before_fen": before,
                         "after_fen": engine.visible_fen(game, color),
                         "answer": public_answer(answer),
+                        "messages": _move_messages(answer) + [text for text in (_answer_next_turn_message(answer),) if text],
                     }
                 )
             return events
@@ -221,6 +231,18 @@ class TutorTools:
             "next_start": stop + 1 if stop < len(moves) else None,
             "perspective": "Only your pieces, your attempts, and announcements visible to you. No opponent move coordinates.",
         }
+
+    async def exercise_history(self, exercise_id: str, start: int) -> dict:
+        exercise = await self.exercise(exercise_id)
+        if start >= exercise["ply"]:
+            return {"events": [], "next_start": None, "total_attempts": exercise["ply"] - 1}
+        window = await self.get_game(
+            GameWindow(game_code=exercise["game_code"], start=start, limit=min(60, exercise["ply"] - start))
+        )
+        window["total_attempts"] = exercise["ply"] - 1
+        if window["next_start"] is not None and window["next_start"] >= exercise["ply"]:
+            window["next_start"] = None
+        return window
 
     async def validate_evidence(self, evidence) -> None:
         for ref in evidence:

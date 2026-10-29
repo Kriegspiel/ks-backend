@@ -154,8 +154,8 @@ def archive(*, code="ABC234", user="fil-id", variant="berkeley_any", moves=None)
     return {
         "game_code": code,
         "state": "completed",
-        "white": {"user_id": user, "role": "user"},
-        "black": {"user_id": "opponent", "role": "bot"},
+        "white": {"user_id": user, "role": "user", "username": "fil"},
+        "black": {"user_id": "opponent", "role": "bot", "username": "randobot"},
         "rule_variant": variant,
         "moves": recorded,
         "updated_at": datetime(2026, 10, 29, tzinfo=UTC),
@@ -470,7 +470,10 @@ async def test_saved_session_agent_turn_tool_use_and_no_reload_inference(service
     await finish(service)
     saved = await service.get_session("fil-id", session_id)
     assert saved["status"] == "idle" and len(saved["messages"]) == 2
-    assert saved["usage"] == {"input_tokens": 100, "output_tokens": 40}
+    assert saved["usage"]["input_tokens"] == 100 and saved["usage"]["output_tokens"] == 40
+    assert saved["usage"]["requests"] == 2 and saved["usage"]["unknown_requests"] == 0
+    assert saved["usage"]["api_equivalent_usd"] == 0.0006
+    assert len(saved["usage_events"]) == 2
     assert len(saved["tool_log"]) == 2
     assert await service.message("fil-id", session_id, request) == saved
     workspace = await service.workspace("fil-id")
@@ -578,13 +581,36 @@ def test_all_tutor_routes_are_fil_only_and_have_no_legacy_endpoints(service):
     app.dependency_overrides[get_tutor_service] = lambda: service
     with TestClient(app) as client:
         assert client.get("/api/tutor/workspace").status_code == 404
+        private_reads = ["/api/tutor/games", "/api/tutor/games/ABC234/attempts/1", f"/api/tutor/exercises/{uuid4()}/history"]
+        for path in private_reads:
+            assert client.get(path).status_code == 404
         for role, identity in [("guest", "fil-id"), ("bot", "fil-id"), ("admin", "fil-id"), ("user", "other")]:
             app.dependency_overrides[get_tutor_candidate_user] = lambda: SimpleNamespace(
                 role=role, id=identity, status="active"
             )
             assert client.get("/api/tutor/workspace").status_code == 404
+            for path in private_reads:
+                assert client.get(path).status_code == 404
         app.dependency_overrides[get_tutor_candidate_user] = lambda: SimpleNamespace(role="user", id="fil-id", status="active")
         assert client.get("/api/tutor/workspace").status_code == 200
+        games = client.get("/api/tutor/games?limit=1").json()
+        assert games["games"][0]["opponent"] == "randobot"
+        assert client.get("/api/tutor/games?offset=5").json()["games"] == []
+        own = client.get("/api/tutor/games/ABC234/attempts/1").json()
+        assert own["event"]["attempt"] == "e2e4" and own["event"]["turn"] == 1
+        assert client.get("/api/tutor/games/ABC234/attempts/2").json()["event"]["attempt"] is None
+        for path in ["/api/tutor/games/ABC234/attempts/50", "/api/tutor/games/XYZ234/attempts/1", private_reads[-1]]:
+            assert client.get(path).status_code == 404
+        for path in [
+            "/api/tutor/games?offset=-1",
+            "/api/tutor/games?limit=31",
+            "/api/tutor/games/ABC234/attempts/0",
+            "/api/tutor/games/abcdef/attempts/1",
+            f"{private_reads[-1]}?start=0",
+        ]:
+            assert client.get(path).status_code == 422
+        exercise = asyncio.run(service.tools("fil-id").create_exercise(exercise_args(ply=3)))
+        assert client.get(f"/api/tutor/exercises/{exercise['exercise_id']}/history").json()["total_attempts"] == 2
         session = client.post("/api/tutor/sessions", json={}).json()
         sid = session["session_id"]
         assert client.get(f"/api/tutor/sessions/{sid}").status_code == 200

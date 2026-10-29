@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.version import APP_VERSION
+from tests.test_tutor_agent import Collection
 
 
 def test_create_app_sets_expected_title():
@@ -234,7 +235,7 @@ def test_lifespan_initializes_and_shuts_down_game_service(monkeypatch) -> None:
             "sessions": object(),
             "analytics_events": object(),
             "game_archives": object(),
-            "tutor_sessions": SimpleNamespace(update_many=AsyncMock()),
+            "tutor_sessions": Collection(),
             "tutor_learning": SimpleNamespace(update_many=AsyncMock()),
             "tutor_exercises": object(),
         },
@@ -331,7 +332,7 @@ def test_lifespan_cancels_pending_migration_tasks(monkeypatch: pytest.MonkeyPatc
             "sessions": object(),
             "analytics_events": object(),
             "game_archives": object(),
-            "tutor_sessions": SimpleNamespace(update_many=AsyncMock()),
+            "tutor_sessions": Collection(),
             "tutor_learning": SimpleNamespace(update_many=AsyncMock()),
             "tutor_exercises": object(),
         },

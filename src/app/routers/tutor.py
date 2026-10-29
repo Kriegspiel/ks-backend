@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.dependencies import require_tutor_access
-from app.models.tutor import ExerciseAction, MemoryDelete, MessageCreate, SessionCreate
+from app.models.tutor import ExerciseAction, GameSearch, GameWindow, MemoryDelete, MessageCreate, SessionCreate
 from app.models.user import UserModel
 from app.services.tutor_connection import TutorError
 from app.services.tutor_service import TutorService
@@ -28,6 +28,29 @@ async def tutor_error_handler(_request: Request, exc: TutorError) -> JSONRespons
 @router.get("/workspace")
 async def workspace(user: UserModel = Depends(require_tutor_access), service: TutorService = Depends(get_tutor_service)):
     return await service.workspace(user.id)
+
+
+@router.get("/games")
+async def games(
+    offset: int = Query(default=0, ge=0, le=100000),
+    limit: int = Query(default=15, ge=1, le=30),
+    user: UserModel = Depends(require_tutor_access),
+    service: TutorService = Depends(get_tutor_service),
+):
+    return await service.tools(user.id).list_games(GameSearch(offset=offset, limit=limit))
+
+
+@router.get("/games/{game_code}/attempts/{attempt}")
+async def attempt_preview(
+    game_code: str = Path(pattern=r"^[2-9A-HJ-KM-NP-Z]{6}$"),
+    attempt: int = Path(ge=1, le=20000),
+    user: UserModel = Depends(require_tutor_access),
+    service: TutorService = Depends(get_tutor_service),
+):
+    window = await service.tools(user.id).get_game(GameWindow(game_code=game_code, start=attempt, limit=1))
+    if not window["events"]:
+        raise TutorError("TUTOR_ATTEMPT_UNAVAILABLE", "This attempt is not available from your perspective.", 404)
+    return {"game_code": game_code, "color": window["color"], "variant": window["variant"], "event": window["events"][0]}
 
 
 @router.post("/sessions", status_code=201)
@@ -67,6 +90,16 @@ async def get_exercise(
 ):
     tools = service.tools(user.id)
     return tools.exercise_public(await tools.exercise(str(exercise_id)))
+
+
+@router.get("/exercises/{exercise_id}/history")
+async def exercise_history(
+    exercise_id: UUID,
+    start: int = Query(default=1, ge=1, le=20000),
+    user: UserModel = Depends(require_tutor_access),
+    service: TutorService = Depends(get_tutor_service),
+):
+    return await service.tools(user.id).exercise_history(str(exercise_id), start)
 
 
 @router.post("/exercises/{exercise_id}/actions")

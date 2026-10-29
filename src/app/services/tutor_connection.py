@@ -20,9 +20,10 @@ REQUIRED_SCOPES = {"resource.invoke", "chatgpt.tokens.use.direct"}
 
 
 class TutorError(Exception):
-    def __init__(self, code: str, message: str, status: int = 409):
+    def __init__(self, code: str, message: str, status: int = 409, *, usage=None):
         super().__init__(message)
         self.code, self.status = code, status
+        self.usage = usage
 
 
 def read_credentials(path: str) -> dict[str, Any]:
@@ -127,6 +128,7 @@ class TutorConnection:
             "stream": True,
         }
         # No API-key fallback, hidden endpoints, native tools, or automatic inference retries.
+        last_usage = None
         async with self.client_factory(timeout=httpx.Timeout(240.0, connect=15.0)) as client:
             async with client.stream(
                 "POST", f"{API}/responses", headers={"Authorization": f"Bearer {token}"}, json=payload
@@ -146,6 +148,8 @@ class TutorConnection:
                         continue
                     event = json.loads(line[6:])
                     event_type = event.get("type")
+                    if event_type in {"response.completed", "response.failed", "response.incomplete"}:
+                        last_usage = (event.get("response") or {}).get("usage")
                     if event_type == "response.completed":
                         result = event["response"]
                         if result.get("status") != "completed":
@@ -155,11 +159,19 @@ class TutorConnection:
                         code = (event.get("response", {}).get("error") or {}).get("code", "")
                         if code == "subscription_sharing_usage_limit_exceeded":
                             raise TutorError(
-                                "TUTOR_PLAN_LIMIT", "Your ChatGPT plan or Tutor usage limit has been reached.", 429
+                                "TUTOR_PLAN_LIMIT",
+                                "Your ChatGPT plan or Tutor usage limit has been reached.",
+                                429,
+                                usage=last_usage,
                             )
                         raise TutorError(
-                            "TUTOR_CONNECTION_UNAVAILABLE", "ChatGPT could not finish this turn. Your session is saved.", 503
+                            "TUTOR_CONNECTION_UNAVAILABLE",
+                            "ChatGPT could not finish this turn. Your session is saved.",
+                            503,
+                            usage=last_usage,
                         )
                     if event_type in {"error", "response.incomplete"}:
                         break
-        raise TutorError("TUTOR_RESPONSE_INCOMPLETE", "The coaching response was interrupted. Your session is saved.", 503)
+        raise TutorError(
+            "TUTOR_RESPONSE_INCOMPLETE", "The coaching response was interrupted. Your session is saved.", 503, usage=last_usage
+        )
