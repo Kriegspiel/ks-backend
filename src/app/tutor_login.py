@@ -101,6 +101,7 @@ class Login:
                 algorithms=["RS256"],
                 audience=issued,
                 issuer=ISSUER,
+                access_token=token.get("access_token"),
                 options={"require_exp": True, "require_sub": True},
             )
         if not hmac.compare_digest(str(identity.get("nonce", "")), self.nonce):
