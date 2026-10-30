@@ -18,6 +18,10 @@ class SessionCreate(TutorInput):
     game_code: str | None = Field(default=None, pattern=r"^[2-9A-HJ-KM-NP-Z]{6}$")
 
 
+class SessionRename(TutorInput):
+    title: str = Field(min_length=1, max_length=120)
+
+
 class MessageCreate(TutorInput):
     request_id: UUID
     text: str = Field(min_length=1, max_length=4000)

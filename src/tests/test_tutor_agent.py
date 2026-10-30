@@ -25,6 +25,7 @@ from app.models.tutor import (
     MemoryDelete,
     MessageCreate,
     SessionCreate,
+    SessionRename,
     TutorInput,
 )
 from app.routers.tutor import get_tutor_service
@@ -104,7 +105,7 @@ class Collection:
         new = doc is None
         if new:
             if not upsert:
-                return SimpleNamespace(modified_count=0)
+                return SimpleNamespace(modified_count=0, matched_count=0)
             doc = deepcopy(query)
             self.documents.append(doc)
         for operator, values in update.items():
@@ -129,7 +130,7 @@ class Collection:
                         target[key] = target[key][value["$slice"] :]
                     else:
                         target[key].append(deepcopy(value))
-        return SimpleNamespace(modified_count=1)
+        return SimpleNamespace(modified_count=1, matched_count=1)
 
     async def update_many(self, query, update):
         for doc in deepcopy(self.documents):
@@ -488,6 +489,36 @@ async def test_saved_session_agent_turn_tool_use_and_no_reload_inference(service
 
 
 @pytest.mark.asyncio
+async def test_rename_is_owned_metadata_only_and_persists_during_a_coaching_turn(service):
+    created = await service.create_session("fil-id", SessionCreate(game_code="ABC234"))
+    sid = created["session_id"]
+    service.sessions.documents[0].update(status="running", active_run="ongoing", messages=[{"role": "user", "text": "Keep me"}])
+    original = deepcopy(service.sessions.documents[0])
+    renamed = await service.rename_session("fil-id", sid, SessionRename(title="  Bishop probes  "))
+    assert renamed == {"session_id": sid, "title": "Bishop probes"}
+    saved = service.sessions.documents[0]
+    assert {key: value for key, value in saved.items() if key not in {"title", "updated_at"}} == {
+        key: value for key, value in original.items() if key not in {"title", "updated_at"}
+    }
+    assert (await service.get_session("fil-id", sid))["title"] == "Bishop probes"
+    assert (await service.workspace("fil-id"))["sessions"][0]["title"] == "Bishop probes"
+    assert await service.rename_session("fil-id", sid, SessionRename(title="Bishop probes")) == renamed
+    for user, identity in [("outsider", sid), ("fil-id", str(uuid4()))]:
+        with pytest.raises(TutorError, match="Session not found"):
+            await service.rename_session(user, identity, SessionRename(title="Not mine"))
+    assert service.sessions.documents[0]["title"] == "Bishop probes"
+    service.connection.respond.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "payload", [{}, {"title": ""}, {"title": "   "}, {"title": "x" * 121}, {"title": 2}, {"title": "A", "user_id": "other"}]
+)
+def test_rename_input_is_bounded_trimmed_and_cannot_change_identity(payload):
+    with pytest.raises(ValidationError):
+        SessionRename(**payload)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "calls,error",
     [
@@ -581,6 +612,7 @@ def test_all_tutor_routes_are_fil_only_and_have_no_legacy_endpoints(service):
     app.dependency_overrides[get_tutor_service] = lambda: service
     with TestClient(app) as client:
         assert client.get("/api/tutor/workspace").status_code == 404
+        assert client.patch(f"/api/tutor/sessions/{uuid4()}", json={"title": "New name"}).status_code == 404
         private_reads = ["/api/tutor/games", "/api/tutor/games/ABC234/attempts/1", f"/api/tutor/exercises/{uuid4()}/history"]
         for path in private_reads:
             assert client.get(path).status_code == 404
@@ -589,6 +621,7 @@ def test_all_tutor_routes_are_fil_only_and_have_no_legacy_endpoints(service):
                 role=role, id=identity, status="active"
             )
             assert client.get("/api/tutor/workspace").status_code == 404
+            assert client.patch(f"/api/tutor/sessions/{uuid4()}", json={"title": "New name"}).status_code == 404
             for path in private_reads:
                 assert client.get(path).status_code == 404
         app.dependency_overrides[get_tutor_candidate_user] = lambda: SimpleNamespace(role="user", id="fil-id", status="active")
@@ -614,6 +647,14 @@ def test_all_tutor_routes_are_fil_only_and_have_no_legacy_endpoints(service):
         session = client.post("/api/tutor/sessions", json={}).json()
         sid = session["session_id"]
         assert client.get(f"/api/tutor/sessions/{sid}").status_code == 200
+        assert client.patch(f"/api/tutor/sessions/{sid}", json={"title": "  Endgame ideas  "}).json() == {
+            "session_id": sid,
+            "title": "Endgame ideas",
+        }
+        assert client.get(f"/api/tutor/sessions/{sid}").json()["title"] == "Endgame ideas"
+        assert client.patch(f"/api/tutor/sessions/{sid}", json={"title": "   "}).status_code == 422
+        assert client.patch(f"/api/tutor/sessions/{uuid4()}", json={"title": "Other"}).status_code == 404
+        assert client.patch("/api/tutor/sessions/invalid", json={"title": "Other"}).status_code == 422
         assert client.post(f"/api/tutor/sessions/{sid}/stop").status_code == 200
         assert client.post("/api/tutor/memory/remove", json={"kind": "note", "key": "test"}).status_code == 200
         assert client.get(f"/api/tutor/exercises/{uuid4()}").status_code == 404

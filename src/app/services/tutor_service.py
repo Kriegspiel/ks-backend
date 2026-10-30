@@ -11,7 +11,7 @@ from uuid import uuid4
 import structlog
 from pydantic import ValidationError
 
-from app.models.tutor import Evidence, MessageCreate, SessionCreate, TutorInput
+from app.models.tutor import Evidence, MessageCreate, SessionCreate, SessionRename, TutorInput
 from app.services.tutor_connection import TutorConnection, TutorError
 from app.services.tutor_tools import TOOL_MODELS, TutorTools, learning_context, now, rules, tool_definitions
 from app.services.tutor_usage import TOKEN_FIELDS, initial_usage, measured_usage, public_usage, usage_log_fields
@@ -208,6 +208,15 @@ class TutorService:
         if document is None:
             raise TutorError("TUTOR_SESSION_UNAVAILABLE", "Session not found.", 404)
         return self.session_public(document)
+
+    async def rename_session(self, user_id: str, session_id: str, args: SessionRename) -> dict:
+        updated = await self.sessions.update_one(
+            {"user_id": user_id, "session_id": session_id},
+            {"$set": {"title": args.title, "updated_at": now()}},
+        )
+        if updated.matched_count != 1:
+            raise TutorError("TUTOR_SESSION_UNAVAILABLE", "Session not found.", 404)
+        return {"session_id": session_id, "title": args.title}
 
     async def message(self, user_id: str, session_id: str, args: MessageCreate) -> dict:
         session = await self.sessions.find_one({"user_id": user_id, "session_id": session_id})
