@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.dependencies import require_tutor_access
-from app.models.tutor import ExerciseAction, GameSearch, GameWindow, MemoryDelete, MessageCreate, SessionCreate
+from app.models.tutor import ExerciseAction, GameSearch, GameWindow, MemoryDelete, MessageCreate, SessionCreate, SessionRename
 from app.models.user import UserModel
 from app.services.tutor_connection import TutorError
 from app.services.tutor_service import TutorService
@@ -75,6 +75,16 @@ async def message(
     service: TutorService = Depends(get_tutor_service),
 ):
     return await service.message(user.id, str(session_id), args)
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_session(
+    session_id: UUID,
+    args: SessionRename,
+    user: UserModel = Depends(require_tutor_access),
+    service: TutorService = Depends(get_tutor_service),
+):
+    return await service.rename_session(user.id, str(session_id), args)
 
 
 @router.post("/sessions/{session_id}/stop")
