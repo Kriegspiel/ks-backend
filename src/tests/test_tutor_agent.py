@@ -399,7 +399,9 @@ async def test_prediction_explanation_and_exercise_guards(service):
 
 
 @pytest.mark.asyncio
-async def test_claim_race_context_and_tool_result_limits(service):
+async def test_claim_race_large_context_and_tool_result_limit(service):
+    import json
+
     session = await service.create_session("fil-id", SessionCreate())
     original_update = service.sessions.update_one
     service.sessions.update_one = AsyncMock(side_effect=RuntimeError("database unavailable"))
@@ -421,7 +423,9 @@ async def test_claim_race_context_and_tool_result_limits(service):
     service.learning.documents[0]["notes"] = {"large": "x" * 181000}
     await service.message("fil-id", session["session_id"], request)
     await finish(service)
-    assert "enough material" in (await service.get_session("fil-id", session["session_id"]))["activity"]
+    assert (await service.get_session("fil-id", session["session_id"]))["status"] == "idle"
+    assert len(json.dumps(service.connection.respond.await_args.kwargs["inputs"])) > 180000
+    service.connection.respond.assert_awaited_once()
     service.learning.documents[0]["notes"] = {}
     tools = service.tools("fil-id", session["session_id"])
     tools.list_games = AsyncMock(return_value={"large": "x" * 56000})
@@ -431,6 +435,32 @@ async def test_claim_race_context_and_tool_result_limits(service):
     await finish(service)
     inputs = service.connection.respond.await_args_list[-1].kwargs["inputs"]
     assert "Tool result too large" in inputs[-1]["output"]
+
+
+@pytest.mark.asyncio
+async def test_accumulated_game_windows_above_the_old_context_cap_continue_to_a_reply(service):
+    import json
+
+    created = await service.create_session("fil-id", SessionCreate(game_code="ABC234"))
+    sid = created["session_id"]
+    tools = service.tools("fil-id", sid)
+    tools.get_game = AsyncMock(return_value={"evidence": "x" * 50000})
+    service.tools = lambda *_args: tools
+    service.connection.respond.side_effect = [
+        reply(calls=[call("get_game", {"game_code": "ABC234", "start": start}) for start in [1, 61, 121, 181]]),
+        reply("Review complete."),
+    ]
+    await service.message("fil-id", sid, MessageCreate(request_id=uuid4(), text="Review the full game."))
+    await finish(service)
+    inputs = service.connection.respond.await_args.kwargs["inputs"]
+    assert len(json.dumps(inputs)) > 200000
+    outputs = [item for item in inputs if item.get("type") == "function_call_output"]
+    assert len(outputs) == 4 and all("Tool result too large" not in item["output"] for item in outputs)
+    assert tools.get_game.await_count == 4 and service.connection.respond.await_count == 2
+    saved = await service.get_session("fil-id", sid)
+    assert saved["status"] == "idle" and saved["messages"][-1]["text"] == "Review complete."
+    assert len(saved["tool_log"]) == 4
+    assert saved["usage"]["requests"] == 2 and saved["usage"]["unknown_requests"] == 0
 
 
 @pytest.mark.asyncio
