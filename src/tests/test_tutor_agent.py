@@ -489,6 +489,58 @@ async def test_saved_session_agent_turn_tool_use_and_no_reload_inference(service
 
 
 @pytest.mark.asyncio
+async def test_streamed_tool_call_and_reply_finish_the_real_agent_loop(service, tmp_path, monkeypatch):
+    import json
+    import httpx
+    from app.services.tutor_connection import TutorConnection
+    from tests.test_tutor_connection import factory, sse
+
+    requests = []
+    connection = TutorConnection(str(tmp_path / "unused"))
+    monkeypatch.setattr(connection, "_token", AsyncMock(return_value="TEST-ONLY"))
+    monkeypatch.setattr(connection, "status", lambda: {"connected": True})
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        item = call("get_game", {"game_code": "ABC234"}) if len(requests) == 1 else reply()["output"][0]
+        return httpx.Response(
+            200,
+            text=sse({"type": "response.output_item.done", "output_index": 0, "item": item})
+            + sse({"type": "response.completed", "response": {"status": "completed", "output": [], "usage": reply()["usage"]}}),
+        )
+
+    connection.client_factory = factory(handle)
+    service.connection = connection
+    created = await service.create_session("fil-id", SessionCreate(game_code="ABC234"))
+    await service.message(
+        "fil-id", created["session_id"], MessageCreate(request_id=uuid4(), text="Any earlier chance for mate?")
+    )
+    await finish(service)
+    saved = await service.get_session("fil-id", created["session_id"])
+    assert saved["status"] == "idle" and saved["messages"][-1]["text"] == reply()["output"][0]["content"][0]["text"]
+    assert saved["tool_log"][0]["name"] == "get_game"
+    assert saved["usage"]["requests"] == 2 and saved["usage"]["unknown_requests"] == 0
+    assert len(requests) == 2 and requests[1]["input"][-1]["type"] == "function_call_output"
+
+
+@pytest.mark.asyncio
+async def test_refusal_is_saved_as_a_visible_reply_without_retrying_or_running_tools(service):
+    service.connection.respond.return_value = reply(
+        calls=[
+            {"type": "reasoning", "summary": []},
+            {"type": "message", "content": [{"type": "refusal", "refusal": "I cannot answer that request."}]},
+        ]
+    )
+    created = await service.create_session("fil-id", SessionCreate())
+    await service.message("fil-id", created["session_id"], MessageCreate(request_id=uuid4(), text="Explain"))
+    await finish(service)
+    saved = await service.get_session("fil-id", created["session_id"])
+    assert saved["status"] == "idle" and saved["messages"][-1]["text"] == "I cannot answer that request."
+    assert saved["tool_log"] == [] and saved["usage"]["requests"] == 1
+    service.connection.respond.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_rename_is_owned_metadata_only_and_persists_during_a_coaching_turn(service):
     created = await service.create_session("fil-id", SessionCreate(game_code="ABC234"))
     sid = created["session_id"]
