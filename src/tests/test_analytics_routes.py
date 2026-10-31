@@ -10,7 +10,11 @@ from app.dependencies import get_current_user
 from app.config import Settings
 from app.main import create_app
 from app.models.analytics import AcquisitionReportResponse, CampaignVisitRequest
-from app.routers.analytics import get_analytics_service, maybe_get_analytics_service
+from app.routers.analytics import (
+    attribution_snapshot_from_request,
+    get_analytics_service,
+    maybe_get_analytics_service,
+)
 from app.services.analytics_service import AnalyticsService
 
 
@@ -52,6 +56,12 @@ class FrozenAnalyticsService(AnalyticsService):
     @classmethod
     def utcnow(cls) -> datetime:
         return cls.now
+
+
+@pytest.mark.asyncio
+async def test_attribution_snapshot_is_optional_when_database_startup_failed():
+    request = SimpleNamespace(cookies={AnalyticsService.ATTRIBUTION_COOKIE_NAME: "unavailable"})
+    assert await attribution_snapshot_from_request(request, None) is None
 
 
 @pytest.mark.asyncio
