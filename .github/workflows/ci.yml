@@ -66,3 +66,18 @@ jobs:
           KRIEGSPIEL_TEST_APP_MONGO_URI: mongodb://127.0.0.1:27019/kriegspiel_ci_test?replicaSet=ksStatsTest
           KRIEGSPIEL_TEST_MONGO_URI: mongodb://127.0.0.1:27019/?replicaSet=ksStatsTest
         run: ./scripts/regression/backend-regression.sh
+      - name: Build Python 3.15 runtime image
+        run: docker build -f src/app/Dockerfile -t ks-backend:ci .
+      - name: Verify container runtime and public health contract
+        run: |
+          docker run --detach --name backend-python315 --network host \
+            -e ENVIRONMENT=testing \
+            -e MONGO_URI='mongodb://127.0.0.1:27019/kriegspiel_container_test?replicaSet=ksStatsTest' \
+            ks-backend:ci
+          trap 'docker logs backend-python315; docker rm -f backend-python315' EXIT
+          docker exec backend-python315 python -c 'import sys; assert sys.version_info[:3] == (3, 15, 2)'
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8000/health; then exit 0; fi
+            sleep 1
+          done
+          exit 1

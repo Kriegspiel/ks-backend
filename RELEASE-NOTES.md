@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.6.1 — Python 3.15 container validation
+
+- Build the Python 3.15 image from the repository root, include Git for the pinned engine dependency, preserve the application/metadata layout, and verify image startup in CI.
+
 ## 1.6.0 — Python 3.15
 
 - Move the supported runtime to CPython 3.15.2 and validate the complete test suite on that interpreter.
