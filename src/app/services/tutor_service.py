@@ -201,6 +201,21 @@ class TutorService:
             )
             raise
         await self._finish_usage(user_id, session_id, call_id, event, response.get("usage"), "completed")
+        output = response.get("output", [])
+        parts = [part for item in output if item.get("type") == "message" for part in item.get("content", [])]
+        logger.info(
+            "tutor_response_shape",
+            coach_id=session_id,
+            run_id=run_id,
+            call_id=call_id,
+            output_items=len(output),
+            message_items=sum(item.get("type") == "message" for item in output),
+            function_calls=sum(item.get("type") == "function_call" for item in output),
+            reasoning_items=sum(item.get("type") == "reasoning" for item in output),
+            other_items=sum(item.get("type") not in {"message", "function_call", "reasoning"} for item in output),
+            text_parts=sum(part.get("type") == "output_text" for part in parts),
+            refusal_parts=sum(part.get("type") == "refusal" for part in parts),
+        )
         return response
 
     async def get_session(self, user_id: str, session_id: str) -> dict:
@@ -313,7 +328,13 @@ class TutorService:
                 else "This turn could not finish. Your session is saved; you can try again."
             )
             await self.sessions.update_one(query, {"$set": {"status": "error", "activity": message}})
-            logger.warning("tutor_turn_failed", coach_id=session_id, run_id=run_id, error_type=type(exc).__name__)
+            logger.warning(
+                "tutor_turn_failed",
+                coach_id=session_id,
+                run_id=run_id,
+                error_type=type(exc).__name__,
+                error_code=exc.code if isinstance(exc, TutorError) else "TUTOR_TURN_FAILED",
+            )
         finally:
             await self.sessions.update_one(query, {"$set": {"active_run": None}})
             await self.learning.update_one({"user_id": user_id, "active_run": run_id}, {"$set": {"active_run": None}})
@@ -350,11 +371,11 @@ class TutorService:
             function_calls = [item for item in output if item.get("type") == "function_call"]
             if not function_calls:
                 text = "\n\n".join(
-                    part["text"]
+                    part["text"] if part["type"] == "output_text" else part["refusal"]
                     for item in output
                     if item.get("type") == "message"
                     for part in item.get("content", [])
-                    if part.get("type") == "output_text"
+                    if part.get("type") in {"output_text", "refusal"}
                 )[:14000]
                 if not text.strip():
                     raise TutorError("TUTOR_EMPTY_RESPONSE", "The coach did not return a reply. Your session is saved.", 503)

@@ -28,6 +28,14 @@ async def test_real_production_logger_preserves_numeric_usage_and_never_logs_pri
     records = [json.loads(line) for line in output.splitlines()]
     model = next(row for row in records if row["event"] == "tutor_model_usage")
     total = next(row for row in records if row["event"] == "tutor_session_usage")
+    shape = next(row for row in records if row["event"] == "tutor_response_shape")
+    assert shape["coach_id"] == model["coach_id"] and shape["call_id"] == model["call_id"]
+    assert {key: shape[key] for key in ["output_items", "message_items", "text_parts"]} == {
+        "output_items": 1,
+        "message_items": 1,
+        "text_parts": 1,
+    }
+    assert shape["function_calls"] == shape["reasoning_items"] == shape["other_items"] == shape["refusal_parts"] == 0
     assert model["coach_id"] == total["coach_id"] == created["session_id"]
     assert model["units"]["input"] == total["units"]["input"] == 50
     assert model["units"]["output"] == total["units"]["output"] == 20

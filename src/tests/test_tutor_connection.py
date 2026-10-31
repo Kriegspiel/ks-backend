@@ -111,6 +111,45 @@ async def test_subscription_stream_contract_and_only_completed_response_succeeds
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", [{"output": []}, {"output": None}, {}])
+async def test_completed_stream_items_survive_empty_terminal_envelopes_in_output_order(credential_path, terminal):
+    items = [
+        {"type": "reasoning", "summary": []},
+        {"type": "function_call", "namespace": "tutor", "name": "get_game", "call_id": "c1", "arguments": "{}"},
+        {"type": "message", "content": [{"type": "output_text", "text": "Saved reply"}]},
+    ]
+
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"models": [{"slug": MODEL}]})
+        body = "".join(sse({"type": "response.output_item.done", "output_index": i, "item": items[i]}) for i in [2, 0, 1, 1])
+        return httpx.Response(
+            200, text=body + sse({"type": "response.completed", "response": {"status": "completed", **terminal}})
+        )
+
+    connection = TutorConnection(credential_path, client_factory=factory(handle))
+    result = await connection.respond(instructions="", inputs=[], tools=[])
+    assert result["output"] == items
+
+
+@pytest.mark.asyncio
+async def test_terminal_output_is_authoritative_and_completed_items_are_not_duplicated(credential_path):
+    item = {"type": "message", "content": [{"type": "output_text", "text": "Final reply"}]}
+
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"models": [{"slug": MODEL}]})
+        return httpx.Response(
+            200,
+            text=sse({"type": "response.output_item.done", "output_index": 0, "item": item})
+            + sse({"type": "response.completed", "response": {"status": "completed", "output": [item]}}),
+        )
+
+    connection = TutorConnection(credential_path, client_factory=factory(handle))
+    assert (await connection.respond(instructions="", inputs=[], tools=[]))["output"] == [item]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "event,code",
     [
@@ -135,7 +174,13 @@ async def test_stream_failures_are_not_cached_or_retried(credential_path, event,
         calls.append(request)
         if request.method == "GET":
             return httpx.Response(200, json={"models": [{"slug": MODEL}]})
-        return httpx.Response(200, text=sse(event))
+        return httpx.Response(
+            200,
+            text=sse(
+                {"type": "response.output_item.done", "output_index": 0, "item": {"type": "function_call", "name": "save_note"}}
+            )
+            + sse(event),
+        )
 
     connection = TutorConnection(credential_path, client_factory=factory(handle))
     with pytest.raises(TutorError) as exc:

@@ -140,6 +140,7 @@ class TutorConnection:
                         503,
                     )
                 size = 0
+                completed_items = {}
                 async for line in response.aiter_lines():
                     size += len(line)
                     if size > 2_000_000:
@@ -148,12 +149,18 @@ class TutorConnection:
                         continue
                     event = json.loads(line[6:])
                     event_type = event.get("type")
+                    if event_type == "response.output_item.done":
+                        completed_items[event["output_index"]] = event["item"]
                     if event_type in {"response.completed", "response.failed", "response.incomplete"}:
                         last_usage = (event.get("response") or {}).get("usage")
                     if event_type == "response.completed":
                         result = event["response"]
                         if result.get("status") != "completed":
                             break
+                        # Some streams omit items from the terminal envelope. Never discard completed
+                        # tool calls/messages, or execute partial arguments before successful completion.
+                        if not result.get("output"):
+                            result["output"] = [completed_items[index] for index in sorted(completed_items)]
                         return result
                     if event_type == "response.failed":
                         code = (event.get("response", {}).get("error") or {}).get("code", "")
