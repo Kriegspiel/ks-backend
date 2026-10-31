@@ -4,7 +4,7 @@ from app import version as version_module
 
 
 def test_current_release_version_matches_approved_patch_release():
-    assert version_module._load_project_metadata()["version"] == "1.5.18"
+    assert version_module._load_project_metadata()["version"] == "1.6.0"
 
 
 def test_load_app_version_prefers_installed_package_metadata(monkeypatch):

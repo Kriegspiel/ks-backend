@@ -34,13 +34,21 @@ def test_app_factory_is_repeatable():
     assert app_two.state.settings.SITE_ORIGIN == "https://two.example"
 
 
-def test_lifespan_runs_without_external_dependencies_and_reports_unhealthy_db():
+def test_lifespan_runs_without_external_dependencies_and_reports_unhealthy_db(monkeypatch):
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module, "init_db", AsyncMock(side_effect=RuntimeError("Database unavailable")))
     app = create_app(Settings())
 
     with TestClient(app) as client:
         response = client.get("/health")
 
-    assert response.status_code in (200, 503)
+    assert response.status_code == 503
+    assert app.state.db is None
+    assert app.state.db_ready is False
+    assert app.state.session_service is None
+    assert app.state.analytics_service is None
+    assert app.state.tutor_service is None
 
 
 def test_cors_allows_site_origin_preflight():

@@ -1,14 +1,14 @@
 fastapi==0.135.2
-uvicorn[standard]==0.32.1
-motor==3.6.0
-pydantic==2.11.7
-pydantic-settings==2.3.4
+uvicorn[standard]==0.54.0
+motor==3.7.1
+pydantic==2.14.2
+pydantic-settings==2.16.2
 bcrypt==4.3.0
-python-jose[cryptography]==3.4.0
-kriegspiel @ git+https://github.com/Kriegspiel/ks-game.git@ceceb9b0905d50f087429d1fac16db724f9d7bf3
+python-jose[cryptography]==3.5.0
+kriegspiel @ git+https://github.com/Kriegspiel/ks-game.git@a6e55ca92c2543047ac7be8becf42ab2023f8b62
 structlog==24.2.0
 sentry-sdk[fastapi]>=2.0.0
 python-multipart==0.0.22
 httpx==0.28.1
-pymongo==4.9.2
+pymongo==4.19.0
 python-chess==1.999

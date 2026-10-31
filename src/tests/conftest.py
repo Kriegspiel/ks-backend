@@ -23,7 +23,7 @@ def test_settings() -> AsyncIterator[Settings]:
         ENVIRONMENT="testing",
         SECRET_KEY="kriegspiel-step-150-test-secret",
         SITE_ORIGIN="http://localhost:5173",
-        MONGO_URI="mongodb://localhost:27018/kriegspiel_test",
+        MONGO_URI=os.getenv("KRIEGSPIEL_TEST_APP_MONGO_URI", "mongodb://localhost:27018/kriegspiel_test"),
     )
     yield settings
     get_settings.cache_clear()

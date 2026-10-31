@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.6.0 — Python 3.15
+
+- Move the supported runtime to CPython 3.15.2 and validate the complete test suite on that interpreter.
+
 ## 1.5.9 — 2026-10-25
 
 Cache complete rating-history chart responses with bounded memory and expiry, coalesce concurrent reads, and invalidate after committed game completion. All rating tracks and whole-history aggregation retain their existing semantics.

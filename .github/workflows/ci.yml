@@ -28,7 +28,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.15.2"
           cache: pip
           cache-dependency-path: |
             src/app/requirements.txt
@@ -61,5 +61,8 @@ jobs:
           exit 1
       - name: Backend tests
         env:
+          RUN_MONGO_INTEGRATION: "1"
+          MONGO_URI: mongodb://127.0.0.1:27019/kriegspiel_ci_test?replicaSet=ksStatsTest
+          KRIEGSPIEL_TEST_APP_MONGO_URI: mongodb://127.0.0.1:27019/kriegspiel_ci_test?replicaSet=ksStatsTest
           KRIEGSPIEL_TEST_MONGO_URI: mongodb://127.0.0.1:27019/?replicaSet=ksStatsTest
         run: ./scripts/regression/backend-regression.sh
