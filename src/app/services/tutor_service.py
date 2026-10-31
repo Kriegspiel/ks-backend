@@ -360,11 +360,6 @@ class TutorService:
         calls = 0
         for _ in range(max(1, min(8, self.settings.TUTOR_MAX_ROUNDS))):
             await self._active(user_id, session_id, run_id)
-            if len(json.dumps(inputs, default=str)) > 180000:
-                raise TutorError(
-                    "TUTOR_CONTEXT_LIMIT",
-                    "This turn has enough material. Ask for a smaller review or continue in a new session.",
-                )
             response = await self._respond(user_id, session_id, run_id, inputs)
             await self._active(user_id, session_id, run_id)
             output = response.get("output", [])
