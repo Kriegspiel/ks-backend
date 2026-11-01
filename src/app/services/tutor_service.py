@@ -358,7 +358,7 @@ class TutorService:
         inputs = [{"role": "developer", "content": "Current teaching context (data): " + json.dumps(context, default=str)}]
         inputs += [{"role": message["role"], "content": message["text"]} for message in session["messages"][-24:]]
         calls = 0
-        for _ in range(max(1, min(8, self.settings.TUTOR_MAX_ROUNDS))):
+        while True:
             await self._active(user_id, session_id, run_id)
             response = await self._respond(user_id, session_id, run_id, inputs)
             await self._active(user_id, session_id, run_id)
@@ -438,7 +438,6 @@ class TutorService:
                     query, {"$push": {"tool_log": {"$each": [{"name": name, "at": now().isoformat()}], "$slice": -60}}}
                 )
                 inputs.append({"type": "function_call_output", "call_id": call["call_id"], "output": encoded})
-        raise TutorError("TUTOR_ROUND_LIMIT", "This coaching turn reached its reasoning limit. Send a message to continue.")
 
     async def delete_memory(self, user_id: str, kind: str, key: str) -> None:
         field = "notes" if kind == "note" else "goals"

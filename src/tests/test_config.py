@@ -14,7 +14,6 @@ def test_settings_defaults(monkeypatch):
         "TUTOR_ENABLED",
         "TUTOR_BETA_USER_IDS",
         "TUTOR_CREDENTIALS_PATH",
-        "TUTOR_MAX_ROUNDS",
         "TUTOR_MAX_TOOL_CALLS",
         "TUTOR_TURN_TIMEOUT_SECONDS",
         "STRIPE_SECRET_KEY",
@@ -38,7 +37,6 @@ def test_settings_defaults(monkeypatch):
     assert settings.TUTOR_ENABLED is False
     assert settings.TUTOR_BETA_USER_IDS == ""
     assert settings.TUTOR_CREDENTIALS_PATH == ""
-    assert settings.TUTOR_MAX_ROUNDS == 6
     assert settings.TUTOR_MAX_TOOL_CALLS == 18
     assert settings.TUTOR_TURN_TIMEOUT_SECONDS == 300
     assert settings.STRIPE_SECRET_KEY is None
@@ -62,7 +60,6 @@ def test_settings_reads_environment_overrides(monkeypatch):
     monkeypatch.setenv("TUTOR_ENABLED", "true")
     monkeypatch.setenv("TUTOR_BETA_USER_IDS", "fil-id")
     monkeypatch.setenv("TUTOR_CREDENTIALS_PATH", "/protected/tutor.json")
-    monkeypatch.setenv("TUTOR_MAX_ROUNDS", "4")
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_123")
     monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_123")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_123")
@@ -83,13 +80,20 @@ def test_settings_reads_environment_overrides(monkeypatch):
     assert settings.TUTOR_ENABLED is True
     assert settings.TUTOR_BETA_USER_IDS == "fil-id"
     assert settings.TUTOR_CREDENTIALS_PATH == "/protected/tutor.json"
-    assert settings.TUTOR_MAX_ROUNDS == 4
     assert settings.STRIPE_SECRET_KEY == "sk_test_123"
     assert settings.STRIPE_PUBLISHABLE_KEY == "pk_test_123"
     assert settings.STRIPE_WEBHOOK_SECRET == "whsec_123"
     assert settings.STRIPE_PRICE_T2_MONTHLY == "price_t2_monthly"
     assert settings.STRIPE_PRICE_T5_MONTHLY == "price_t5_monthly"
     assert settings.STRIPE_PRICE_T5_YEARLY == "price_t5_yearly"
+
+
+def test_retired_tutor_round_setting_is_ignored_without_changing_remaining_guards(monkeypatch):
+    monkeypatch.setenv("TUTOR_MAX_ROUNDS", "1")
+    settings = Settings()
+    assert "TUTOR_MAX_ROUNDS" not in Settings.model_fields
+    assert settings.TUTOR_MAX_TOOL_CALLS == 18
+    assert settings.TUTOR_TURN_TIMEOUT_SECONDS == 300
 
 
 def test_get_settings_cache_can_be_cleared_between_tests(monkeypatch):

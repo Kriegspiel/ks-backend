@@ -665,7 +665,7 @@ async def test_stop_shutdown_and_restart_preserve_session_and_release_claim(serv
 
 
 @pytest.mark.asyncio
-async def test_unavailable_connection_context_round_empty_and_unexpected_failures(service):
+async def test_unavailable_connection_tool_limit_empty_and_unexpected_failures(service):
     session = await service.create_session("fil-id", SessionCreate())
     service.connection.status = lambda: {"connected": False}
     request = MessageCreate(request_id=uuid4(), text="Start")
@@ -673,7 +673,7 @@ async def test_unavailable_connection_context_round_empty_and_unexpected_failure
         await service.message("fil-id", session["session_id"], request)
     service.connection.status = lambda: {"connected": True}
     for response in [reply(""), reply(calls=[call("get_learning", {})]), RuntimeError("secret diagnostic")]:
-        service.settings.TUTOR_MAX_ROUNDS = 1
+        service.settings.TUTOR_MAX_TOOL_CALLS = 1
         service.connection.respond.side_effect = response if isinstance(response, Exception) else None
         if not isinstance(response, Exception):
             service.connection.respond.return_value = response
@@ -686,6 +686,45 @@ async def test_unavailable_connection_context_round_empty_and_unexpected_failure
         await service.message("fil-id", session["session_id"], request)
     with pytest.raises(asyncio.CancelledError):
         await service._active("fil-id", session["session_id"], "wrong")
+
+
+@pytest.mark.asyncio
+async def test_eighteen_tool_rounds_can_still_receive_a_final_reply(service):
+    created = await service.create_session("fil-id", SessionCreate())
+    sid = created["session_id"]
+    service.connection.respond.side_effect = [
+        *[reply(calls=[call("get_learning", {})]) for _ in range(18)],
+        reply("Review complete."),
+    ]
+    await service.message("fil-id", sid, MessageCreate(request_id=uuid4(), text="Review my progress."))
+    await finish(service)
+    assert service.connection.respond.await_count == 19
+    inputs = service.connection.respond.await_args.kwargs["inputs"]
+    assert len([item for item in inputs if item.get("type") == "function_call_output"]) == 18
+    saved = await service.get_session("fil-id", sid)
+    assert saved["status"] == "idle" and saved["messages"][-1]["text"] == "Review complete."
+    assert len(saved["tool_log"]) == 18
+    assert saved["usage"]["requests"] == 19 and saved["usage"]["unknown_requests"] == 0
+    assert saved["usage"]["input_tokens"] == 950 and saved["usage"]["output_tokens"] == 380
+
+
+@pytest.mark.asyncio
+async def test_turn_deadline_still_interrupts_a_waiting_model_and_preserves_unknown_usage(service):
+    async def waiting(**_kwargs):
+        await asyncio.Event().wait()
+
+    service.settings.TUTOR_TURN_TIMEOUT_SECONDS = 0
+    service.connection.respond.side_effect = waiting
+    created = await service.create_session("fil-id", SessionCreate())
+    sid = created["session_id"]
+    await service.message("fil-id", sid, MessageCreate(request_id=uuid4(), text="Study"))
+    await finish(service)
+    saved = await service.get_session("fil-id", sid)
+    assert saved["status"] == "error" and service.sessions.documents[0]["active_run"] is None
+    assert "could not finish" in saved["activity"]
+    assert service.learning.documents[0]["active_run"] is None and service.tasks == {}
+    assert saved["usage"]["requests"] == 1 and saved["usage"]["unknown_requests"] == 1
+    service.connection.respond.assert_awaited_once()
 
 
 def test_all_tutor_routes_are_fil_only_and_have_no_legacy_endpoints(service):
