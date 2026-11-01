@@ -20,7 +20,6 @@ class Settings(BaseSettings):
     TUTOR_ENABLED: bool = False
     TUTOR_BETA_USER_IDS: str = ""
     TUTOR_CREDENTIALS_PATH: str = ""
-    TUTOR_MAX_ROUNDS: int = 6
     TUTOR_MAX_TOOL_CALLS: int = 18
     TUTOR_TURN_TIMEOUT_SECONDS: float = 300.0
     STRIPE_SECRET_KEY: str | None = None
