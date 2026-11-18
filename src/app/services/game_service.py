@@ -17,6 +17,7 @@ import structlog
 
 from app.models.bot import supported_rule_variants_for_bot
 from app.models.game import (
+    AgentActiveGameMetadataResponse,
     ClockState,
     CreateGameRequest,
     CreateGameResponse,
@@ -2356,6 +2357,7 @@ class GameService:
         sources: list[Any],
         limit: int = 20,
         base_query: dict[str, Any] | None = None,
+        include_opponent_id: bool = False,
     ) -> list[GameMetadataResponse]:
         bounded = max(1, min(limit, 100))
         docs_by_key: dict[str, dict[str, Any]] = {}
@@ -2377,15 +2379,24 @@ class GameService:
         out: list[GameMetadataResponse] = []
         user_doc_cache: dict[str, dict[str, Any] | None] = {}
         for doc in sorted(docs_by_key.values(), key=self._metadata_created_at, reverse=True)[:bounded]:
-            out.append(await self._to_metadata(doc, user_doc_cache=user_doc_cache))
+            metadata = await self._to_metadata(doc, user_doc_cache=user_doc_cache)
+            if include_opponent_id:
+                viewer_color = self._player_color_for_user(doc, user_id)
+                opponent = doc.get("black" if viewer_color == "white" else "white") or {}
+                if opponent_id := opponent.get("user_id"):
+                    metadata = AgentActiveGameMetadataResponse(**metadata.model_dump(), opponent_id=str(opponent_id))
+            out.append(metadata)
         return out
 
-    async def get_my_active_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:
+    async def get_my_active_games(
+        self, *, user_id: str, limit: int = 20, include_opponent_id: bool = False
+    ) -> list[GameMetadataResponse]:
         return await self._get_my_games_from_sources(
             user_id=user_id,
             sources=[self._games],
             limit=limit,
             base_query={"state": {"$ne": "completed"}},
+            include_opponent_id=include_opponent_id,
         )
 
     async def get_my_archived_games(self, *, user_id: str, limit: int = 20) -> list[GameMetadataResponse]:

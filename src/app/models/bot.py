@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.llm_bot_policy import LlmBotTier
+from app.llm_bot_policy import GPT_SOL_AGENT_USERNAME, LlmBotTier
 
 SupportedRuleVariant = str
 LlmReasoningLevel = Literal["none", "enabled", "low", "medium", "high", "xhigh", "max"]
@@ -16,6 +16,7 @@ BOT_USERNAME_PATTERN = r"^[a-zA-Z0-9_]+$"
 BOT_SPECIFIC_DEFAULT_RULE_VARIANTS: dict[str, list[SupportedRuleVariant]] = {
     "randobot": ALL_SUPPORTED_RULE_VARIANTS,
     "randobotany": ["berkeley_any"],
+    GPT_SOL_AGENT_USERNAME: ["berkeley_any"],
 }
 
 

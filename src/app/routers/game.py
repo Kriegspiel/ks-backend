@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from app.db import get_db
 from app.dependencies import get_current_user
+from app.llm_bot_policy import GPT_SOL_AGENT_USERNAME
 from app.models.game import (
+    AgentActiveGameMetadataResponse,
     AskAnyResponse,
     CreateGameRequest,
     CreateGameResponse,
@@ -42,6 +44,10 @@ MY_GAMES_MAX_LIMIT = 100
 
 class MyGamesResponse(OpenGamesResponse):
     games: list[GameMetadataResponse]
+
+
+class MyActiveGamesResponse(OpenGamesResponse):
+    games: list[AgentActiveGameMetadataResponse | GameMetadataResponse]
 
 
 def _error_response(*, status_code: int, code: str, message: str, details: dict[str, Any] | None = None) -> JSONResponse:
@@ -218,15 +224,17 @@ async def get_lobby_stats(
         return _map_game_error(exc)
 
 
-@router.get("/mine/active", response_model=MyGamesResponse)
-@router.get("/mine-active", response_model=MyGamesResponse, include_in_schema=False)
+@router.get("/mine/active", response_model=MyActiveGamesResponse)
+@router.get("/mine-active", response_model=MyActiveGamesResponse, include_in_schema=False)
 async def get_my_active_games(
     limit: int = Query(MY_GAMES_DEFAULT_LIMIT, ge=1, le=MY_GAMES_MAX_LIMIT),
     user: UserModel = Depends(get_current_user),
     game_service: GameService = Depends(get_game_service),
 ) -> Any:
     try:
-        return MyGamesResponse(games=await game_service.get_my_active_games(user_id=user.id, limit=limit))
+        include_opponent_id = user.role == "bot" and user.username == GPT_SOL_AGENT_USERNAME
+        games = await game_service.get_my_active_games(user_id=user.id, limit=limit, include_opponent_id=include_opponent_id)
+        return MyActiveGamesResponse(games=games)
     except GameServiceError as exc:
         return _map_game_error(exc)
 

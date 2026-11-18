@@ -203,6 +203,28 @@ def test_usage_helpers_handle_aliases_empty_usage_and_token_splits() -> None:
     ) == {"calls": 0, "tokens": 25, "input_tokens": 0, "cache_tokens": 0, "output_tokens": 0, "cost": 0.0}
 
 
+@pytest.mark.parametrize("agent_color", ["white", "black"])
+def test_shared_sol_model_usage_is_attributed_to_the_reporting_identity(agent_color: str) -> None:
+    baseline_color = "black" if agent_color == "white" else "white"
+    game = {
+        agent_color: {"user_id": "agent-id", "username": "agent_gpt_sol"},
+        baseline_color: {"user_id": "baseline-id", "username": "llm_gpt_sol"},
+    }
+    now = datetime.now(UTC)
+    agent = _report(bot_user_id="agent-id", bot_username="agent_gpt_sol", model="gpt-6.1-sol")
+    baseline = _report(bot_user_id="baseline-id", bot_username="llm_gpt_sol", model="gpt-6.1-sol")
+    assert apply_llm_usage_to_game_stats(game, agent, now=now)
+    assert apply_llm_usage_to_game_stats(game, baseline, now=now)
+    assert game["stats"]["llm_usage"][agent_color]["username"] == "agent_gpt_sol"
+    assert game["stats"]["llm_usage"][baseline_color]["username"] == "llm_gpt_sol"
+
+    wrong_identity = _report(bot_user_id="unknown-id", bot_username="agent_gpt_sol", model="gpt-6.1-sol")
+    assert not apply_llm_usage_to_game_stats(game, wrong_identity, now=now)
+    archived = {color: {"username": player["username"]} for color, player in game.items() if color != "stats"}
+    assert usage_color_for_game(archived, agent) == agent_color
+    assert usage_color_for_game(archived, baseline) == baseline_color
+
+
 def test_usage_report_from_payload_and_direct_update_branches() -> None:
     payload = BotUsageReportRequest(
         game_id=" game1 ",
