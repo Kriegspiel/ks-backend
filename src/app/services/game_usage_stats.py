@@ -230,31 +230,30 @@ def _total_tokens(
     return input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens
 
 
-def _candidate_usernames(report: LlmUsageReport) -> set[str]:
-    usernames = set()
-    raw_username = report.bot_username.strip().lower()
-    if raw_username:
-        usernames.add(BOT_USAGE_USERNAME_ALIASES.get(raw_username, raw_username))
-    model_username = BOT_USAGE_MODEL_ALIASES.get(report.model.strip().lower())
-    if model_username:
-        usernames.add(model_username)
-    model = report.model.strip().lower()
-    if "llama" in model and "8b" in model:
-        usernames.add("llm_llama31_8b")
-    return usernames
-
-
 def usage_color_for_game(game: dict[str, Any], report: LlmUsageReport) -> str | None:
+    players = {color: game[color] for color in ("white", "black") if isinstance(game.get(color), dict)}
     user_id = report.bot_user_id.strip()
-    candidate_usernames = _candidate_usernames(report)
-    for color in ("white", "black"):
-        player = game.get(color)
-        if not isinstance(player, dict):
-            continue
+    for color, player in players.items():
         if user_id and str(player.get("user_id") or "").strip() == user_id:
             return color
-        username = canonical_llm_bot_username(player.get("username"))
-        if username and username in candidate_usernames:
+
+    raw_username = report.bot_username.strip().lower()
+    username = BOT_USAGE_USERNAME_ALIASES.get(raw_username, raw_username)
+    for color, player in players.items():
+        if user_id and player.get("user_id"):
+            continue
+        if username and canonical_llm_bot_username(player.get("username")) == username:
+            return color
+
+    # Historical generic reports identified the bot by model. Named bot identities can share a model.
+    if raw_username and raw_username not in BOT_USAGE_GENERIC_USERNAMES:
+        return None
+    model = report.model.strip().lower()
+    model_username = BOT_USAGE_MODEL_ALIASES.get(model)
+    if model_username is None and "llama" in model and "8b" in model:
+        model_username = "llm_llama31_8b"
+    for color, player in players.items():
+        if model_username == canonical_llm_bot_username(player.get("username")):
             return color
     return None
 

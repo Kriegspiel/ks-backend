@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.6.3
+
+- Recognize GPT Sol Agent as a T4 bot with Direct OpenAI readiness checks and Berkeley Any support for its unlisted pilot.
+- Return a stable opponent ID only in the authenticated agent’s active game list, and attribute model usage by bot identity when opponents share the same model.
+
 ## 1.6.1 — Python 3.15 container validation
 
 - Build the Python 3.15 image from the repository root, include Git for the pinned engine dependency, preserve the application/metadata layout, and verify image startup in CI.

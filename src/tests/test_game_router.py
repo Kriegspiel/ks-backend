@@ -245,7 +245,33 @@ def test_game_router_active_mine_passes_limit(app_with_game_service) -> None:
         response = client.get("/api/game/mine/active?limit=75")
 
     assert response.status_code == 200
-    service.get_my_active_games.assert_awaited_once_with(user_id="507f1f77bcf86cd799439011", limit=75)
+    service.get_my_active_games.assert_awaited_once_with(
+        user_id="507f1f77bcf86cd799439011", limit=75, include_opponent_id=False
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "username", "include_opponent_id"),
+    [("bot", "agent_gpt_sol", True), ("bot", "llm_gpt_sol", False), ("user", "agent_gpt_sol", False)],
+)
+def test_game_router_only_exposes_opponent_id_to_agent(app_with_game_service, role, username, include_opponent_id) -> None:
+    app, service = app_with_game_service
+    user = _user().model_copy(update={"role": role, "username": username})
+    app.dependency_overrides[get_current_user] = lambda: user
+    if include_opponent_id:
+        service.get_my_active_games.return_value[0]["opponent_id"] = "507f1f77bcf86cd799439012"
+
+    with TestClient(app) as client:
+        response = client.get("/api/game/mine/active")
+        metadata = client.get("/api/game/gid1")
+
+    assert response.status_code == metadata.status_code == 200
+    service.get_my_active_games.assert_awaited_once_with(user_id=user.id, limit=20, include_opponent_id=include_opponent_id)
+    if include_opponent_id:
+        assert response.json()["games"][0]["opponent_id"] == "507f1f77bcf86cd799439012"
+    else:
+        assert "opponent_id" not in response.json()["games"][0]
+    assert "opponent_id" not in metadata.json()
 
 
 def test_create_game_passes_attribution_snapshot(app_with_game_service) -> None:

@@ -767,11 +767,45 @@ async def test_get_my_active_games_reads_only_live_collection_and_excludes_compl
     mine = await service.get_my_active_games(user_id="u1", limit=10)
 
     assert [item.game_code for item in mine] == ["A7K2M9"]
+    assert "opponent_id" not in mine[0].model_dump()
     assert games.find_calls == [
         ({"state": {"$ne": "completed"}, "white.user_id": "u1"}, GAME_METADATA_PROJECTION),
         ({"state": {"$ne": "completed"}, "black.user_id": "u1"}, GAME_METADATA_PROJECTION),
     ]
     assert archives.find_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_my_active_games_stable_opponent_id_for_both_colors() -> None:
+    games = FakeGamesCollection()
+    now = datetime.now(UTC)
+    game = {
+        "_id": ObjectId(),
+        "game_code": "A7K2M9",
+        "rule_variant": "berkeley_any",
+        "white": {"user_id": "u1", "username": "white", "connected": True, "role": "user"},
+        "black": {"user_id": "u2", "username": "black", "connected": True, "role": "user"},
+        "state": "active",
+        "turn": "white",
+        "move_number": 1,
+        "created_at": now,
+        "updated_at": now,
+    }
+    games.docs.append(game)
+    service = GameService(games)
+
+    for user_id, opponent_id in (("u1", "u2"), ("u2", "u1")):
+        active = await service.get_my_active_games(user_id=user_id, include_opponent_id=True)
+        assert active[0].model_dump()["opponent_id"] == opponent_id
+
+    game["black"]["username"] = "renamed"
+    active = await service.get_my_active_games(user_id="u1", include_opponent_id=True)
+    assert active[0].model_dump()["opponent_id"] == "u2"
+
+    game["state"] = "waiting"
+    game["black"] = None
+    waiting = await service.get_my_active_games(user_id="u1", include_opponent_id=True)
+    assert "opponent_id" not in waiting[0].model_dump()
 
 
 @pytest.mark.asyncio

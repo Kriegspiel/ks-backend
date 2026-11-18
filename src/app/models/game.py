@@ -372,6 +372,10 @@ class GameMetadataResponse(BaseModel):
     rating_snapshot: dict[str, Any] | None = None
 
 
+class AgentActiveGameMetadataResponse(GameMetadataResponse):
+    opponent_id: str
+
+
 class GameReviewResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

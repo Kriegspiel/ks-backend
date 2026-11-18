@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 LlmBotTier = Literal["guest", "tier1", "tier2", "tier3", "tier4", "tier5", "tier6"]
+GPT_SOL_AGENT_USERNAME = "agent_gpt_sol"
 
 LLM_BOT_USERNAME_ALIASES = {
     "llm_gpt56_terra": "llm_gpt_terra",
@@ -135,6 +136,7 @@ BOT_ACCESS_TIER_BY_USERNAME: dict[str, LlmBotTier] = {
     "llm_fable": "tier5",
     "llm_gpt_astra": "tier5",
     "llm_gpt_sol": "tier4",
+    GPT_SOL_AGENT_USERNAME: "tier4",
     "llm_grok": "tier4",
     "llm_muse_glimmer": "tier2",
     "llm_muse_spark": "tier3",

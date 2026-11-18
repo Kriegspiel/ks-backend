@@ -11,6 +11,7 @@ from pymongo.errors import DuplicateKeyError
 from app.models.bot import BotListItem, BotListResponse, BotUsageReportRequest, supported_rule_variants_for_bot
 from app.models.user import normalize_user_stats_payload
 from app.llm_bot_policy import (
+    GPT_SOL_AGENT_USERNAME,
     LLM_BOT_USERNAME_ALIASES,
     bot_required_tier_for_document,
     canonical_llm_bot_username,
@@ -77,6 +78,7 @@ MODEL_AVAILABILITY_REQUIRED_BOTS = {
     "llm_kimi_k27_code": "openai",
     "llm_hermes4_405b": "openai",
     "llm_gpt_sol": "openai",
+    GPT_SOL_AGENT_USERNAME: "openai",
     "llm_qwen37_max": "openai",
 }
 MODEL_AVAILABILITY_STALE_AFTER = timedelta(seconds=120)
