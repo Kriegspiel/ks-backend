@@ -78,6 +78,7 @@ LLM_BOT_TIER_ALIASES: dict[str, LlmBotTier] = {
 }
 
 BOT_ACCESS_TIER_BY_USERNAME: dict[str, LlmBotTier] = {
+    GPT_SOL_AGENT_USERNAME: "tier1",
     "darkboardmcts": "tier1",
     "simpleheuristics": "tier1",
     "stockfishwild": "tier1",
@@ -136,7 +137,6 @@ BOT_ACCESS_TIER_BY_USERNAME: dict[str, LlmBotTier] = {
     "llm_fable": "tier5",
     "llm_gpt_astra": "tier5",
     "llm_gpt_sol": "tier4",
-    GPT_SOL_AGENT_USERNAME: "tier4",
     "llm_grok": "tier4",
     "llm_muse_glimmer": "tier2",
     "llm_muse_spark": "tier3",

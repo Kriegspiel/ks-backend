@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.6.4
+
+- Make GPT Sol Agent available to players from T1 onward.
+
 ## 1.6.3
 
 - Recognize GPT Sol Agent as a T4 bot with Direct OpenAI readiness checks and Berkeley Any support for its unlisted pilot.
