@@ -2103,7 +2103,7 @@ async def test_bot_service_get_bot_by_id_rejects_invalid_and_filters_inactive() 
 
 
 @pytest.mark.asyncio
-async def test_gpt_sol_agent_unlisted_pilot_uses_t4_and_direct_openai_readiness() -> None:
+async def test_gpt_sol_agent_uses_t1_and_direct_openai_readiness() -> None:
     now = datetime(2026, 11, 18, tzinfo=UTC)
     users = FakeUsersCollection()
     bot_id = ObjectId()
@@ -2115,16 +2115,28 @@ async def test_gpt_sol_agent_unlisted_pilot_uses_t4_and_direct_openai_readiness(
 
     request = CreateGameRequest(opponent_type="bot", bot_id=str(bot_id), rule_variant="berkeley_any", play_as="white")
     with pytest.raises(GameValidationError) as unavailable:
-        await game_service.create_game(user_id="player", username="player", request=request, llm_bot_tier="tier4")
+        await game_service.create_game(user_id="player", username="player", request=request, llm_bot_tier="tier1")
     assert unavailable.value.code == "BOT_UNAVAILABLE"
 
     profile["model_availability"] = {"provider": "openai", "ready": True, "checked_at": now}
-    assert not (await bot_service.list_bots(viewer_llm_bot_tier="tier4", profile_username="agent_gpt_sol")).bots
+    assert not (await bot_service.list_bots(viewer_llm_bot_tier="tier1", profile_username="agent_gpt_sol")).bots
+
+    profile["listed"] = True
+    (player_listing,) = (await bot_service.list_bots()).bots
+    assert player_listing.username == "agent_gpt_sol"
+    assert player_listing.llm_backed is True
+    assert player_listing.required_tier == "tier1"
+    assert player_listing.available_for_viewer is True
+    assert player_listing.llm_bot_ply_limit is None
+
+    (guest_listing,) = (await bot_service.list_bots(viewer_role="guest")).bots
+    assert guest_listing.required_tier == "tier1"
+    assert guest_listing.available_for_viewer is False
     with pytest.raises(GameForbiddenError) as excluded:
-        await game_service.create_game(user_id="player", username="player", request=request, llm_bot_tier="tier3")
+        await game_service.create_game(user_id="guest", username="guest", request=request, role="guest")
     assert excluded.value.code == "LLM_BOT_TIER_REQUIRED"
 
-    created = await game_service.create_game(user_id="player", username="player", request=request, llm_bot_tier="tier4")
+    created = await game_service.create_game(user_id="player", username="player", request=request, llm_bot_tier="tier1")
     assert created.state == "active"
     assert created.bot == {"bot_id": str(bot_id), "username": "agent_gpt_sol"}
     assert bot_service._supported_rule_variants(users.docs[0]) == ["berkeley_any"]
