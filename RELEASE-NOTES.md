@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.6.5
+
+- During play, each participant's transcript includes their own move coordinates and public referee announcements. Full replay becomes available when the game ends.
+
 ## 1.6.4
 
 - Make GPT Sol Agent available to players from T1 onward.

@@ -1322,11 +1322,6 @@ class GameService:
             raise GameNotFoundError()
         return game
 
-    def _is_participant(self, *, game: dict[str, Any], user_id: str) -> bool:
-        white = game.get("white") or {}
-        black = game.get("black") or {}
-        return bool(white.get("user_id") == user_id or black.get("user_id") == user_id)
-
     @staticmethod
     def _matches_query(doc: dict[str, Any], query: dict[str, Any]) -> bool:
         for key, expected in query.items():
@@ -1412,21 +1407,19 @@ class GameService:
             return None
         return {"full": full, "white": white, "black": black}
 
-    @classmethod
+    @staticmethod
     def _to_transcript_move(
-        cls,
         move: dict[str, Any],
         *,
         ply: int,
+        uci: str | None,
         replay_fen: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        stored_replay = move.get("replay_fen")
-        replay_payload = stored_replay or replay_fen
         return {
             "ply": ply,
             "color": move.get("color", "white"),
             "question_type": move.get("question_type", "COMMON"),
-            "uci": move.get("uci"),
+            "uci": uci,
             "answer": {
                 "main": move.get("announcement", ""),
                 "capture_square": move.get("capture_square"),
@@ -1442,7 +1435,7 @@ class GameService:
             },
             "move_done": bool(move.get("move_done", False)),
             "timestamp": move.get("timestamp"),
-            "replay_fen": replay_payload,
+            "replay_fen": replay_fen,
         }
 
     async def get_recent_completed_games(self, *, limit: int = 10) -> RecentGamesResponse:
@@ -2419,23 +2412,32 @@ class GameService:
         return {"game_code": str(game.get("game_code", "")).strip().upper(), "state": game["state"]}
 
     def _to_transcript_response(self, *, game: dict[str, Any], user_id: str) -> GameTranscriptResponse:
-        if game.get("state") != "completed" and not self._is_participant(game=game, user_id=user_id):
-            raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access an active game transcript")
-
         viewer_color = self._player_color_for_user(game=game, user_id=user_id)
-        moves = self._review_history_moves(game)
-        replay_fens = self._build_replay_fens(moves)
-        transcript_moves = [
-            self._to_transcript_move(
-                move,
-                ply=index + 1,
-                replay_fen=replay_fens[index] if index < len(replay_fens) else None,
+        rule_variant = game.get("rule_variant", "berkeley_any")
+        if game.get("state") == "completed":
+            moves = self._review_history_moves(game)
+            replay_fens = self._build_replay_fens(moves)
+            transcript_moves = [
+                self._to_transcript_move(
+                    move, ply=index + 1, uci=move.get("uci"), replay_fen=move.get("replay_fen") or replay_fens[index]
+                )
+                for index, move in enumerate(moves)
+            ]
+        else:
+            if viewer_color is None:
+                raise GameForbiddenError(code="FORBIDDEN", message="Only participants can access an active game transcript")
+            public_moves = (
+                move
+                for move in game.get("moves", [])
+                if self._should_store_public_history_entry(rule_variant=rule_variant, source=move)
             )
-            for index, move in enumerate(moves)
-        ]
+            transcript_moves = [
+                self._to_transcript_move(move, ply=ply, uci=move.get("uci") if move.get("color") == viewer_color else None)
+                for ply, move in enumerate(public_moves, start=1)
+            ]
         return GameTranscriptResponse(
             game_id=str(game["_id"]),
-            rule_variant=game.get("rule_variant", "berkeley_any"),
+            rule_variant=rule_variant,
             viewer_color=viewer_color,
             moves=transcript_moves,
         )
@@ -2846,6 +2848,8 @@ class GameService:
 
     async def get_game_review(self, *, game_id: str, user_id: str) -> GameReviewResponse:
         game = await self._get_live_or_archived_game_document(game_id=game_id)
+        if game.get("state") != "completed":
+            raise GameForbiddenError(code="FORBIDDEN", message="Game review is available after the game ends")
         return GameReviewResponse(
             game=await self._to_metadata(game),
             transcript=self._to_transcript_response(game=game, user_id=user_id),
