@@ -146,8 +146,10 @@ def game_docs() -> tuple[dict, dict, dict]:
 
 
 @pytest.mark.asyncio
-async def test_get_game_transcript_access_matrix_for_live_and_archived_games(game_docs) -> None:
+@pytest.mark.parametrize("variant", ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"])
+async def test_get_game_transcript_access_matrix_for_live_and_archived_games(game_docs, variant) -> None:
     active, archived, _older = game_docs
+    active["rule_variant"] = archived["rule_variant"] = variant
     games = FakeCollection([active])
     archives = FakeCollection([archived])
     service = GameService(games, archives)
