@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.6.6
+
+- Live game state and transcripts use the same fixed order for double-check directions across all rulesets, including games already in progress.
+
 ## 1.6.5
 
 - During play, each participant's transcript includes their own move coordinates and public referee announcements. Full replay becomes available when the game ends.

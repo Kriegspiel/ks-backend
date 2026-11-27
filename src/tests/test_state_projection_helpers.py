@@ -62,6 +62,7 @@ def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_
     )
     assert projection._format_pawn_try_square("not-a-square") == ""
     assert projection._format_pawn_try_square(99) == ""
+    assert projection.public_check_directions(["CHECK_RANK", "CHECK_RANK"]) == ["CHECK_RANK", "CHECK_RANK"]
     assert projection._special_announcement_codes("CHECK_DOUBLE", ["UNKNOWN", "CHECK_FILE"]) == [
         "CHECK_DOUBLE",
         "CHECK_FILE",
@@ -73,7 +74,7 @@ def test_state_projection_public_announcement_helpers_cover_unknown_and_capture_
             "checks": ["CHECK_KNIGHT", "CHECK_LONG_DIAGONAL"],
             "capture_square": None,
         }
-    ) == ["Move complete", "Double check", "Check by knight", "Check on long diagonal"]
+    ) == ["Move complete", "Double check", "Check on long diagonal", "Check by knight"]
     assert projection._scoresheet_answer_texts(
         {
             "main_announcement": "CAPTURE_DONE",
