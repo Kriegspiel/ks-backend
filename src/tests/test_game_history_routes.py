@@ -157,8 +157,14 @@ async def test_get_game_transcript_access_matrix_for_live_and_archived_games(gam
     assert participant.moves[0].answer.main == "REGULAR_MOVE"
     assert participant.moves[0].answer.special == "CHECK_DOUBLE"
     assert participant.moves[0].answer.checks == ["CHECK_KNIGHT", "CHECK_FILE"]
-    assert participant.moves[0].replay_fen is not None
-    assert participant.moves[0].replay_fen.full.startswith("rnbqkbnr")
+    assert participant.moves[0].uci == "e2e4"
+    assert participant.moves[0].replay_fen is None
+
+    opponent = await service.get_game_transcript(game_id=active["game_code"], user_id="u2")
+    assert opponent.viewer_color == "black"
+    assert opponent.moves[0].uci is None
+    assert opponent.moves[0].replay_fen is None
+    assert opponent.moves[0].answer == participant.moves[0].answer
 
     with pytest.raises(GameForbiddenError) as forbidden:
         await service.get_game_transcript(game_id=str(active["_id"]), user_id="u3")
@@ -167,6 +173,8 @@ async def test_get_game_transcript_access_matrix_for_live_and_archived_games(gam
     completed_public = await service.get_game_transcript(game_id=str(archived["_id"]), user_id="u3")
     assert completed_public.game_id == str(archived["_id"])
     assert completed_public.viewer_color is None
+    assert completed_public.moves[0].uci == "e2e4"
+    assert completed_public.moves[0].replay_fen.full.startswith("rnbqkbnr")
 
     review = await service.get_game_review(game_id=archived["game_code"], user_id="u3")
     assert review.game.game_id == str(archived["_id"])
@@ -174,6 +182,55 @@ async def test_get_game_transcript_access_matrix_for_live_and_archived_games(gam
     assert review.game.result == {"winner": "white", "reason": "resignation"}
     assert review.transcript.game_id == str(archived["_id"])
     assert review.transcript.viewer_color is None
+    assert review.transcript == completed_public
+
+
+@pytest.mark.parametrize("stored_replay", [False, True])
+def test_quiet_openings_give_black_identical_live_transcripts(game_docs, stored_replay) -> None:
+    game, _, _ = game_docs
+    game["rule_variant"] = "berkeley"
+    service = GameService(FakeCollection([game]))
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    app.dependency_overrides[get_game_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u2")
+    move = game["moves"][0]
+    bodies = []
+    with TestClient(app) as client:
+        for uci in ("b1a3", "b1c3"):
+            outcome = attempt_move(create_new_game(rule_variant=game["rule_variant"]), uci)
+            assert outcome["move_done"] and not outcome["game_over"]
+            move.update(uci=uci, announcement=outcome["announcement"], special_announcement=None, checks=[])
+            if stored_replay:
+                move["replay_fen"] = {side: outcome[f"{side}_fen"] for side in ("full", "white", "black")}
+            response = client.get(f"/api/game/{game['game_code']}/moves")
+            assert response.status_code == 200
+            assert response.headers["cache-control"] == "private, no-store"
+            bodies.append(response.json())
+    assert bodies[0] == bodies[1]
+    assert bodies[0]["moves"][0]["uci"] is None
+    assert bodies[0]["moves"][0]["replay_fen"] is None
+
+
+@pytest.mark.parametrize("state", ["waiting", "active"])
+def test_review_requires_game_completion_for_every_viewer(game_docs, state) -> None:
+    game, _, _ = game_docs
+    game["state"] = state
+    service = GameService(FakeCollection([game]))
+    app = create_app(Settings(ENVIRONMENT="testing"))
+    app.dependency_overrides[get_game_service] = lambda: service
+    user = SimpleNamespace(id="u1")
+    app.dependency_overrides[get_current_user] = lambda: user
+    with TestClient(app) as client:
+        for user_id in ("u1", "u2", "spectator"):
+            user.id = user_id
+            response = client.get(f"/game/{game['game_code']}/review")
+            assert response.status_code == 403
+            assert set(response.json()) == {"error"}
+        game["state"] = "completed"
+        review = client.get(f"/game/{game['game_code']}/review")
+        assert review.status_code == 200
+        assert review.headers["cache-control"] == "private, no-store"
+        assert review.json()["transcript"]["moves"][0]["replay_fen"]["full"]
 
 
 @pytest.mark.asyncio
@@ -284,11 +341,15 @@ async def test_completed_wild16_transcript_uses_referee_scoresheet_with_private_
         "result": {"winner": "white", "reason": "checkmate"},
     }
 
+    # Older move arrays may still contain a discarded Wild 16 attempt.
+    discarded = dict(public_moves[-1], announcement="ILLEGAL_MOVE", uci="e4f5", move_done=False)
+    active["moves"] = [*public_moves[:-1], discarded, public_moves[-1]]
     active_transcript = await GameService(FakeCollection([active]), FakeCollection([])).get_game_transcript(
         game_id=str(game_id),
         user_id="u1",
     )
-    assert [move.uci for move in active_transcript.moves] == ["e2e4", "d7d5", "e4d5"]
+    assert [move.uci for move in active_transcript.moves] == ["e2e4", None, "e4d5"]
+    assert all(move.replay_fen is None for move in active_transcript.moves)
 
     completed_transcript = await GameService(FakeCollection([]), FakeCollection([archived])).get_game_transcript(
         game_id=str(game_id),

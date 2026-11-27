@@ -262,8 +262,12 @@ async def get_my_games(
 
 @router.get("/{game_id}/moves", response_model=GameTranscriptResponse)
 async def get_game_transcript(
-    game_id: str, user: UserModel = Depends(get_current_user), game_service: GameService = Depends(get_game_service)
+    game_id: str,
+    response: Response,
+    user: UserModel = Depends(get_current_user),
+    game_service: GameService = Depends(get_game_service),
 ) -> Any:
+    response.headers["Cache-Control"] = "private, no-store"
     try:
         return await game_service.get_game_transcript(game_id=game_id, user_id=user.id)
     except GameServiceError as exc:
@@ -273,9 +277,11 @@ async def get_game_transcript(
 @router.get("/{game_id}/review", response_model=GameReviewResponse)
 async def get_game_review(
     game_id: str,
+    response: Response,
     user: UserModel = Depends(get_current_user),
     game_service: GameService = Depends(get_game_service),
 ) -> Any:
+    response.headers["Cache-Control"] = "private, no-store"
     try:
         return await game_service.get_game_review(game_id=game_id, user_id=user.id)
     except GameServiceError as exc:

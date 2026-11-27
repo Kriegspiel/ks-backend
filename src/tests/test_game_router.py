@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -433,7 +433,8 @@ async def test_stats_review_and_recent_routes_cover_success_and_error_paths() ->
         "completed_total": 21012,
     }
     assert await get_game_public_status("gid1", game_service=service) == {"game_code": "A7K2M9", "state": "completed"}
-    assert await get_game_review("gid1", user=user, game_service=service) == {"game_id": "gid1", "moves": []}
+    review = await get_game_review("gid1", response=Response(), user=user, game_service=service)
+    assert review == {"game_id": "gid1", "moves": []}
     assert await get_recent_games(limit=5, game_service=service) == {"games": []}
 
     service.get_lobby_stats = AsyncMock(side_effect=GameValidationError(code="BAD_STATS", message="bad stats"))
@@ -443,7 +444,7 @@ async def test_stats_review_and_recent_routes_cover_success_and_error_paths() ->
 
     stats_error = await get_lobby_stats(game_service=service)
     public_status_error = await get_game_public_status("gid1", game_service=service)
-    review_error = await get_game_review("gid1", user=user, game_service=service)
+    review_error = await get_game_review("gid1", response=Response(), user=user, game_service=service)
     recent_error = await get_recent_games(limit=5, game_service=service)
 
     assert stats_error.status_code == 400
