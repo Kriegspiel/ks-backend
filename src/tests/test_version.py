@@ -1,10 +1,19 @@
 from importlib.metadata import PackageNotFoundError
+from pathlib import Path
 
 from app import version as version_module
 
 
 def test_current_release_version_matches_approved_patch_release():
     assert version_module._load_project_metadata()["version"] == "1.6.6"
+
+
+def test_deployed_engine_pin_matches_project_dependency():
+    dependencies = version_module._load_project_metadata()["dependencies"]
+    engine_pins = [dep for dep in dependencies if dep.startswith("kriegspiel @ ")]
+    assert len(engine_pins) == 1
+    runtime_requirements = Path(version_module.__file__).with_name("requirements.txt").read_text().splitlines()
+    assert [dep for dep in runtime_requirements if dep.startswith("kriegspiel @ ")] == engine_pins
 
 
 def test_load_app_version_prefers_installed_package_metadata(monkeypatch):
