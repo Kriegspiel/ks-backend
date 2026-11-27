@@ -68,6 +68,7 @@ from app.services.state_projection import (
     build_viewer_scoresheet,
     compute_possible_actions,
     project_player_fen,
+    public_check_directions,
     reconstruct_scoresheets_from_moves,
     serialize_engine_scoresheets,
 )
@@ -1428,7 +1429,7 @@ class GameService:
                 "en_passant_announced": move.get("en_passant_announced"),
                 "promotion_announced": move.get("promotion_announced"),
                 "special": move.get("special_announcement"),
-                "checks": move.get("checks") if isinstance(move.get("checks"), list) else [],
+                "checks": public_check_directions(move.get("checks")),
                 "next_turn_pawn_tries": move.get("next_turn_pawn_tries"),
                 "next_turn_has_pawn_capture": move.get("next_turn_has_pawn_capture"),
                 "next_turn_pawn_try_squares": move.get("next_turn_pawn_try_squares"),

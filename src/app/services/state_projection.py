@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import chess
+from kriegspiel.move import SINGLE_CHECK
 
 from app.services.engine_adapter import full_fen, serialize_scoresheet, visible_fen
 
@@ -30,13 +31,7 @@ _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS = {
     'CHECK_KNIGHT',
     'CHECK_DOUBLE',
 }
-_SINGLE_CHECK_ANNOUNCEMENTS = {
-    'CHECK_RANK',
-    'CHECK_FILE',
-    'CHECK_LONG_DIAGONAL',
-    'CHECK_SHORT_DIAGONAL',
-    'CHECK_KNIGHT',
-}
+_CHECK_DIRECTION_NAMES = tuple(direction.name for direction in SINGLE_CHECK)
 
 _PUBLIC_ANNOUNCEMENT_TEXT = {
     'ILLEGAL_MOVE': 'Illegal move',
@@ -132,18 +127,20 @@ def _format_public_announcement(
     return text
 
 
+def public_check_directions(checks: Any) -> list[str]:
+    if not isinstance(checks, list):
+        return []
+    directions = [check for check in checks[:2] if isinstance(check, str) and check in _CHECK_DIRECTION_NAMES]
+    return sorted(directions, key=_CHECK_DIRECTION_NAMES.index)
+
+
 def _special_announcement_codes(special_announcement: Any, checks: Any) -> list[str]:
     if not isinstance(special_announcement, str) or special_announcement not in _ALLOWED_PUBLIC_SPECIAL_ANNOUNCEMENTS:
         return []
 
-    codes = [special_announcement]
-    if special_announcement != 'CHECK_DOUBLE' or not isinstance(checks, list):
-        return codes
-
-    for check in checks[:2]:
-        if isinstance(check, str) and check in _SINGLE_CHECK_ANNOUNCEMENTS:
-            codes.append(check)
-    return codes
+    if special_announcement == 'CHECK_DOUBLE':
+        return [special_announcement, *public_check_directions(checks)]
+    return [special_announcement]
 
 
 def _format_piece_announcement(value: Any) -> str:

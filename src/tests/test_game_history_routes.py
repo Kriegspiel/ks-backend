@@ -156,7 +156,7 @@ async def test_get_game_transcript_access_matrix_for_live_and_archived_games(gam
     assert participant.viewer_color == "white"
     assert participant.moves[0].answer.main == "REGULAR_MOVE"
     assert participant.moves[0].answer.special == "CHECK_DOUBLE"
-    assert participant.moves[0].answer.checks == ["CHECK_KNIGHT", "CHECK_FILE"]
+    assert participant.moves[0].answer.checks == ["CHECK_FILE", "CHECK_KNIGHT"]
     assert participant.moves[0].uci == "e2e4"
     assert participant.moves[0].replay_fen is None
 
