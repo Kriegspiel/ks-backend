@@ -106,6 +106,7 @@ GAME_METADATA_PROJECTION = {
     "llm_bot_user_id": 1,
     "created_at": 1,
     "updated_at": 1,
+    "public_updated_at": 1,
     "result": 1,
     "rating_snapshot": 1,
 }
@@ -149,7 +150,7 @@ class CachedGameEntry:
     last_activity_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_persisted_ply: int = 0
     flush_task: asyncio.Task[None] | None = None
-    state_projection_cache: dict[tuple[int, PlayerColor], GameStateResponse] = field(default_factory=dict)
+    state_projection_cache: dict[PlayerColor, GameStateResponse] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -178,7 +179,7 @@ class GameService:
         self._clock = ClockService()
         self._cache: dict[ObjectId, CachedGameEntry] = {}
         self._cache_lock = asyncio.Lock()
-        self._event_subscribers: dict[ObjectId, set[asyncio.Queue[dict[str, Any]]]] = {}
+        self._event_subscribers: dict[ObjectId, dict[asyncio.Queue[dict[str, Any]], PlayerColor]] = {}
         self._event_lock = asyncio.Lock()
         self._flush_loop_task: asyncio.Task[None] | None = None
         self._shutdown = False
@@ -424,8 +425,21 @@ class GameService:
         entry.flush_task = asyncio.create_task(self._flush_entry(entry, reason=reason), name=f"game-flush-{reason}")
 
     @staticmethod
-    def _game_event_payload(game: dict[str, Any], *, event_type: str) -> dict[str, Any]:
-        updated_at = game.get("updated_at")
+    def _shared_update_timestamps(rule_variant: str | None, now: datetime) -> dict[str, datetime]:
+        if rule_variant == "wild16":
+            return {"updated_at": now, "public_updated_at": now}
+        return {"updated_at": now}
+
+    @staticmethod
+    def _public_updated_at(game: dict[str, Any]) -> datetime | str | None:
+        if game.get("rule_variant") == "wild16" and game.get("state") == "active":
+            # Older active games can have a private retry time in updated_at.
+            return game.get("public_updated_at", game.get("created_at"))
+        return game.get("updated_at", game.get("created_at"))
+
+    @classmethod
+    def _game_event_payload(cls, game: dict[str, Any], *, event_type: str) -> dict[str, Any]:
+        updated_at = cls._public_updated_at(game)
         if isinstance(updated_at, datetime):
             updated_at_value = updated_at.isoformat()
         else:
@@ -461,7 +475,7 @@ class GameService:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=16)
         subscription = GameEventSubscription(game_id=game["_id"], queue=queue)
         async with self._event_lock:
-            self._event_subscribers.setdefault(game["_id"], set()).add(queue)
+            self._event_subscribers.setdefault(game["_id"], {})[queue] = color
         self._queue_game_event(queue, self._game_event_payload(game, event_type="connected"))
         return subscription
 
@@ -470,17 +484,20 @@ class GameService:
             queues = self._event_subscribers.get(subscription.game_id)
             if queues is None:
                 return
-            queues.discard(subscription.queue)
+            queues.pop(subscription.queue, None)
             if not queues:
                 self._event_subscribers.pop(subscription.game_id, None)
 
-    async def _publish_game_event(self, game: dict[str, Any], *, event_type: str = "game_changed") -> None:
+    async def _publish_game_event(
+        self, game: dict[str, Any], *, event_type: str = "game_changed", only_color: PlayerColor | None = None
+    ) -> None:
         game_id = game.get("_id")
         if not isinstance(game_id, ObjectId):
             return
         event = self._game_event_payload(game, event_type=event_type)
         async with self._event_lock:
-            queues = tuple(self._event_subscribers.get(game_id, ()))
+            subscribers = self._event_subscribers.get(game_id, {})
+            queues = [queue for queue, color in subscribers.items() if only_color is None or color == only_color]
         for queue in queues:
             self._queue_game_event(queue, event)
 
@@ -668,14 +685,15 @@ class GameService:
         announcement = source.get("announcement")
         return isinstance(announcement, str) and announcement in NONSENSE_HISTORY_ANNOUNCEMENTS
 
+    @staticmethod
+    def _is_private_illegal_attempt(*, rule_variant: str, source: dict[str, Any]) -> bool:
+        return rule_variant == "wild16" and source.get("announcement") == "ILLEGAL_MOVE" and not source.get("move_done")
+
     @classmethod
     def _should_store_public_history_entry(cls, *, rule_variant: str, source: dict[str, Any]) -> bool:
-        if cls._is_nonsense_history_entry(source):
-            return False
-        announcement = source.get("announcement")
-        if rule_variant == "wild16" and announcement == "ILLEGAL_MOVE" and not bool(source.get("move_done", False)):
-            return False
-        return True
+        return not (
+            cls._is_nonsense_history_entry(source) or cls._is_private_illegal_attempt(rule_variant=rule_variant, source=source)
+        )
 
     @classmethod
     def _history_moves(cls, moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -890,11 +908,14 @@ class GameService:
             return archived, None, True
 
     @staticmethod
-    def _mark_entry_dirty_locked(entry: CachedGameEntry, *, now: datetime) -> None:
+    def _mark_entry_dirty_locked(entry: CachedGameEntry, *, now: datetime, only_color: PlayerColor | None = None) -> None:
         entry.dirty = True
         entry.version += 1
         entry.last_activity_at = now
-        entry.state_projection_cache.clear()
+        if only_color is None:
+            entry.state_projection_cache.clear()
+        else:
+            entry.state_projection_cache.pop(only_color, None)
 
     @staticmethod
     def _apply_timeout_to_game(*, game: dict[str, Any], timeout: dict[str, Any], now: datetime) -> dict[str, Any]:
@@ -1593,7 +1614,7 @@ class GameService:
                 "turn": doc.get("turn"),
                 "move_number": doc.get("move_number", 1),
                 "created_at": doc["created_at"],
-                "updated_at": doc.get("updated_at", doc["created_at"]),
+                "updated_at": self._public_updated_at(doc),
                 "result": self._normalized_result(result=doc.get("result"), moves=doc.get("moves")),
                 "rating_snapshot": doc.get("rating_snapshot"),
             }
@@ -2152,7 +2173,7 @@ class GameService:
             "turn": None,
             "move_number": 1,
             "created_at": now,
-            "updated_at": now,
+            **self._shared_update_timestamps(request.rule_variant, now),
             "expires_at": now + WAITING_GAME_TTL,
         }
         if attribution is not None:
@@ -2291,7 +2312,7 @@ class GameService:
                     "engine_state": serialize_game_state(engine),
                     "moves": [],
                     "time_control": self._clock.default_time_control(now=now),
-                    "updated_at": now,
+                    **self._shared_update_timestamps(game.get("rule_variant"), now),
                     "expires_at": None,
                     **llm_bot_payload,
                 },
@@ -2522,8 +2543,7 @@ class GameService:
 
         async with entry.lock:
             time_control = self._active_time_control(game=game, now=now)
-            cache_key = (entry.version, viewer_color)
-            cached = entry.state_projection_cache.get(cache_key)
+            cached = entry.state_projection_cache.get(viewer_color)
             if cached is None:
                 cached = self._build_game_state_projection_response(
                     game=game,
@@ -2531,7 +2551,7 @@ class GameService:
                     time_control=time_control,
                     now=now,
                 )
-                entry.state_projection_cache[cache_key] = cached
+                entry.state_projection_cache[viewer_color] = cached
             return self._game_state_response_with_current_clock(cached, time_control=time_control, now=now)
 
     async def get_game_state(self, *, game_id: str, user_id: str) -> GameStateResponse:
@@ -2623,20 +2643,25 @@ class GameService:
                 "replay_fen": self._outcome_replay_fen(outcome),
             }
 
-            advanced_time_control = self._clock.deduct_and_increment(
-                time_control=time_control,
-                mover_color=color,
-                now=now,
-                move_done=outcome["move_done"],
-                next_active_color=outcome["turn"],
-            )
-            timeout = self._clock.check_timeout(time_control=advanced_time_control, now=now)
+            rule_variant = game.get("rule_variant", "berkeley_any")
+            private_to = None
+            if not outcome["game_over"] and self._is_private_illegal_attempt(rule_variant=rule_variant, source=outcome):
+                private_to = color
+            else:
+                time_control = self._clock.deduct_and_increment(
+                    time_control=time_control,
+                    mover_color=color,
+                    now=now,
+                    move_done=outcome["move_done"],
+                    next_active_color=outcome["turn"],
+                )
+                timeout = self._clock.check_timeout(time_control=time_control, now=now)
+                game["time_control"] = time_control
+                game.update(self._shared_update_timestamps(rule_variant, now))
 
             game["engine_state"] = serialize_game_state(engine)
             game["turn"] = outcome["turn"]
-            game["time_control"] = advanced_time_control
-            game["updated_at"] = now
-            if self._should_store_public_history_entry(rule_variant=game.get("rule_variant", "berkeley_any"), source=outcome):
+            if self._should_store_public_history_entry(rule_variant=rule_variant, source=outcome):
                 game.setdefault("moves", []).append(move_record)
             if outcome["move_done"]:
                 game["move_number"] = int(game.get("move_number", 1)) + 1
@@ -2647,8 +2672,8 @@ class GameService:
             elif timeout is not None:
                 self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
 
-            self._mark_entry_dirty_locked(entry, now=now)
-            clock_payload = self._clock.response_clock(time_control=game["time_control"], now=now)
+            self._mark_entry_dirty_locked(entry, now=now, only_color=private_to)
+            clock_payload = self._clock.response_clock(time_control=game.get("time_control", time_control), now=now)
             game_over = game.get("state") == "completed"
 
         human_game = self._is_human_involved_game(game)
@@ -2658,7 +2683,7 @@ class GameService:
             self._schedule_flush(entry, reason="human")
         elif game_over:
             self._schedule_flush(entry, reason="completion")
-        await self._publish_game_event(game, event_type="game_changed")
+        await self._publish_game_event(game, only_color=private_to)
 
         logger.info(
             "move_submitted",

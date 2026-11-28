@@ -4,7 +4,7 @@ import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from bson import ObjectId
@@ -389,6 +389,109 @@ async def test_execute_move_hides_wild16_private_illegal_attempts_from_shared_hi
     own_scoresheet = games.docs[0]["engine_state"]["game_state"]["white_scoresheet"]["moves_own"]
     assert own_scoresheet[0][0][1]["main_announcement"] == "ILLEGAL_MOVE"
     assert games.docs[0]["engine_state"]["game_state"]["black_scoresheet"]["moves_opponent"] == []
+
+
+@pytest.mark.parametrize(
+    ("variant", "mover"),
+    [(variant, "black") for variant in ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")]
+    + [("wild16", "white")],
+)
+@pytest.mark.asyncio
+async def test_blocked_pawn_updates_follow_ruleset(variant: str, mover: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    games = FakeGamesCollection()
+    service = GameService(games)
+    now = datetime.now(UTC)
+    monkeypatch.setattr(service, "utcnow", lambda: now)
+    created = await service.create_game(
+        user_id="w", username="white", request=CreateGameRequest(rule_variant=variant, play_as="white")
+    )
+    await service.join_game(user_id="b", username="black", game_code=created.game_code)
+    gid = created.game_id
+    opening = [("w", "e2e4"), ("b", "e7e5")]
+    if mover == "black":
+        opening.append(("w", "g1f3"))
+    for player, uci in opening:
+        now += timedelta(seconds=1)
+        assert (await service.execute_move(game_id=gid, user_id=player, uci=uci))["move_done"]
+    await service.flush_all()
+
+    actor, observer, blocked, next_move = ("b", "w", "e5e4", "g8f6") if mover == "black" else ("w", "b", "e4e5", "g1f3")
+    own = await service.subscribe_game_events(game_id=gid, user_id=actor)
+    other = await service.subscribe_game_events(game_id=gid, user_id=observer)
+    connected = other.queue.get_nowait()
+    assert own.queue.get_nowait() == connected
+    original_clock = deepcopy(games.docs[0]["time_control"])
+    metadata = await service.get_game(game_id=gid)
+    now += timedelta(microseconds=149231)
+    state = await service.get_game_state(game_id=gid, user_id=observer)
+    transcript = await service.get_game_transcript(game_id=gid, user_id=observer)
+
+    reply = await service.execute_move(game_id=gid, user_id=actor, uci=blocked)
+    assert reply["announcement"] == "ILLEGAL_MOVE" and not reply["move_done"]
+    assert own.queue.get_nowait()["type"] == "game_changed"
+    await service.flush_all()
+    resumed = GameService(games)
+    monkeypatch.setattr(resumed, "utcnow", lambda: now)
+    metadata_after = await resumed.get_game(game_id=gid)
+    assert (await resumed.get_my_active_games(user_id=observer)) == [metadata_after]
+    reconnected = await resumed.subscribe_game_events(game_id=gid, user_id=observer)
+    if variant == "wild16":
+        with patch.object(service, "_build_game_state_projection_response") as build:
+            assert await service.get_game_state(game_id=gid, user_id=observer) == state
+            build.assert_not_called()
+        assert reconnected.queue.get_nowait() == connected
+        assert metadata_after == metadata
+        assert games.docs[0]["time_control"] == original_clock
+        assert await resumed.get_game_state(game_id=gid, user_id=observer) == state
+        assert await resumed.get_game_transcript(game_id=gid, user_id=observer) == transcript
+    else:
+        assert other.queue.get_nowait()["updated_at"] == now.isoformat()
+        assert metadata_after.updated_at == now
+        assert reconnected.queue.get_nowait()["updated_at"] == now.isoformat()
+
+    now += timedelta(seconds=1)
+    assert (await service.execute_move(game_id=gid, user_id=actor, uci=next_move))["move_done"]
+    public_move = other.queue.get_nowait()
+    assert public_move == own.queue.get_nowait()
+    assert public_move["updated_at"] == now.isoformat()
+    assert other.queue.empty()
+    await service.flush_all()
+
+
+@pytest.mark.asyncio
+async def test_wild16_legacy_timestamp_stays_private_until_public_play(monkeypatch: pytest.MonkeyPatch) -> None:
+    games = FakeGamesCollection()
+    game = active_game_doc(rule_variant="wild16")
+    game["game_code"] = "A7K2M9"
+    games.docs.append(game)
+    created = game["created_at"]
+    game["updated_at"] = created + timedelta(seconds=3)
+    game["time_control"]["active_color"] = None
+    service = GameService(games)
+    now = created + timedelta(seconds=5)
+    monkeypatch.setattr(service, "utcnow", lambda: now)
+    gid = str(game["_id"])
+    side = await service.subscribe_game_events(game_id=gid, user_id="u2")
+    assert side.queue.get_nowait()["updated_at"] == created.isoformat()
+    assert (await service.get_game(game_id=gid)).updated_at == created
+    assert (await service.get_my_active_games(user_id="u2"))[0].updated_at == created
+    tabs = [await service.subscribe_game_events(game_id=gid, user_id="u1") for _ in range(2)]
+    for tab in tabs:
+        assert tab.queue.get_nowait()["type"] == "connected"
+    for _ in range(2):
+        await service.execute_move(game_id=gid, user_id="u1", uci="e2e5")
+        for tab in tabs:
+            assert tab.queue.get_nowait()["type"] == "game_changed"
+    await service.flush_all()
+    assert games.docs[0]["updated_at"] == created + timedelta(seconds=3)
+    assert games.docs[0]["time_control"]["active_color"] is None
+    assert (await service.get_game(game_id=gid)).updated_at == created
+    now += timedelta(seconds=1)
+    await service.execute_move(game_id=gid, user_id="u1", uci="e2e4")
+    await service.flush_all()
+    assert side.queue.get_nowait()["updated_at"] == now.isoformat()
+    assert side.queue.empty()
+    assert (await service.get_game(game_id=gid)).updated_at == now
 
 
 @pytest.mark.asyncio
@@ -3061,12 +3164,12 @@ async def test_event_queue_publish_and_close_helpers_cover_edge_paths() -> None:
 
     await service._publish_game_event({"_id": "not-an-object-id"})
     subscriber: asyncio.Queue[dict] = asyncio.Queue()
-    service._event_subscribers[gid] = {subscriber}
+    service._event_subscribers[gid] = {subscriber: "white"}
     await service._publish_game_event({"_id": gid, "game_code": "ABC123", "state": "active"}, event_type="changed")
     assert (await subscriber.get())["type"] == "changed"
 
     await service.unsubscribe_game_events(SimpleNamespace(game_id=ObjectId(), queue=subscriber))
-    service._event_subscribers[gid] = {subscriber}
+    service._event_subscribers[gid] = {subscriber: "white"}
     await service._close_event_subscribers()
     assert (await subscriber.get())["type"] == "shutdown"
     assert service._event_subscribers == {}
@@ -3368,9 +3471,9 @@ async def test_additional_game_service_branch_edges(monkeypatch: pytest.MonkeyPa
     queue_two: asyncio.Queue[dict] = asyncio.Queue()
     event_service = GameService(FakeGamesCollection())
     event_id = ObjectId()
-    event_service._event_subscribers[event_id] = {queue_one, queue_two}
+    event_service._event_subscribers[event_id] = {queue_one: "white", queue_two: "black"}
     await event_service.unsubscribe_game_events(SimpleNamespace(game_id=event_id, queue=queue_one))
-    assert event_service._event_subscribers[event_id] == {queue_two}
+    assert event_service._event_subscribers[event_id] == {queue_two: "black"}
 
     class DocsOnly:
         def __init__(self, docs: list[dict] | tuple = ()) -> None:
