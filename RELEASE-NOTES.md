@@ -1,5 +1,11 @@
 # Release Notes
 
+## 1.6.7
+
+- Player move suggestions now respect each ruleset's public pawn hints in new
+  and resumed games. This fixes an extra pawn diagonal in Cincinnati, Wild 16,
+  and RAND.
+
 ## 1.6.6
 
 - Live game state and transcripts use the same fixed order for double-check directions across all rulesets, including games already in progress.

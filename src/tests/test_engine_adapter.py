@@ -38,6 +38,7 @@ from app.services.engine_adapter import (
     serialize_scoresheet,
     serialize_game_state,
 )
+from app.services.state_projection import allowed_moves_for_player
 
 
 def _previous_canonical_payload(game):
@@ -55,6 +56,32 @@ def test_create_new_game_and_legal_move_succeeds() -> None:
 
     assert result["move_done"] is True
     assert result["announcement"] in {"REGULAR_MOVE", "CAPTURE_DONE"}
+
+
+@pytest.mark.parametrize("variant", ["cincinnati", "wild16", "rand"])
+@pytest.mark.parametrize(("serialize", "coordinate"), [
+    (serialize_game_state, "chess_move"),
+    (_serialize_legacy_game_state, "move_uci"),
+])
+def test_saved_game_projects_only_public_pawn_tries(variant, serialize, coordinate) -> None:
+    game = create_new_game(rule_variant=variant)
+    for uci in ("e2e4", "d7d6", "e4e5", "d8d7", "g1f3", "d7e6", "a2a3", "f7f5"):
+        assert attempt_move(game, uci)["move_done"]
+    player = {"game_state": "active", "viewer_color": "white", "turn": "white"}
+    expected = allowed_moves_for_player(engine=game, **player)
+    assert "e5f6" not in expected
+    expected.remove("e5e6")
+
+    payload = serialize(game)
+    saved = payload.get("game_state", payload)["possible_to_ask"]
+    forward = next(move for move in saved if move[coordinate] == "e5e6")
+    saved.remove(forward)
+    saved.append({**forward, coordinate: "e5f6"})
+
+    restored = deserialize_game_state(payload)
+    assert allowed_moves_for_player(engine=restored, **player) == expected
+    for uci in ("e5e6", "e5f6"):
+        assert not restored.is_possible_to_ask(KriegspielMove(QuestionAnnouncement.COMMON, chess.Move.from_uci(uci)))
 
 
 def test_create_new_game_rejects_unknown_rule_variant() -> None:

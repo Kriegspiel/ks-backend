@@ -287,6 +287,7 @@ def _deserialize_legacy_game_state(payload: dict[str, Any]) -> KriegspielGame:
     game._whites_scoresheet = deserialize_scoresheet(payload.get("white_scoresheet"), fallback_color="white")  # noqa: SLF001
     game._blacks_scoresheet = deserialize_scoresheet(payload.get("black_scoresheet"), fallback_color="black")  # noqa: SLF001
     _repair_possible_to_ask(game)
+    game.restore_possible_to_ask(game.possible_to_ask)
     return game
 
 
