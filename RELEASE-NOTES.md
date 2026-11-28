@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.6.10
+
+- Opening a running game now reads the turn and move number from the same
+  live game that accepts moves, even when page requests finish out of order.
+
 ## 1.6.9
 
 - Active-game list responses now return the same turn, move number and public

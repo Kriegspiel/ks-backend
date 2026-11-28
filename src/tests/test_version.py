@@ -5,7 +5,7 @@ from app import version as version_module
 
 
 def test_current_release_version_matches_approved_patch_release():
-    assert version_module._load_project_metadata()["version"] == "1.6.9"
+    assert version_module._load_project_metadata()["version"] == "1.6.10"
 
 
 def test_deployed_engine_pin_matches_project_dependency():

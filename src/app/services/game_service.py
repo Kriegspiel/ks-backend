@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import random
 from types import SimpleNamespace
 from typing import Any, Literal
+from weakref import WeakValueDictionary
 
 from bson import ObjectId
 import chess
@@ -179,6 +180,8 @@ class GameService:
         self._clock = ClockService()
         self._cache: dict[ObjectId, CachedGameEntry] = {}
         self._cache_lock = asyncio.Lock()
+        # Only outstanding database reads keep their game's eviction signal alive.
+        self._read_evictions: WeakValueDictionary[ObjectId, asyncio.Event] = WeakValueDictionary()
         self._event_subscribers: dict[ObjectId, dict[asyncio.Queue[dict[str, Any]], PlayerColor]] = {}
         self._event_lock = asyncio.Lock()
         self._flush_loop_task: asyncio.Task[None] | None = None
@@ -330,9 +333,12 @@ class GameService:
             game_id = game.get("_id")
             if not isinstance(game_id, ObjectId) or game_id in {cached.get("_id") for cached in expired_cached_games}:
                 continue
+            if game_id in self._cache:
+                continue  # Its live entry is handled by the cache pass.
             deleted = await self._delete_pre_start_active_game_document(game_id=game_id, cutoff=cutoff)
             if not deleted:
                 continue
+            await self._evict_cached_game(game_id, pre_start_expiry=now)
             await self._publish_game_event(game, event_type="game_changed")
             logger.info("pre_start_active_game_expired", game_id=str(game_id), source="db")
 
@@ -402,6 +408,7 @@ class GameService:
                 )
                 continue
             if updated.get("state") == "completed":
+                await self._evict_cached_game(updated.get("_id"))
                 await self._publish_game_event(updated, event_type="game_changed")
                 logger.info("game_timeout_swept", game_id=str(updated.get("_id")))
 
@@ -830,23 +837,34 @@ class GameService:
         players = [game.get("white"), game.get("black")]
         return any(player and player.get("role") != "bot" for player in players)
 
-    async def _evict_cached_game(self, game_id: ObjectId | None) -> None:
+    async def _evict_cached_game(self, game_id: ObjectId | None, *, pre_start_expiry: datetime | None = None) -> None:
         if game_id is None:
             return
         async with self._cache_lock:
+            entry = self._cache.get(game_id)
+            if pre_start_expiry is not None and entry is not None:
+                if not self._is_pre_start_active_game_expired(game=entry.game, now=pre_start_expiry):
+                    return
             self._cache.pop(game_id, None)
+            if signal := self._read_evictions.pop(game_id, None):
+                signal.set()
 
-    async def _prime_cache(self, game: dict[str, Any], *, persisted: bool) -> CachedGameEntry:
-        entry = CachedGameEntry(
-            game=deepcopy(game),
-            dirty=not persisted,
-            version=0 if persisted else 1,
-            last_activity_at=self.utcnow(),
-            last_persisted_ply=self._ply_count(game) if persisted else 0,
-        )
-        async with self._cache_lock:
+    def _cache_entry_locked(self, game: dict[str, Any], *, persisted: bool) -> CachedGameEntry:
+        entry = self._cache.get(game["_id"])
+        if entry is None:
+            entry = CachedGameEntry(
+                game=deepcopy(game),
+                dirty=not persisted,
+                version=0 if persisted else 1,
+                last_activity_at=self.utcnow(),
+                last_persisted_ply=self._ply_count(game) if persisted else 0,
+            )
             self._cache[game["_id"]] = entry
         return entry
+
+    async def _prime_cache(self, game: dict[str, Any], *, persisted: bool) -> CachedGameEntry:
+        async with self._cache_lock:
+            return self._cache_entry_locked(game, persisted=persisted)
 
     async def _get_cached_entry(self, oid: ObjectId) -> CachedGameEntry | None:
         async with self._cache_lock:
@@ -885,17 +903,39 @@ class GameService:
 
     async def _get_game_for_runtime(self, *, game_id: str) -> tuple[dict[str, Any], CachedGameEntry | None]:
         oid = await self._resolve_live_game_object_id(game_id)
-        cached = await self._get_cached_entry(oid)
-        if cached is not None:
-            return cached.game, cached
+        while True:
+            async with self._cache_lock:
+                cached = self._cache.get(oid)
+                if cached is not None:
+                    return cached.game, cached
+                evicted = self._read_evictions.setdefault(oid, asyncio.Event())
 
-        game = await self._games.find_one({"_id": oid})
-        if game is None:
-            raise GameNotFoundError()
-        if game.get("state") == "active":
-            cached = await self._prime_cache(game, persisted=True)
-            return cached.game, cached
-        return game, None
+            game = await self._games.find_one({"_id": oid})
+            async with self._cache_lock:
+                if evicted.is_set():
+                    # A terminal save or deletion retired this snapshot during the read.
+                    continue
+                if game is not None and game.get("state") == "active":
+                    cached = self._cache_entry_locked(game, persisted=True)
+                else:
+                    cached = self._cache.get(oid)
+                if cached is not None:
+                    return cached.game, cached
+                if game is None:
+                    raise GameNotFoundError()
+                return game, None
+
+    async def _entry_for_action(self, game_id: str) -> CachedGameEntry:
+        game, entry = await self._get_game_for_runtime(game_id=game_id)
+        # Waiting and completed rows still pass through the usual seat and state checks.
+        return entry or CachedGameEntry(game=game)
+
+    async def _live_game_snapshot(self, game_id: str) -> dict[str, Any]:
+        game, entry = await self._get_game_for_runtime(game_id=game_id)
+        if entry is not None:
+            async with entry.lock:
+                return deepcopy(entry.game)
+        return game
 
     async def _get_game_for_state(self, *, game_id: str) -> tuple[dict[str, Any], CachedGameEntry | None, bool]:
         try:
@@ -1300,22 +1340,14 @@ class GameService:
         return finalized
 
     async def _get_live_game_document(self, *, game_id: str) -> dict[str, Any] | None:
-        oid = await self._resolve_live_game_object_id(game_id)
-        cached = await self._get_cached_entry(oid)
-        if cached is not None:
-            snapshot = deepcopy(cached.game)
-            if self._is_waiting_game_expired(game=snapshot, now=self.utcnow()):
-                await self._delete_waiting_game_document(game_id=oid)
-                await self._evict_cached_game(oid)
-                return None
-            return snapshot
-        game = await self._games.find_one({"_id": oid})
-        if game is not None:
-            if self._is_waiting_game_expired(game=game, now=self.utcnow()):
-                await self._delete_waiting_game_document(game_id=oid)
-                return None
-            return game
-        return None
+        game = await self._live_game_snapshot(game_id)
+        if self._is_waiting_game_expired(game=game, now=self.utcnow()):
+            if not await self._delete_waiting_game_document(game_id=game["_id"]):
+                # A join or another expiry can win the conditional delete.
+                return await self._live_game_snapshot(game_id)
+            await self._evict_cached_game(game["_id"])
+            return None
+        return game
 
     async def _get_archived_game_document(self, *, game_id: str) -> dict[str, Any] | None:
         if self._archives is None:
@@ -2024,17 +2056,18 @@ class GameService:
         except (TypeError, ValueError):
             return False
 
-    async def _delete_waiting_game_document(self, *, game_id: ObjectId) -> None:
+    async def _delete_waiting_game_document(self, *, game_id: ObjectId) -> bool:
         if hasattr(self._games, "delete_one"):
-            await self._games.delete_one({"_id": game_id, "state": "waiting"})
-            return
+            result = await self._games.delete_one({"_id": game_id, "state": "waiting"})
+            return bool(result.deleted_count)
 
         docs = getattr(self._games, "docs", None)
         if isinstance(docs, list):
             for index, doc in enumerate(docs):
                 if doc.get("_id") == game_id and doc.get("state") == "waiting":
                     docs.pop(index)
-                    return
+                    return True
+        return False
 
     async def _delete_pre_start_active_game_document(self, *, game_id: ObjectId, cutoff: datetime) -> bool:
         query = {
@@ -2571,6 +2604,7 @@ class GameService:
             )
 
         async with entry.lock:
+            game = entry.game
             time_control = self._active_time_control(game=game, now=now)
             cached = entry.state_projection_cache.get(viewer_color)
             if cached is None:
@@ -2590,6 +2624,7 @@ class GameService:
         completed_by_llm_bot_limit = False
         if entry is not None:
             async with entry.lock:
+                game = entry.game
                 time_control = self._active_time_control(game=game, now=now)
                 timeout = (
                     self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
@@ -2624,13 +2659,10 @@ class GameService:
         return await self._project_game_state_response(game=game, entry=entry, viewer_color=color, now=now)
 
     async def execute_move(self, *, game_id: str, user_id: str, uci: str) -> dict[str, Any]:
-        game, entry = await self._get_game_for_runtime(game_id=game_id)
-        if entry is None:
-            await self._prime_cache(game, persisted=True)
-            game, entry = await self._get_game_for_runtime(game_id=game_id)
-        assert entry is not None
+        entry = await self._entry_for_action(game_id)
         now = self.utcnow()
         async with entry.lock:
+            game = entry.game
             time_control = self._active_time_control(game=game, now=now)
             timeout = self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
             if timeout is not None:
@@ -2742,13 +2774,10 @@ class GameService:
         }
 
     async def execute_ask_any(self, *, game_id: str, user_id: str) -> dict[str, Any]:
-        game, entry = await self._get_game_for_runtime(game_id=game_id)
-        if entry is None:
-            await self._prime_cache(game, persisted=True)
-            game, entry = await self._get_game_for_runtime(game_id=game_id)
-        assert entry is not None
+        entry = await self._entry_for_action(game_id)
         now = self.utcnow()
         async with entry.lock:
+            game = entry.game
             time_control = self._active_time_control(game=game, now=now)
             timeout = self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
             if timeout is not None:
@@ -2862,14 +2891,11 @@ class GameService:
         }
 
     async def resign_game(self, *, game_id: str, user_id: str) -> dict[str, Any]:
-        game, entry = await self._get_game_for_runtime(game_id=game_id)
-        if entry is None:
-            await self._prime_cache(game, persisted=True)
-            game, entry = await self._get_game_for_runtime(game_id=game_id)
-        assert entry is not None
+        entry = await self._entry_for_action(game_id)
 
         now = self.utcnow()
         async with entry.lock:
+            game = entry.game
             if game["state"] != "active":
                 raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
 
@@ -2929,9 +2955,4 @@ class GameService:
             raise GameConflictError(code="GAME_NOT_WAITING", message="Game is no longer deletable")
 
     async def hydrate_document(self, *, game_id: str) -> GameDocument:
-        oid = await self._resolve_live_game_object_id(game_id)
-        cached = await self._get_cached_entry(oid)
-        game = deepcopy(cached.game) if cached is not None else await self._games.find_one({"_id": oid})
-        if game is None:
-            raise GameNotFoundError()
-        return GameDocument.from_mongo(game)
+        return GameDocument.from_mongo(await self._live_game_snapshot(game_id))
