@@ -880,57 +880,187 @@ async def test_get_my_active_games_reads_only_live_collection_and_excludes_compl
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("variant", ["berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg"])
-async def test_player_game_lists_match_live_metadata_during_a_save(variant: str, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_public_move_visibility_waits_for_its_checkpoint(variant: str, monkeypatch: pytest.MonkeyPatch) -> None:
     game = active_game_doc(rule_variant=variant)
-    game["game_code"] = "A7K2M9"
-    gid = str(game["_id"])
+    gid = game["game_code"]
     games = FakeGamesCollection()
-    control_games = FakeGamesCollection()
     games.docs.append(deepcopy(game))
-    control_games.docs.append(deepcopy(game))
-    service, control = GameService(games), GameService(control_games)
-    now = game["created_at"] + timedelta(seconds=1)
-    monkeypatch.setattr(service, "utcnow", lambda: now)
-    monkeypatch.setattr(control, "utcnow", lambda: now)
-    started, release = asyncio.Event(), asyncio.Event()
-    persist = service._persist_game_document
+    service = GameService(games)
+    before = await service.get_game(game_id=gid)
+    sub = await service.subscribe_game_events(game_id=gid, user_id="u2")
+    assert sub.queue.get_nowait()["move_number"] == 1
 
-    async def delayed_save(snapshot):
+    started, release = asyncio.Event(), asyncio.Event()
+    replace = service._replace_game_if_current
+
+    async def delayed_save(document, state, checkpoint):
         started.set()
         await release.wait()
-        await persist(snapshot)
+        return await replace(document, state, checkpoint)
 
-    monkeypatch.setattr(service, "_persist_game_document", delayed_save)
+    monkeypatch.setattr(service, "_replace_game_if_current", delayed_save)
+    move = asyncio.create_task(service.execute_move(game_id=gid, user_id="u1", uci="e2e4"))
     try:
-        if variant == "wild16":
-            assert not (await service.execute_move(game_id=gid, user_id="u1", uci="e2e5"))["move_done"]
-            await asyncio.wait_for(started.wait(), timeout=2)
-            assert await service.get_my_active_games(user_id="u2") == [await control.get_game(game_id=gid)]
-        now += timedelta(seconds=1)
-        for player_game in (service, control):
-            assert (await player_game.execute_move(game_id=gid, user_id="u1", uci="e2e4"))["move_done"]
-        await asyncio.wait_for(started.wait(), timeout=2)
-        await control.flush_all()
+        await asyncio.wait_for(started.wait(), 2)
+        assert not move.done() and sub.queue.empty()
         assert games.docs[0]["move_number"] == 1
-        expected = (await control.get_game(game_id=gid)).model_dump(mode="json")
-        assert expected["move_number"] == 2 and expected["turn"] == "black"
-        assert (await service.get_game(game_id=gid)).model_dump(mode="json") == expected
         for viewer, opponent in (("u1", "u2"), ("u2", "u1")):
-            active = await service.get_my_active_games(user_id=viewer)
-            combined = await service.get_my_games(user_id=viewer)
+            assert await service.get_my_active_games(user_id=viewer) == [before]
+            assert await service.get_my_games(user_id=viewer) == [before]
             agent = await service.get_my_active_games(user_id=viewer, include_opponent_id=True)
-            assert [row.model_dump(mode="json") for row in active] == [expected]
-            assert [row.model_dump(mode="json") for row in combined] == [expected]
-            assert [row.model_dump(mode="json") for row in agent] == [{**expected, "opponent_id": opponent}]
+            assert agent[0].model_dump() == {**before.model_dump(), "opponent_id": opponent}
         assert await service.get_my_active_games(user_id="other") == []
+        reconnect = await service.subscribe_game_events(game_id=gid, user_id="u2")
+        assert reconnect.queue.get_nowait()["move_number"] == 1
+
+        reads = asyncio.gather(
+            service.get_game(game_id=gid),
+            service.get_game_state(game_id=gid, user_id="u2"),
+            service.get_game_transcript(game_id=gid, user_id="u2"),
+        )
+        await asyncio.sleep(0)
+        assert not reads.done()
     finally:
         release.set()
-        entry = await service._get_cached_entry(game["_id"])
-        if entry and entry.flush_task:
-            await entry.flush_task
-        await service.flush_all()
+        assert (await asyncio.wait_for(move, 2))["move_done"]
+
+    meta, state, transcript = await reads
+    assert meta.move_number == state.move_number == games.docs[0]["move_number"] == 2
+    assert len(transcript.moves) == 1
+    assert sub.queue.get_nowait()["move_number"] == reconnect.queue.get_nowait()["move_number"] == 2
     resumed = GameService(games)
-    assert (await resumed.get_my_active_games(user_id="u2"))[0].model_dump(mode="json") == expected
+    assert await resumed.get_game(game_id=gid) == meta
+    assert await resumed.get_game_transcript(game_id=gid, user_id="u2") == transcript
+    assert (await resumed.get_my_active_games(user_id="u2")) == [meta]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ends_game", [False, True])
+async def test_delayed_private_save_cannot_roll_back_or_resurrect_a_game(ends_game, monkeypatch):
+    games, archives = FakeGamesCollection(), FakeGamesCollection()
+    game = active_game_doc(rule_variant="wild16", black_role="bot")
+    games.docs.append(game)
+    service = GameService(games, archives)
+    gid = game["game_code"]
+    if ends_game:
+        for user, move in [("u1", "f2f3"), ("u2", "e7e5"), ("u1", "g2g4")]:
+            assert (await service.execute_move(game_id=gid, user_id=user, uci=move))["move_done"]
+    mover, opponent = ("u2", "u1") if ends_game else ("u1", "u2")
+    sub = await service.subscribe_game_events(game_id=gid, user_id=opponent)
+    previous = sub.queue.get_nowait()
+    started, release = asyncio.Event(), asyncio.Event()
+    original = service._persist_game_document
+    writes = []
+
+    async def delayed_private(snapshot):
+        started.set()
+        await release.wait()
+        matched = await original(snapshot)
+        writes.append(matched)
+        return matched
+
+    monkeypatch.setattr(service, "_persist_game_document", delayed_private)
+    private = await service.execute_move(game_id=gid, user_id=mover, uci="a7a4" if ends_game else "e2e5")
+    assert private["announcement"] == "ILLEGAL_MOVE" and not private["move_done"]
+    pending = service._cache[game["_id"]].flush_task
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        assert sub.queue.empty()
+        reply = await service.execute_move(game_id=gid, user_id=mover, uci="d8h4" if ends_game else "e2e4")
+        assert reply["move_done"] and reply["game_over"] == ends_game
+        assert sub.queue.get_nowait()["move_number"] == previous["move_number"] + 1
+        stored = deepcopy((archives if ends_game else games).docs[0])
+        # A fresh service uses the saved board before the old writer finishes.
+        reopened = GameService(games, archives)
+        assert (await reopened.get_game(game_id=gid)).move_number == stored["move_number"]
+        sheet = stored["engine_state"]["game_state"][("black" if ends_game else "white") + "_scoresheet"]
+        assert any(record["main_announcement"] == "ILLEGAL_MOVE" for tries in sheet["moves_own"] for _, record in tries)
+    finally:
+        release.set()
+        await pending
+
+    assert writes == [False]
+    await service.shutdown()
+    assert (archives if ends_game else games).docs == [stored]
+    assert (games if ends_game else archives).docs == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["before_write", "lost_ack", "cancelled"])
+async def test_checkpoint_failure_reloads_the_database_for_queued_reads_and_retries(failure, monkeypatch):
+    games = FakeGamesCollection()
+    game = active_game_doc()
+    games.docs.append(game)
+    service = GameService(games)
+    gid = game["game_code"]
+    sub = await service.subscribe_game_events(game_id=gid, user_id="u2")
+    assert sub.queue.get_nowait()["move_number"] == 1
+    original = service._replace_game_if_current
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def fail_first(document, state, checkpoint):
+        if started.is_set():
+            return await original(document, state, checkpoint)
+        if failure != "before_write":
+            assert await original(document, state, checkpoint)
+        started.set()
+        await release.wait()
+        raise OSError("checkpoint acknowledgement failed")
+
+    monkeypatch.setattr(service, "_replace_game_if_current", fail_first)
+
+    async def submit():
+        return await service.execute_move(game_id=gid, user_id="u1", uci="e2e4")
+
+    first = asyncio.create_task(submit())
+    await asyncio.wait_for(started.wait(), 2)
+    retired = service._cache[game["_id"]]
+    state = asyncio.create_task(service.get_game_state(game_id=gid, user_id="u2"))
+    metadata = asyncio.create_task(service.get_game(game_id=gid))
+    retry = asyncio.create_task(submit())
+    await asyncio.sleep(0)
+    assert sub.queue.empty() and not retry.done()
+    if failure == "cancelled":
+        first.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError if failure == "cancelled" else OSError):
+        await first
+    expected = 1 if failure == "before_write" else 2
+    assert (await state).move_number == (await metadata).move_number == expected
+    if failure == "before_write":
+        assert (await retry)["move_done"]
+        assert sub.queue.get_nowait()["move_number"] == 2
+    else:
+        with pytest.raises(GameValidationError) as exc:
+            await retry
+        assert exc.value.code == "NOT_YOUR_TURN"
+    assert sub.queue.empty()
+    assert retired.discarded and not retired.dirty
+    assert len(games.docs[0]["moves"]) == 1
+    assert (await GameService(games).get_game(game_id=gid)).move_number == 2
+
+
+@pytest.mark.asyncio
+async def test_conflicting_public_writers_and_stale_private_cache_reload_the_winning_move():
+    games = FakeGamesCollection()
+    game = active_game_doc()
+    games.docs.append(game)
+    a, b, c = (GameService(games) for _ in range(3))
+    gid = game["game_code"]
+    await b.get_game(game_id=gid)
+    await c.get_game(game_id=gid)
+    stale = c._cache[game["_id"]]
+    stale.dirty = True
+    assert (await a.execute_move(game_id=gid, user_id="u1", uci="e2e4"))["move_done"]
+    with pytest.raises(GameConflictError) as conflict:
+        await b.execute_move(game_id=gid, user_id="u1", uci="d2d4")
+    assert conflict.value.code == "GAME_CHANGED"
+    await c._flush_entry(stale, reason="background")
+    assert stale.discarded and (await c.get_game(game_id=gid)).turn == "black"
+    winner = c._cache[game["_id"]]
+    await c._evict_cached_game(game["_id"], expected=stale)
+    assert winner is c._cache[game["_id"]]
+    assert [move["uci"] for move in games.docs[0]["moves"]] == ["e2e4"]
 
 
 @pytest.mark.asyncio
@@ -1869,7 +1999,7 @@ async def test_hydrate_document_and_waiting_black_player_mapping() -> None:
 
 
 @pytest.mark.asyncio
-async def test_human_visible_action_stays_in_cache_until_flushed() -> None:
+async def test_public_pawn_answer_is_saved_before_reply() -> None:
     games = FakeGamesCollection()
     game = active_game_doc()
     games.docs.append(game)
@@ -1878,8 +2008,6 @@ async def test_human_visible_action_stays_in_cache_until_flushed() -> None:
     response = await service.execute_ask_any(game_id=str(game["_id"]), user_id="u1")
 
     assert response["announcement"] in {"HAS_ANY", "NO_ANY"}
-    assert games.docs[0]["moves"] == []
-    await service.flush_all()
     assert len(games.docs[0]["moves"]) == 1
     assert games.docs[0]["moves"][0]["question_type"] == "ASK_ANY"
 
@@ -1979,7 +2107,7 @@ async def test_shutdown_waits_for_pending_save_and_restores_latest_position(
     monkeypatch, play_reply, fail_pending, expected_writes
 ) -> None:
     games = FakeGamesCollection()
-    game = active_game_doc(rule_variant="wild16")
+    game = active_game_doc(rule_variant="wild16", white_role="bot", black_role="bot")
     games.docs.append(game)
     service = GameService(games)
     gid = game["game_code"]
@@ -1995,10 +2123,11 @@ async def test_shutdown_waits_for_pending_save_and_restores_latest_position(
             await release.wait()
             if fail_pending:
                 raise OSError("background save failed")
-        await persist(snapshot)
+        return await persist(snapshot)
 
     monkeypatch.setattr(service, "_persist_game_document", write)
     await service.execute_move(game_id=gid, user_id="u1", uci="e2e4")
+    service._schedule_flush(service._cache[game["_id"]], reason="background")
     await started.wait()
     if play_reply:
         await service.execute_move(game_id=gid, user_id="u2", uci="e7e5")
@@ -2600,7 +2729,7 @@ async def test_concurrent_resume_reads_share_the_played_move(delayed, variant, m
     finish_next_game_read_after(monkeypatch, games, game["_id"], resume_and_play)
     response = await late()
     assert (response.turn, response.move_number) == ("black", 2)
-    assert games.docs[0]["move_number"] == 1
+    assert games.docs[0]["move_number"] == 2
     current = await early()
     assert (current.turn, current.move_number) == (response.turn, response.move_number)
     await service.flush_all()
@@ -2683,9 +2812,10 @@ async def test_pending_read_retries_after_uncached_pre_start_expiry(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_pre_start_expiry_uses_the_current_live_position(monkeypatch) -> None:
+@pytest.mark.parametrize(("role", "stored_move"), [("user", 2), ("bot", 1)])
+async def test_pre_start_expiry_uses_the_current_live_position(monkeypatch, role, stored_move) -> None:
     games = FakeGamesCollection()
-    game = active_game_doc()
+    game = active_game_doc(white_role=role, black_role=role)
     game["time_control"]["active_color"] = None
     games.docs.append(game)
     service = GameService(SimpleNamespace(docs=games.docs, find_one=games.find_one))
@@ -2699,7 +2829,7 @@ async def test_pre_start_expiry_uses_the_current_live_position(monkeypatch) -> N
     assert (await service.execute_move(game_id=gid, user_id="u1", uci="e2e4"))["move_done"]
     await service._expire_pre_start_active_games(now=now)
     await service._evict_cached_game(game["_id"], pre_start_expiry=now)
-    assert games.docs == [game]
+    assert len(games.docs) == 1 and games.docs[0]["move_number"] == stored_move
     assert (await service.get_game(game_id=gid)).move_number == 2
 
 
@@ -3050,6 +3180,19 @@ async def test_flush_loop_and_assert_active_fallbacks_cover_nonstandard_collecti
 
 
 @pytest.mark.asyncio
+async def test_bot_flush_with_update_only_storage_and_info_only_logger(monkeypatch):
+    game = active_game_doc(white_role="bot", black_role="bot")
+    update = AsyncMock(return_value=game)
+    service = GameService(SimpleNamespace(find_one_and_update=update))
+    entry = await service._prime_cache(game, persisted=False)
+    monkeypatch.setattr(game_service_module, "logger", SimpleNamespace(info=lambda *args, **kwargs: None))
+    await service.flush_all()
+    assert not entry.dirty
+    assert update.await_args.args[0] == {"_id": game["_id"]}
+    assert update.await_args.args[1]["$set"]["engine_state"] == game["engine_state"]
+
+
+@pytest.mark.asyncio
 async def test_persist_game_document_and_terminal_entry_cover_fallback_collections() -> None:
     class ListFallbackGames:
         def __init__(self) -> None:
@@ -3203,7 +3346,6 @@ async def test_execute_move_and_ask_any_cover_timeout_and_validation_edges(monke
     human_service = GameService(human_games)
     human_service.utcnow = lambda: now  # type: ignore[method-assign]
     ask_timeout_checks = iter([None, timeout_payload("black")])
-    persisted: list[str] = []
     monkeypatch.setattr(
         "app.services.game_service.ask_any",
         lambda engine: {  # noqa: ARG005
@@ -3221,14 +3363,9 @@ async def test_execute_move_and_ask_any_cover_timeout_and_validation_edges(monke
     )
     monkeypatch.setattr(human_service._clock, "check_timeout", lambda **kwargs: next(ask_timeout_checks))
 
-    async def persist_entry(entry: CachedGameEntry, *, expected_previous_state: str = "active"):  # noqa: ARG001
-        persisted.append(expected_previous_state)
-        return entry.game
-
-    monkeypatch.setattr(human_service, "_persist_terminal_entry", persist_entry)
     ask_response = await human_service.execute_ask_any(game_id=str(human_game["_id"]), user_id="u1")
     assert ask_response["game_over"] is True
-    assert persisted == ["active"]
+    assert human_games.docs[0]["state"] == "completed"
 
 
 @pytest.mark.asyncio

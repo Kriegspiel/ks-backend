@@ -1,5 +1,11 @@
 # Release Notes
 
+## 1.6.12
+
+- In games with a human player, the server saves each public move or referee
+  answer before either player sees it. Reopening after an unexpected server
+  stop restores confirmed play, including the turn and move counter.
+
 ## 1.6.11
 
 - A graceful server restart now waits for each game's pending save and writes
