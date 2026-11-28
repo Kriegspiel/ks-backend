@@ -191,9 +191,9 @@ async def test_get_game_transcript_access_matrix_for_live_and_archived_games(gam
 def test_quiet_openings_give_black_identical_live_transcripts(game_docs, stored_replay) -> None:
     game, _, _ = game_docs
     game["rule_variant"] = "berkeley"
-    service = GameService(FakeCollection([game]))
     app = create_app(Settings(ENVIRONMENT="testing"))
-    app.dependency_overrides[get_game_service] = lambda: service
+    # Each opening is a different game history with its own live cache.
+    app.dependency_overrides[get_game_service] = lambda: GameService(FakeCollection([game]))
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u2")
     move = game["moves"][0]
     bodies = []
@@ -213,7 +213,7 @@ def test_quiet_openings_give_black_identical_live_transcripts(game_docs, stored_
     assert bodies[0]["moves"][0]["replay_fen"] is None
 
 
-@pytest.mark.parametrize("state", ["waiting", "active"])
+@pytest.mark.parametrize("state", ["waiting", "active", "completed"])
 def test_review_requires_game_completion_for_every_viewer(game_docs, state) -> None:
     game, _, _ = game_docs
     game["state"] = state
@@ -226,13 +226,13 @@ def test_review_requires_game_completion_for_every_viewer(game_docs, state) -> N
         for user_id in ("u1", "u2", "spectator"):
             user.id = user_id
             response = client.get(f"/game/{game['game_code']}/review")
-            assert response.status_code == 403
-            assert set(response.json()) == {"error"}
-        game["state"] = "completed"
-        review = client.get(f"/game/{game['game_code']}/review")
-        assert review.status_code == 200
-        assert review.headers["cache-control"] == "private, no-store"
-        assert review.json()["transcript"]["moves"][0]["replay_fen"]["full"]
+            if state == "completed":
+                assert response.status_code == 200
+                assert response.headers["cache-control"] == "private, no-store"
+                assert response.json()["transcript"]["moves"][0]["replay_fen"]["full"]
+            else:
+                assert response.status_code == 403
+                assert set(response.json()) == {"error"}
 
 
 @pytest.mark.asyncio
