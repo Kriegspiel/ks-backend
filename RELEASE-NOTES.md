@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.6.8
+
+- In Wild 16, only the mover receives a live update for a rejected try. The
+  shared game timestamp and running clock advance from public play.
+
 ## 1.6.7
 
 - Player move suggestions now respect each ruleset's public pawn hints in new
