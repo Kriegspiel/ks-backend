@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.6.9
+
+- Active-game list responses now return the same turn, move number and public
+  update time as the game page, even while a save is in progress.
+
 ## 1.6.8
 
 - In Wild 16, only the mover receives a live update for a rejected try. The

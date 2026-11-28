@@ -2365,27 +2365,56 @@ class GameService:
                 break
         return OpenGamesResponse(games=items)
 
+    async def _player_game_list_page(
+        self, collection: Any, *, user_id: str, seat: str, limit: int, active_only: bool
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {f"{seat}.user_id": user_id}
+        if active_only:
+            query["state"] = {"$ne": "completed"}
+        live = collection is self._games
+        # Keep the entry if its final save evicts it while Mongo is finding the page.
+        entries_at_start = self._cache.copy() if live else {}
+        fetch_limit = limit
+        while True:
+            cursor = self._find_with_projection(collection, query, GAME_METADATA_PROJECTION).sort("created_at", -1)
+            stored = [doc async for doc in cursor.limit(fetch_limit)]
+            if not live:
+                return stored
+            page = []
+            for doc in stored:
+                oid = doc["_id"]
+                entry = self._cache.get(oid, entries_at_start.get(oid))
+                if entry is not None:
+                    if self._player_color_for_user(entry.game, user_id) is None:
+                        continue
+                    doc = deepcopy({key: entry.game[key] for key in GAME_METADATA_PROJECTION if key in entry.game})
+                if active_only and doc["state"] == "completed":
+                    continue
+                page.append(doc)
+                if len(page) == limit:
+                    return page
+            if len(stored) < fetch_limit:
+                return page
+            # An ineligible row (e.g. an unsaved completion) occupied a slot on disk.
+            fetch_limit *= 2
+
     async def _get_my_games_from_sources(
         self,
         *,
         user_id: str,
         sources: list[Any],
         limit: int = 20,
-        base_query: dict[str, Any] | None = None,
+        active_only: bool = False,
         include_opponent_id: bool = False,
     ) -> list[GameMetadataResponse]:
         bounded = max(1, min(limit, 100))
         docs_by_key: dict[str, dict[str, Any]] = {}
         for collection in sources:
-            for player_path in ("white.user_id", "black.user_id"):
-                query = dict(base_query or {})
-                query[player_path] = user_id
-                cursor = (
-                    self._find_with_projection(collection, query, GAME_METADATA_PROJECTION)
-                    .sort("created_at", -1)
-                    .limit(bounded)
+            for seat in ("white", "black"):
+                page = await self._player_game_list_page(
+                    collection, user_id=user_id, seat=seat, limit=bounded, active_only=active_only
                 )
-                async for doc in cursor:
+                for doc in page:
                     game_key = str(doc.get("_id") or doc.get("game_code") or id(doc))
                     previous = docs_by_key.get(game_key)
                     if previous is None or self._metadata_created_at(doc) >= self._metadata_created_at(previous):
@@ -2410,7 +2439,7 @@ class GameService:
             user_id=user_id,
             sources=[self._games],
             limit=limit,
-            base_query={"state": {"$ne": "completed"}},
+            active_only=True,
             include_opponent_id=include_opponent_id,
         )
 
