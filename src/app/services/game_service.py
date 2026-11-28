@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -152,6 +154,7 @@ class CachedGameEntry:
     last_persisted_ply: int = 0
     flush_task: asyncio.Task[None] | None = None
     state_projection_cache: dict[PlayerColor, GameStateResponse] = field(default_factory=dict)
+    discarded: bool = False
 
 
 @dataclass(frozen=True)
@@ -172,6 +175,13 @@ class GameService:
         mongo_client: Any | None = None,
     ):
         self._games = games_collection
+        self._checkpoints = (
+            games_collection.with_options(
+                write_concern=WriteConcern(w="majority", j=True), read_concern=ReadConcern("majority")
+            )
+            if hasattr(games_collection, "with_options")
+            else games_collection
+        )
         self._mongo_client = mongo_client
         self._users = users_collection
         self._archives = archives_collection
@@ -386,7 +396,7 @@ class GameService:
         for entry in cached_entries:
             async with entry.lock:
                 game = entry.game
-                if game.get("state") != "active":
+                if entry.discarded or game.get("state") != "active":
                     continue
                 time_control = self._active_time_control(game=game, now=now)
                 timeout = self._clock.check_timeout(time_control=time_control, now=now)
@@ -478,7 +488,7 @@ class GameService:
                     return
 
     async def subscribe_game_events(self, *, game_id: str, user_id: str) -> GameEventSubscription:
-        game, _entry = await self._get_game_for_runtime(game_id=game_id)
+        game, entry = await self._get_game_for_runtime(game_id=game_id)
         color = self._player_color_for_user(game, user_id)
         if color is None:
             raise GameForbiddenError(code="FORBIDDEN", message="Only participants can subscribe to this game")
@@ -487,7 +497,8 @@ class GameService:
         subscription = GameEventSubscription(game_id=game["_id"], queue=queue)
         async with self._event_lock:
             self._event_subscribers.setdefault(game["_id"], {})[queue] = color
-        self._queue_game_event(queue, self._game_event_payload(game, event_type="connected"))
+            current = entry.game if entry is not None else game
+            self._queue_game_event(queue, self._game_event_payload(current, event_type="connected"))
         return subscription
 
     async def unsubscribe_game_events(self, subscription: GameEventSubscription) -> None:
@@ -526,7 +537,11 @@ class GameService:
             if snapshot.get("state") == "completed" and self._archives is not None:
                 persisted_snapshot = await self._finalize_completed_game(snapshot)
             else:
-                await self._persist_game_document(snapshot)
+                if not await self._persist_game_document(snapshot):
+                    async with entry.lock:
+                        if entry.version == version:
+                            await self._discard_entry_locked(entry)
+                    return
                 persisted_snapshot = snapshot
                 if snapshot.get("state") == "completed":
                     persisted_snapshot = await self._finalize_completed_game(snapshot)
@@ -544,72 +559,70 @@ class GameService:
                     entry.flush_task = None
 
         if should_evict and persisted_snapshot is not None:
-            await self._evict_cached_game(persisted_snapshot.get("_id"))
+            await self._evict_cached_game(persisted_snapshot.get("_id"), expected=entry)
         if persisted_snapshot is not None:
             _log_debug("game_flushed", game_id=str(persisted_snapshot.get("_id")), reason=reason)
 
-    async def _persist_game_document(self, game: dict[str, Any]) -> None:
+    async def _persist_game_document(self, game: dict[str, Any]) -> bool:
         document = self._persistable_game(game)
+        if document.get("state") == "active" and self._is_human_involved_game(document):
+            # Private tries and other background work may finish after a newer
+            # public move or after archival. Neither may be overwritten.
+            return await self._replace_game_if_current(document, "active", document.get("play_checkpoint"))
         if hasattr(self._games, "replace_one"):
             await self._games.replace_one({"_id": document["_id"]}, document, upsert=True)
-            return
+            return True
 
         docs = getattr(self._games, "docs", None)
         if isinstance(docs, list):
             for index, existing in enumerate(docs):
                 if existing.get("_id") == document.get("_id"):
                     docs[index] = document
-                    return
+                    return True
             docs.append(document)
-            return
+            return True
 
         await self._games.find_one_and_update(
             {"_id": document["_id"]},
             {"$set": {key: value for key, value in document.items() if key != "_id"}},
             return_document=ReturnDocument.AFTER,
         )
+        return True
 
-    async def _persist_terminal_entry(
-        self,
-        entry: CachedGameEntry,
-        *,
-        expected_previous_state: GameState = "active",
-    ) -> dict[str, Any]:
-        async with entry.lock:
-            snapshot = self._persistable_game(entry.game)
-            version = entry.version
-            persisted_ply = self._ply_count(snapshot)
-
-        document = self._persistable_game(snapshot)
-        query: dict[str, Any] = {"_id": document["_id"], "state": expected_previous_state}
-        updated: dict[str, Any] | None = None
-
-        if hasattr(self._games, "find_one_and_update"):
-            updated = await self._games.find_one_and_update(
+    async def _replace_game_if_current(
+        self, document: dict[str, Any], state: GameState, checkpoint: ObjectId | None
+    ) -> bool:
+        # A null checkpoint also matches active games created before 1.6.12.
+        query = {"_id": document["_id"], "state": state, "play_checkpoint": checkpoint}
+        if hasattr(self._checkpoints, "replace_one"):
+            result = await self._checkpoints.replace_one(query, document, upsert=False)
+            return bool(result.matched_count)
+        if hasattr(self._checkpoints, "find_one_and_update"):
+            updated = await self._checkpoints.find_one_and_update(
                 query,
                 {"$set": {key: value for key, value in document.items() if key != "_id"}},
                 return_document=ReturnDocument.AFTER,
             )
-        elif hasattr(self._games, "replace_one"):
-            result = await self._games.replace_one(query, document, upsert=False)
-            if getattr(result, "matched_count", 0):
-                updated = document
-        else:
-            docs = getattr(self._games, "docs", None)
-            if isinstance(docs, list):
-                for index, existing in enumerate(docs):
-                    if existing.get("_id") != document.get("_id"):
-                        continue
-                    if existing.get("state") != expected_previous_state:
-                        break
-                    docs[index] = document
-                    updated = document
-                    break
+            return updated is not None
+        docs = getattr(self._checkpoints, "docs", ())
+        for index, existing in enumerate(docs):
+            if self._matches_query(existing, query):
+                docs[index] = document
+                return True
+        return False
 
-        if updated is None:
+    async def _persist_terminal_entry(
+        self, entry: CachedGameEntry, *, expected_previous_state: GameState = "active"
+    ) -> dict[str, Any]:
+        async with entry.lock:
+            document = self._persistable_game(entry.game)
+            version = entry.version
+            persisted_ply = self._ply_count(document)
+
+        if not await self._replace_game_if_current(document, expected_previous_state, document.get("play_checkpoint")):
             raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")
 
-        persisted = updated
+        persisted = document
         if persisted.get("state") == "completed":
             persisted = await self._finalize_completed_game(persisted)
 
@@ -841,17 +854,27 @@ class GameService:
         players = [game.get("white"), game.get("black")]
         return any(player and player.get("role") != "bot" for player in players)
 
-    async def _evict_cached_game(self, game_id: ObjectId | None, *, pre_start_expiry: datetime | None = None) -> None:
+    async def _evict_cached_game(
+        self, game_id: ObjectId | None, *, pre_start_expiry: datetime | None = None, expected: CachedGameEntry | None = None
+    ) -> None:
         if game_id is None:
             return
         async with self._cache_lock:
             entry = self._cache.get(game_id)
+            if expected is not None and entry is not expected:
+                return
             if pre_start_expiry is not None and entry is not None:
                 if not self._is_pre_start_active_game_expired(game=entry.game, now=pre_start_expiry):
                     return
             self._cache.pop(game_id, None)
             if signal := self._read_evictions.pop(game_id, None):
                 signal.set()
+
+    async def _discard_entry_locked(self, entry: CachedGameEntry) -> None:
+        entry.discarded = True
+        entry.dirty = False
+        entry.version += 1
+        await self._evict_cached_game(entry.game["_id"], expected=entry)
 
     def _cache_entry_locked(self, game: dict[str, Any], *, persisted: bool) -> CachedGameEntry:
         entry = self._cache.get(game["_id"])
@@ -914,7 +937,7 @@ class GameService:
                     return cached.game, cached
                 evicted = self._read_evictions.setdefault(oid, asyncio.Event())
 
-            game = await self._games.find_one({"_id": oid})
+            game = await self._checkpoints.find_one({"_id": oid})
             async with self._cache_lock:
                 if evicted.is_set():
                     # A terminal save or deletion retired this snapshot during the read.
@@ -934,12 +957,19 @@ class GameService:
         # Waiting and completed rows still pass through the usual seat and state checks.
         return entry or CachedGameEntry(game=game)
 
-    async def _live_game_snapshot(self, game_id: str) -> dict[str, Any]:
-        game, entry = await self._get_game_for_runtime(game_id=game_id)
-        if entry is not None:
+    @asynccontextmanager
+    async def _locked_action(self, game_id: str) -> AsyncIterator[CachedGameEntry]:
+        while True:
+            entry = await self._entry_for_action(game_id)
             async with entry.lock:
-                return deepcopy(entry.game)
-        return game
+                if entry.discarded:
+                    continue
+                yield entry
+                return
+
+    async def _live_game_snapshot(self, game_id: str) -> dict[str, Any]:
+        async with self._locked_action(game_id) as entry:
+            return deepcopy(entry.game)
 
     async def _get_game_for_state(self, *, game_id: str) -> tuple[dict[str, Any], CachedGameEntry | None, bool]:
         try:
@@ -1791,8 +1821,8 @@ class GameService:
             return game
 
         projected = timeout["clock"]
-        updated = await self._games.find_one_and_update(
-            {"_id": game["_id"], "state": "active"},
+        updated = await self._checkpoints.find_one_and_update(
+            {"_id": game["_id"], "state": "active", "play_checkpoint": game.get("play_checkpoint")},
             {
                 "$set": {
                     "state": "completed",
@@ -2411,9 +2441,10 @@ class GameService:
         live = collection is self._games
         # Keep the entry if its final save evicts it while Mongo is finding the page.
         entries_at_start = self._cache.copy() if live else {}
+        source = self._checkpoints if live else collection
         fetch_limit = limit
         while True:
-            cursor = self._find_with_projection(collection, query, GAME_METADATA_PROJECTION).sort("created_at", -1)
+            cursor = self._find_with_projection(source, query, GAME_METADATA_PROJECTION).sort("created_at", -1)
             stored = [doc async for doc in cursor.limit(fetch_limit)]
             if not live:
                 return stored
@@ -2421,7 +2452,7 @@ class GameService:
             for doc in stored:
                 oid = doc["_id"]
                 entry = self._cache.get(oid, entries_at_start.get(oid))
-                if entry is not None:
+                if entry is not None and not entry.discarded:
                     if self._player_color_for_user(entry.game, user_id) is None:
                         continue
                     doc = deepcopy({key: entry.game[key] for key in GAME_METADATA_PROJECTION if key in entry.game})
@@ -2622,12 +2653,16 @@ class GameService:
             return self._game_state_response_with_current_clock(cached, time_control=time_control, now=now)
 
     async def get_game_state(self, *, game_id: str, user_id: str) -> GameStateResponse:
-        game, entry, archived = await self._get_game_for_state(game_id=game_id)
-        now = self.utcnow()
         timed_out = False
         completed_by_llm_bot_limit = False
-        if entry is not None:
+        while True:
+            game, entry, archived = await self._get_game_for_state(game_id=game_id)
+            now = self.utcnow()
+            if entry is None:
+                break
             async with entry.lock:
+                if entry.discarded:
+                    continue
                 game = entry.game
                 time_control = self._active_time_control(game=game, now=now)
                 timeout = (
@@ -2641,7 +2676,8 @@ class GameService:
                 elif self._apply_llm_bot_turn_limit_locked(game=game, now=now):
                     self._mark_entry_dirty_locked(entry, now=now)
                     completed_by_llm_bot_limit = True
-        elif not archived:
+                break
+        if entry is None and not archived:
             game = await self._adjudicate_timeout_if_needed(game=game, now=now)
             if game.get("state") == "completed":
                 game = await self._finalize_completed_game(game)
@@ -2662,10 +2698,47 @@ class GameService:
 
         return await self._project_game_state_response(game=game, entry=entry, viewer_color=color, now=now)
 
+    async def _record_player_action_locked(
+        self,
+        entry: CachedGameEntry,
+        game: dict[str, Any],
+        *,
+        now: datetime,
+        game_over: bool,
+        private_to: PlayerColor | None = None,
+    ) -> None:
+        human = self._is_human_involved_game(game)
+        public_checkpoint = human and private_to is None
+        if public_checkpoint:
+            previous = entry.game.get("play_checkpoint")
+            game["play_checkpoint"] = ObjectId()
+            try:
+                if not await self._replace_game_if_current(game, "active", previous):
+                    raise GameConflictError(code="GAME_CHANGED", message="Game changed. Refresh the game.")
+            except (Exception, asyncio.CancelledError):
+                # An acknowledgement may be lost after MongoDB applies the write.
+                # Queued requests and reconnects must reload the winning snapshot.
+                await self._discard_entry_locked(entry)
+                raise
+
+        entry.game = game
+        self._mark_entry_dirty_locked(entry, now=now, only_color=private_to)
+        if public_checkpoint:
+            entry.last_persisted_ply = self._ply_count(game)
+            if game["state"] == "completed":
+                # If archival fails, the completed position is already durable.
+                # Leave it dirty so the existing finalization path can retry.
+                entry.game = await self._finalize_completed_game(game)
+                await self._evict_cached_game(game["_id"], expected=entry)
+            entry.dirty = False
+        elif human:
+            self._schedule_flush(entry, reason="human")
+        elif game_over:
+            self._schedule_flush(entry, reason="completion")
+
     async def execute_move(self, *, game_id: str, user_id: str, uci: str) -> dict[str, Any]:
-        entry = await self._entry_for_action(game_id)
-        now = self.utcnow()
-        async with entry.lock:
+        async with self._locked_action(game_id) as entry:
+            now = self.utcnow()
             game = entry.game
             time_control = self._active_time_control(game=game, now=now)
             timeout = self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
@@ -2687,6 +2760,9 @@ class GameService:
 
             engine = self._load_or_bootstrap_engine(game)
             outcome = attempt_move(engine, uci)
+            # Lock-free readers (including lobby and SSE reconnects) may still
+            # hold the preceding document while the candidate is being saved.
+            game = dict(game)
             move_record = {
                 "ply": len(game.get("moves", [])) + 1,
                 "color": color,
@@ -2727,7 +2803,7 @@ class GameService:
             game["engine_state"] = serialize_game_state(engine)
             game["turn"] = outcome["turn"]
             if self._should_store_public_history_entry(rule_variant=rule_variant, source=outcome):
-                game.setdefault("moves", []).append(move_record)
+                game["moves"] = [*game.get("moves", []), move_record]
             if outcome["move_done"]:
                 game["move_number"] = int(game.get("move_number", 1)) + 1
             if outcome["game_over"]:
@@ -2737,18 +2813,11 @@ class GameService:
             elif timeout is not None:
                 self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
 
-            self._mark_entry_dirty_locked(entry, now=now, only_color=private_to)
             clock_payload = self._clock.response_clock(time_control=game.get("time_control", time_control), now=now)
             game_over = game.get("state") == "completed"
+            await self._record_player_action_locked(entry, game, now=now, game_over=game_over, private_to=private_to)
 
-        human_game = self._is_human_involved_game(game)
-        if game_over and human_game:
-            await self._persist_terminal_entry(entry, expected_previous_state="active")
-        elif human_game:
-            self._schedule_flush(entry, reason="human")
-        elif game_over:
-            self._schedule_flush(entry, reason="completion")
-        await self._publish_game_event(game, only_color=private_to)
+            await self._publish_game_event(game, only_color=private_to)
 
         logger.info(
             "move_submitted",
@@ -2778,9 +2847,8 @@ class GameService:
         }
 
     async def execute_ask_any(self, *, game_id: str, user_id: str) -> dict[str, Any]:
-        entry = await self._entry_for_action(game_id)
-        now = self.utcnow()
-        async with entry.lock:
+        async with self._locked_action(game_id) as entry:
+            now = self.utcnow()
             game = entry.game
             time_control = self._active_time_control(game=game, now=now)
             timeout = self._clock.check_timeout(time_control=time_control, now=now) if game.get("state") == "active" else None
@@ -2814,6 +2882,7 @@ class GameService:
                 )
 
             outcome = ask_any(engine)
+            game = dict(game)
             move_record = {
                 "ply": len(game.get("moves", [])) + 1,
                 "color": color,
@@ -2849,22 +2918,15 @@ class GameService:
             game["time_control"] = advanced_time_control
             game["updated_at"] = now
             if self._should_store_public_history_entry(rule_variant=game.get("rule_variant", "berkeley_any"), source=outcome):
-                game.setdefault("moves", []).append(move_record)
+                game["moves"] = [*game.get("moves", []), move_record]
             if timeout is not None:
                 self._apply_timeout_to_game(game=game, timeout=timeout, now=now)
 
-            self._mark_entry_dirty_locked(entry, now=now)
             clock_payload = self._clock.response_clock(time_control=game["time_control"], now=now)
             game_over = game.get("state") == "completed" or outcome["game_over"]
+            await self._record_player_action_locked(entry, game, now=now, game_over=game_over)
 
-        human_game = self._is_human_involved_game(game)
-        if game.get("state") == "completed" and human_game:
-            await self._persist_terminal_entry(entry, expected_previous_state="active")
-        elif human_game:
-            self._schedule_flush(entry, reason="human")
-        elif game_over:
-            self._schedule_flush(entry, reason="completion")
-        await self._publish_game_event(game, event_type="game_changed")
+            await self._publish_game_event(game, event_type="game_changed")
 
         logger.info(
             "move_submitted",
@@ -2895,10 +2957,8 @@ class GameService:
         }
 
     async def resign_game(self, *, game_id: str, user_id: str) -> dict[str, Any]:
-        entry = await self._entry_for_action(game_id)
-
-        now = self.utcnow()
-        async with entry.lock:
+        async with self._locked_action(game_id) as entry:
+            now = self.utcnow()
             game = entry.game
             if game["state"] != "active":
                 raise GameValidationError(code="GAME_NOT_ACTIVE", message="Game is not active")

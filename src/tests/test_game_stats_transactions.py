@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+import multiprocessing
 import os
 from pathlib import Path
+import signal
 import sys
 from uuid import uuid4
 
@@ -13,6 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import pytest
 import pytest_asyncio
 
+from app.models.game import CreateGameRequest
 from app.models.user import default_user_stats_payload, normalize_user_stats_payload
 from app.services.game_service import GameService
 from app.services.user_service import UserService
@@ -57,6 +60,57 @@ def completed_game(white: str, black: str, *, winner: str | None = "white", code
 
 def service_for(db, cls=GameService):
     return cls(db.games, users_collection=db.users, archives_collection=db.game_archives, mongo_client=db.client)
+
+
+def play_move_then_lose_process(uri: str, database: str, game_id: str) -> None:
+    async def play():
+        client = AsyncIOMotorClient(uri)
+        response = await service_for(client[database]).execute_move(game_id=game_id, user_id="white", uci="e2e4")
+        assert response["move_done"]
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    asyncio.run(play())
+
+
+@pytest.mark.integration
+async def test_journaled_question_and_move_survive_a_cold_read_and_reject_older_saves(stats_db):
+    game = service_for(stats_db)
+    assert game._checkpoints.write_concern.document == {"w": "majority", "j": True}
+    assert game._checkpoints.read_concern.level == "majority"
+    created = await game.create_game(
+        user_id="white", username="white", request=CreateGameRequest(rule_variant="berkeley_any", play_as="white")
+    )
+    await game.join_game(user_id="black", username="black", game_code=created.game_code)
+    gid = created.game_id
+    first = await stats_db.games.find_one({"_id": ObjectId(gid)})
+    assert "play_checkpoint" not in first
+    await game.execute_ask_any(game_id=gid, user_id="white")
+    question = await stats_db.games.find_one({"_id": first["_id"]})
+    assert question["move_number"] == first["move_number"] == 1
+    assert isinstance(question["play_checkpoint"], ObjectId)
+    assert not await game._persist_game_document(first)
+    assert len((await service_for(stats_db).get_game_transcript(game_id=gid, user_id="white")).moves) == 1
+    worker = multiprocessing.get_context("spawn").Process(
+        target=play_move_then_lose_process, args=(os.environ["KRIEGSPIEL_TEST_MONGO_URI"], stats_db.name, gid)
+    )
+    worker.start()
+    try:
+        await asyncio.to_thread(worker.join, 20)
+        assert worker.exitcode == -signal.SIGKILL
+    finally:
+        if worker.is_alive():
+            worker.kill()
+            worker.join()
+        worker.close()
+    moved = await stats_db.games.find_one({"_id": first["_id"]})
+    assert question["play_checkpoint"] != moved["play_checkpoint"]
+    assert not await game._persist_game_document(question)
+    recovered = service_for(stats_db)
+    metadata = await recovered.get_game(game_id=gid)
+    assert (metadata.move_number, metadata.turn) == (2, "black")
+    assert (await recovered.get_my_active_games(user_id="black")) == [metadata]
+    assert len((await recovered.get_game_transcript(game_id=gid, user_id="white")).moves) == 2
+    assert await stats_db.games.find_one({"_id": first["_id"]}) == moved
 
 
 @pytest.mark.integration
