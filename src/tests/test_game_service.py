@@ -1972,6 +1972,77 @@ async def test_shutdown_flushes_dirty_cached_games() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("play_reply", "fail_pending", "expected_writes"),
+    [(False, False, [2]), (True, False, [2, 3]), (False, True, [2, 2]), (True, True, [2, 3])],
+)
+async def test_shutdown_waits_for_pending_save_and_restores_latest_position(
+    monkeypatch, play_reply, fail_pending, expected_writes
+) -> None:
+    games = FakeGamesCollection()
+    game = active_game_doc(rule_variant="wild16")
+    games.docs.append(game)
+    service = GameService(games)
+    gid = game["game_code"]
+    started = asyncio.Event()
+    release = asyncio.Event()
+    writes = []
+    persist = service._persist_game_document
+
+    async def write(snapshot):
+        writes.append(snapshot["move_number"])
+        if len(writes) == 1:
+            started.set()
+            await release.wait()
+            if fail_pending:
+                raise OSError("background save failed")
+        await persist(snapshot)
+
+    monkeypatch.setattr(service, "_persist_game_document", write)
+    await service.execute_move(game_id=gid, user_id="u1", uci="e2e4")
+    await started.wait()
+    if play_reply:
+        await service.execute_move(game_id=gid, user_id="u2", uci="e7e5")
+    entry = service._cache[game["_id"]]
+    latest = service._persistable_game(entry.game)
+
+    stopping = asyncio.create_task(service.shutdown())
+    try:
+        await asyncio.sleep(0)  # Let shutdown reach the pending save.
+        assert writes == [2]
+        assert not stopping.done()
+    finally:
+        release.set()
+        await stopping
+
+    assert writes == expected_writes
+    assert games.docs[0] == latest
+    assert entry.flush_task is None
+    assert not entry.dirty
+    reopened = await GameService(games).get_game(game_id=gid)
+    assert (reopened.move_number, reopened.turn) == (latest["move_number"], latest["turn"])
+
+
+@pytest.mark.asyncio
+async def test_shutdown_surfaces_final_save_failure_and_leaves_position_retryable(monkeypatch) -> None:
+    games = FakeGamesCollection()
+    game = active_game_doc()
+    games.docs.append(game)
+    service = GameService(games)
+    entry = CachedGameEntry(game={**game, "move_number": 2}, dirty=True, version=1)
+    service._cache[game["_id"]] = entry
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(service, "_persist_game_document", AsyncMock(side_effect=OSError("final save failed")))
+        with pytest.raises(OSError, match="final save failed"):
+            await service.shutdown()
+    assert entry.dirty
+    await service.shutdown()
+    assert games.docs[0]["move_number"] == 2
+    assert not entry.dirty
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("winner", "white_bucket", "black_bucket"),
     [
         ("white", "games_won", "games_lost"),

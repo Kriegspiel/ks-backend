@@ -1,5 +1,11 @@
 # Release Notes
 
+## 1.6.11
+
+- A graceful server restart now waits for each game's pending save and writes
+  any newer moves before stopping. Reopening the game restores the latest turn
+  and move number.
+
 ## 1.6.10
 
 - Opening a running game now reads the turn and move number from the same

@@ -214,6 +214,10 @@ class GameService:
         async with self._cache_lock:
             entries = list(self._cache.values())
         for entry in entries:
+            pending = entry.flush_task
+            if pending is not None:
+                # A failed background save leaves the entry dirty for the final attempt.
+                await asyncio.shield(asyncio.gather(pending, return_exceptions=True))
             await self._flush_entry(entry, reason="shutdown")
 
     async def _flush_loop(self) -> None:
